@@ -193,6 +193,31 @@ export function ProductForm({
     return <SessionRequired session={session} />;
   }
 
+  if (productId && productQuery.isLoading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2" aria-label="Cargando producto">
+        {Array.from({ length: 10 }).map((_, index) => (
+          <div key={index} className="space-y-2">
+            <div className="h-4 w-24 animate-pulse rounded bg-zinc-200" />
+            <div className="h-10 animate-pulse rounded-md bg-zinc-100" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (productId && productQuery.isError) {
+    return (
+      <div className="rounded-lg border border-danger/20 bg-danger/5 p-5 text-center">
+        <p className="font-semibold text-foreground">No se pudo cargar el producto.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Comprueba la conexión e inténtalo nuevamente.</p>
+        <Button type="button" variant="outline" className="mt-4" onClick={() => void productQuery.refetch()}>
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
+
   function updateField<K extends keyof ProductFormState>(key: K, value: ProductFormState[K]) {
     if (key === 'imageUrl') {
       setImagePreviewFailed(false);

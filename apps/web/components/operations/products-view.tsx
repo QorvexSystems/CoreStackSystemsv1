@@ -11,7 +11,6 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ActionDialog } from '@/components/ui/action-dialog';
@@ -44,6 +43,7 @@ export function ProductsView() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productPendingDeactivation, setProductPendingDeactivation] = useState<{
     id: string;
     name: string;
@@ -163,7 +163,13 @@ export function ProductsView() {
           />
         </div>
         {!readOnly ? (
-          <Button type="button" onClick={() => setCreateDialogOpen(true)}>
+          <Button
+            type="button"
+            onClick={() => {
+              setEditingProductId(null);
+              setCreateDialogOpen(true);
+            }}
+          >
             <Plus className="h-4 w-4" />
             Nuevo producto
           </Button>
@@ -236,6 +242,18 @@ export function ProductsView() {
                       <Badge variant="outline">Servicio</Badge>
                     )}
                   </div>
+                  {!readOnly ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 w-full bg-white/80"
+                      onClick={() => setEditingProductId(product.id)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Editar producto
+                    </Button>
+                  ) : null}
                 </div>
               );
             })}
@@ -329,13 +347,14 @@ export function ProductsView() {
                                 <Printer className="h-4 w-4" />
                               </Button>
                             )}
-                            <Button asChild variant="ghost" size="icon">
-                              <Link
-                                href={`/products/${product.id}/edit`}
-                                aria-label="Editar producto"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Link>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setEditingProductId(product.id)}
+                              aria-label={`Editar ${product.name}`}
+                            >
+                              <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
                               variant="ghost"
@@ -377,10 +396,15 @@ export function ProductsView() {
         </CardContent>
       </Card>
       <ProductFormDialog
-        open={createDialogOpen}
-        onClose={() => setCreateDialogOpen(false)}
+        open={createDialogOpen || Boolean(editingProductId)}
+        productId={editingProductId ?? undefined}
+        onClose={() => {
+          setCreateDialogOpen(false);
+          setEditingProductId(null);
+        }}
         onSaved={() => {
           setCreateDialogOpen(false);
+          setEditingProductId(null);
           setPage(1);
         }}
       />
