@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Eye, Pencil, Plus } from 'lucide-react';
 import Link from 'next/link';
+import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,11 +18,13 @@ import {
 import { getEmployees } from '@/lib/api';
 import { brand } from '@/lib/brand';
 import { getStatusVariant, translateRole, translateStatus } from '@/lib/display-labels';
+import { EmployeeFormDialog } from './employee-form-dialog';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
 
 export function EmployeesView() {
   const session = useCurrentSession();
+  const [newEmployeeOpen, setNewEmployeeOpen] = useState(false);
   const employeesQuery = useQuery({
     queryKey: ['employees', session?.tenantId],
     queryFn: () => getEmployees(session?.tenantId ?? '', session?.accessToken ?? ''),
@@ -40,18 +43,18 @@ export function EmployeesView() {
       />
 
       <div className="flex justify-end">
-        <Button asChild>
-          <Link href="/employees/new">
-            <Plus className="h-4 w-4" />
-            Nuevo empleado
-          </Link>
+        <Button type="button" onClick={() => setNewEmployeeOpen(true)}>
+          <Plus className="h-4 w-4" />
+          Nuevo empleado
         </Button>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>Equipo {brand.name}</CardTitle>
-          <CardDescription>{employeesQuery.data?.length ?? 0} perfiles laborales registrados.</CardDescription>
+          <CardDescription>
+            {employeesQuery.data?.length ?? 0} perfiles laborales registrados.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -82,9 +85,15 @@ export function EmployeesView() {
                           <Badge variant="success">Acceso contable</Badge>
                         ) : null}
                         {membership?.canUsePos ? <Badge variant="success">Usar caja</Badge> : null}
-                        {membership?.canTakeOrders ? <Badge variant="success">Tomar ordenes</Badge> : null}
-                        {membership?.canOpenCashSession ? <Badge variant="outline">Abrir caja</Badge> : null}
-                        {membership?.canCloseCashSession ? <Badge variant="outline">Cerrar caja</Badge> : null}
+                        {membership?.canTakeOrders ? (
+                          <Badge variant="success">Tomar ordenes</Badge>
+                        ) : null}
+                        {membership?.canOpenCashSession ? (
+                          <Badge variant="outline">Abrir caja</Badge>
+                        ) : null}
+                        {membership?.canCloseCashSession ? (
+                          <Badge variant="outline">Cerrar caja</Badge>
+                        ) : null}
                         {membership?.canApplyDiscount ? (
                           <Badge variant="outline">Descuentos</Badge>
                         ) : null}
@@ -94,12 +103,18 @@ export function EmployeesView() {
                         {membership?.canVoidInvoice ? (
                           <Badge variant="outline">Anular facturas</Badge>
                         ) : null}
-                        {membership?.canManageProducts ? <Badge variant="outline">Productos</Badge> : null}
+                        {membership?.canManageProducts ? (
+                          <Badge variant="outline">Productos</Badge>
+                        ) : null}
                         {membership?.canAdjustInventory ? (
                           <Badge variant="outline">Inventario</Badge>
                         ) : null}
-                        {membership?.canManageEmployees ? <Badge variant="outline">Empleados</Badge> : null}
-                        {membership?.canViewReports ? <Badge variant="outline">Reportes</Badge> : null}
+                        {membership?.canManageEmployees ? (
+                          <Badge variant="outline">Empleados</Badge>
+                        ) : null}
+                        {membership?.canViewReports ? (
+                          <Badge variant="outline">Reportes</Badge>
+                        ) : null}
                         {membership?.canManageFiscalSequences ? (
                           <Badge variant="outline">Secuencias fiscales</Badge>
                         ) : null}
@@ -112,7 +127,9 @@ export function EmployeesView() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getStatusVariant(employee.status)}>{translateStatus(employee.status)}</Badge>
+                      <Badge variant={getStatusVariant(employee.status)}>
+                        {translateStatus(employee.status)}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
@@ -122,7 +139,10 @@ export function EmployeesView() {
                           </Link>
                         </Button>
                         <Button asChild variant="ghost" size="icon">
-                          <Link href={`/employees/${employee.id}/edit`} aria-label="Editar empleado">
+                          <Link
+                            href={`/employees/${employee.id}/edit`}
+                            aria-label="Editar empleado"
+                          >
                             <Pencil className="h-4 w-4" />
                           </Link>
                         </Button>
@@ -135,6 +155,12 @@ export function EmployeesView() {
           </Table>
         </CardContent>
       </Card>
+
+      <EmployeeFormDialog
+        open={newEmployeeOpen}
+        onClose={() => setNewEmployeeOpen(false)}
+        onSaved={() => setNewEmployeeOpen(false)}
+      />
     </div>
   );
 }

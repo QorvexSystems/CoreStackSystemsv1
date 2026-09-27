@@ -34,6 +34,7 @@ import { getStatusVariant, translateBarcodeType, translateStatus } from '@/lib/d
 import { formatCurrency } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { formatQuantity } from './pos/pos-utils';
+import { ProductFormDialog } from './product-form-dialog';
 import { SessionRequired, useCurrentSession } from './session-required';
 
 export function ProductsView() {
@@ -42,6 +43,7 @@ export function ProductsView() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [productPendingDeactivation, setProductPendingDeactivation] = useState<{
     id: string;
     name: string;
@@ -103,7 +105,9 @@ export function ProductsView() {
   function requestProductLabel(productId: string) {
     const printWindow = openBarcodeLabelPrintWindow();
     if (!printWindow) {
-      toast.error('El navegador bloqueó la ventana de impresión. Permite las ventanas emergentes e inténtalo de nuevo.');
+      toast.error(
+        'El navegador bloqueó la ventana de impresión. Permite las ventanas emergentes e inténtalo de nuevo.',
+      );
       return;
     }
 
@@ -159,19 +163,25 @@ export function ProductsView() {
           />
         </div>
         {!readOnly ? (
-          <Button asChild>
-            <Link href="/products/new">
-              <Plus className="h-4 w-4" />
-              Nuevo producto
-            </Link>
+          <Button type="button" onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Nuevo producto
           </Button>
         ) : null}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Catalogo</CardTitle>
-          <CardDescription>{products.length} productos activos o inactivos.</CardDescription>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>Catalogo</CardTitle>
+              <CardDescription>{products.length} productos activos o inactivos.</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground" aria-label="Leyenda de inventario">
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-300" />Stock bajo</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-300" />Agotado</span>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <ProductPagination
@@ -191,9 +201,21 @@ export function ProductsView() {
           <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 md:hidden">
             {visibleProducts.map((product) => {
               const availableStock = getAvailableStock(product);
-              const lowStock = product.trackInventory && availableStock <= Number(product.minStock);
+              const outOfStock = product.trackInventory && availableStock <= 0;
+              const lowStock = product.trackInventory
+                && !outOfStock
+                && availableStock <= Number(product.minStock);
               return (
-                <div key={product.id} className="rounded-md border border-border p-3">
+                <div
+                  key={product.id}
+                  className={`rounded-md border p-3 ${
+                    outOfStock
+                      ? 'border-red-200 bg-red-50/80'
+                      : lowStock
+                        ? 'border-amber-200 bg-amber-50/80'
+                        : 'border-border'
+                  }`}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{product.name}</p>
@@ -206,9 +228,9 @@ export function ProductsView() {
                   <div className="mt-3 flex items-center justify-between gap-3 text-sm">
                     <span className="font-semibold">{formatCurrency(Number(product.price))}</span>
                     {product.trackInventory ? (
-                      <Badge variant={lowStock ? 'danger' : 'success'}>
-                        {formatQuantity(availableStock)} disp. /{' '}
-                        {formatQuantity(product.reservedStock)} res.
+                      <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
+                        {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
+                        {' · '}{formatQuantity(product.reservedStock)} res.
                       </Badge>
                     ) : (
                       <Badge variant="outline">Servicio</Badge>
@@ -235,10 +257,21 @@ export function ProductsView() {
               <TableBody>
                 {visibleProducts.map((product) => {
                   const availableStock = getAvailableStock(product);
-                  const lowStock =
-                    product.trackInventory && availableStock <= Number(product.minStock);
+                  const outOfStock = product.trackInventory && availableStock <= 0;
+                  const lowStock = product.trackInventory
+                    && !outOfStock
+                    && availableStock <= Number(product.minStock);
                   return (
-                    <TableRow key={product.id}>
+                    <TableRow
+                      key={product.id}
+                      className={
+                        outOfStock
+                          ? 'bg-red-50/80 hover:bg-red-100/80'
+                          : lowStock
+                            ? 'bg-amber-50/80 hover:bg-amber-100/80'
+                            : undefined
+                      }
+                    >
                       <TableCell>
                         <div className="font-medium">{product.name}</div>
                         <div className="text-xs text-muted-foreground">
@@ -256,9 +289,9 @@ export function ProductsView() {
                       <TableCell>
                         {product.trackInventory ? (
                           <div>
-                            <Badge variant={lowStock ? 'danger' : 'success'}>
-                              {formatQuantity(availableStock)} disp. /{' '}
-                              {formatQuantity(product.reservedStock)} res.
+                            <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
+                              {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
+                              {' · '}{formatQuantity(product.reservedStock)} res.
                             </Badge>
                             <p className="mt-1 text-xs text-muted-foreground">
                               Total {formatQuantity(product.stock)} / min{' '}
@@ -343,6 +376,14 @@ export function ProductsView() {
           />
         </CardContent>
       </Card>
+      <ProductFormDialog
+        open={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        onSaved={() => {
+          setCreateDialogOpen(false);
+          setPage(1);
+        }}
+      />
       <ActionDialog
         open={Boolean(productPendingDeactivation)}
         onClose={() => {
@@ -365,9 +406,7 @@ export function ProductsView() {
         summary={
           productPendingDeactivation ? (
             <div>
-
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-
                 Producto
               </p>
               <p className="mt-0.5 font-semibold text-foreground">

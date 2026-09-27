@@ -2,17 +2,24 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Banknote,
   CalendarClock,
+  CircleCheckBig,
   ClipboardCheck,
   DoorClosed,
   DoorOpen,
+  Filter,
+  Plus,
+  ReceiptText,
   Search,
   ShieldCheck,
+  ShoppingBag,
   Store,
   X,
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,19 +36,19 @@ import {
   getCustomers,
   getPosProductByBarcode,
   getSalesOrders,
+  getSalesOrder,
   openCashSession,
   releaseSalesOrder,
   searchPosProducts,
   type Product,
+  type CashSession,
   type SalesOrder,
 } from '@/lib/api';
-import { formatCurrency, formatDateTime } from '@/lib/utils';
-import { brand } from '@/lib/brand';
-import { isAdminSession } from '@/lib/authorization';
+import { cn, formatCurrency, formatDateTime } from '@/lib/utils';
+import { canUsePosSession, isAdminSession } from '@/lib/authorization';
 import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
-import { getStatusVariant, translateStatus } from '@/lib/display-labels';
+import { translateStatus } from '@/lib/display-labels';
 import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
-import { ModuleHeader } from './module-header';
 import { BarcodeInput } from './pos/barcode-input';
 import {
   clearCurrencyInput,
@@ -65,7 +72,7 @@ import {
 import { playScanFeedback } from './pos/scan-feedback';
 import type { CartItem } from './pos/types';
 import { SessionRequired, useCurrentSession } from './session-required';
-import { WarningConfirmModal } from './warning-confirm-modal';
+import { ActionDialog } from '@/components/ui/action-dialog';
 
 type BarcodeDetectorResult = { rawValue: string };
 type BarcodeDetectorInstance = {
@@ -79,10 +86,14 @@ export function PosView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedOrderId = searchParams.get('order');
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanFrameRef = useRef<number | null>(null);
+  const knownReadyOrdersRef = useRef<{ cashSessionId: string; ids: Set<string> } | null>(null);
+  const releaseAfterClaimRef = useRef<string | null>(null);
 
   const [customerId, setCustomerId] = useState('');
   const [documentType, setDocumentType] = useState('CONSUMER_02');
@@ -104,7 +115,9 @@ export function PosView() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loadedOrder, setLoadedOrder] = useState<SalesOrder | null>(null);
-  const [zeroClosingWarningOpen, setZeroClosingWarningOpen] = useState(false);
+  const [orderClaimPending, setOrderClaimPending] = useState(false);
+  const [closingDialogOpen, setClosingDialogOpen] = useState(false);
+  const [counterSaleOpen, setCounterSaleOpen] = useState(false);
 
   const customersQuery = useQuery({
     queryKey: ['pos-customers', session?.tenantId],
@@ -126,31 +139,72 @@ export function PosView() {
     queryFn: () => getCashSessions(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session && isAdminSession(session)),
   });
-  const canCreateDirectSale = false;
   const isAdmin = isAdminSession(session);
+  const canCreateDirectSale = isAdmin;
   const productsQuery = useQuery({
     queryKey: ['pos-products-search', session?.tenantId, search],
-    queryFn: () =>
-      searchPosProducts(session?.tenantId ?? '', session?.accessToken ?? '', search || 'RIV'),
-    enabled: Boolean(session && currentSessionQuery.data && canCreateDirectSale),
+    queryFn: () => searchPosProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
+    enabled: Boolean(session && currentSessionQuery.data && canCreateDirectSale && !loadedOrder),
   });
   const pendingOrdersQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'OPEN', 'pos'],
     queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? '', 'OPEN'),
     enabled: Boolean(session && currentSessionQuery.data),
+    refetchInterval: 20_000,
+  });
+  const requestedOrderQuery = useQuery({
+    queryKey: ['sales-orders', session?.tenantId, 'requested', requestedOrderId],
+    queryFn: () => getSalesOrder(session!.tenantId, session!.accessToken, requestedOrderId!),
+    enabled: Boolean(session && requestedOrderId),
+    retry: false,
   });
 
   const currentCashSession = currentSessionQuery.data;
-  const canUsePos =
-    session?.permissions.canUsePos ??
-    ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session?.role ?? '');
-  const canOpenCashSession =
-    Boolean(session?.permissions.canOpenCashSession) && !isAdminSession(session);
-  const canCloseCashSession =
-    session?.permissions.canCloseCashSession ??
-    ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session?.role ?? '');
-  const cartReadOnly = !canCreateDirectSale && Boolean(loadedOrder);
+  const canUsePos = canUsePosSession(session);
+  const canOpenCashSession = Boolean(
+    session && (isAdmin || session.permissions.canOpenCashSession),
+  );
+  const canCloseCashSession = Boolean(
+    session && (isAdmin || session.permissions.canCloseCashSession),
+  );
+  const cartReadOnly = Boolean(loadedOrder);
+  const readyOrders = (pendingOrdersQuery.data ?? []).filter((order) =>
+    ['SENT_TO_CASHIER', 'IN_CASHIER'].includes(order.status),
+  );
   const electronicInvoiceRequested = Boolean(loadedOrder?.electronicInvoiceRequested);
+  const todayLabel = new Intl.DateTimeFormat('es-DO', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date());
+
+  useEffect(() => {
+    if (!currentCashSession || pendingOrdersQuery.isLoading) {
+      knownReadyOrdersRef.current = null;
+      return;
+    }
+
+    const ids = new Set(readyOrders.map((order) => order.id));
+    const previous = knownReadyOrdersRef.current;
+    if (previous?.cashSessionId === currentCashSession.id) {
+      const arrivals = readyOrders.filter(
+        (order) => order.status === 'SENT_TO_CASHIER' && !previous.ids.has(order.id),
+      );
+      if (arrivals.length === 1) {
+        toast.info('Nueva orden lista para cobrar', {
+          description: `${arrivals[0].orderNumber} ya está disponible en Caja.`,
+          duration: 7000,
+        });
+      } else if (arrivals.length > 1) {
+        toast.info(`${arrivals.length} nuevas órdenes listas para cobrar`, {
+          description: 'Ya están disponibles en la cola de Caja.',
+          duration: 7000,
+        });
+      }
+    }
+    knownReadyOrdersRef.current = { cashSessionId: currentCashSession.id, ids };
+  }, [currentCashSession?.id, pendingOrdersQuery.data, pendingOrdersQuery.isLoading]);
 
   useEffect(() => {
     const firstRegister = registersQuery.data?.find((register) => register.status === 'ACTIVE');
@@ -173,19 +227,25 @@ export function PosView() {
   }, [scannerEnabled]);
 
   const totals = useMemo(() => {
-    const subtotal = cart.reduce(
-      (sum, item) => sum + (item.subtotal ?? getProductPrice(item.product) * item.quantity),
-      0,
-    );
-    const tax = cart.reduce(
-      (sum, item) =>
-        sum +
-        (item.taxTotal ??
-          getProductPrice(item.product) * item.quantity * Number(item.product.taxRate)),
-      0,
-    );
+    const subtotal =
+      cart.reduce(
+        (sum, item) =>
+          sum + Math.round((item.subtotal ?? getProductPrice(item.product) * item.quantity) * 100),
+        0,
+      ) / 100;
+    const tax =
+      cart.reduce(
+        (sum, item) =>
+          sum +
+          Math.round(
+            (item.taxTotal ??
+              (Math.round(getProductPrice(item.product) * item.quantity * 100) / 100) *
+                Number(item.product.taxRate)) * 100,
+          ),
+        0,
+      ) / 100;
     const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
-    const total = subtotal + tax;
+    const total = Math.round((subtotal + tax) * 100) / 100;
     const received = parseCurrencyInput(amountReceived);
     const requiredPayment =
       loadedOrder?.paymentMode === 'CREDIT' ? Number(loadedOrder.initialPaymentAmount ?? 0) : total;
@@ -204,7 +264,7 @@ export function PosView() {
   }, [amountReceived, cart, loadedOrder, paymentMethod]);
 
   useEffect(() => {
-    if (paymentMethod !== 'CASH' && totals.requiredPayment >= 0) {
+    if (paymentMethod === 'CARD' && totals.requiredPayment >= 0) {
       setAmountReceived(formatCurrencyInputFromNumber(totals.requiredPayment));
     }
   }, [paymentMethod, totals.requiredPayment]);
@@ -255,10 +315,11 @@ export function PosView() {
       (!requiresRnc || fiscalDocumentType === 'RNC'),
     );
   const canCompleteSale =
-    !isAdmin &&
     cart.length > 0 &&
     Boolean(currentCashSession) &&
-    Boolean(loadedOrder) &&
+    !orderClaimPending &&
+    (Boolean(loadedOrder) || canCreateDirectSale) &&
+    (paymentMethod !== 'TRANSFER' || Math.abs(totals.received - totals.requiredPayment) < 0.005) &&
     canCompleteFiscalDocument;
   const selectedOpenSession = (cashSessionsQuery.data ?? []).find(
     (cashSession) =>
@@ -268,17 +329,29 @@ export function PosView() {
     Boolean(selectedOpenSession) && selectedOpenSession?.openedBy?.id !== session?.user.id;
 
   function handleLoadOrder(order: SalesOrder) {
+    if (completeSaleMutation.isPending || claimOrderMutation.isPending) return;
+    if (!loadedOrder && cart.length) {
+      toast.info('Completa o vacía la venta de mostrador antes de cargar una orden.');
+      return;
+    }
     if (loadedOrder && loadedOrder.id !== order.id) {
       setMessage('Quita la orden cargada o completala antes de seleccionar otro ticket.');
       toast.info('Primero quita la orden actual para elegir otra.');
       return;
     }
 
+    setCounterSaleOpen(false);
     claimOrderMutation.mutate(order);
   }
 
   function releaseLoadedOrder() {
     if (!loadedOrder || releaseOrderMutation.isPending || completeSaleMutation.isPending) {
+      return;
+    }
+
+    if (claimOrderMutation.isPending || orderClaimPending) {
+      releaseAfterClaimRef.current = loadedOrder.id;
+      setMessage(`Confirmando la orden ${loadedOrder.orderNumber} antes de liberarla...`);
       return;
     }
 
@@ -292,8 +365,8 @@ export function PosView() {
       }
 
       const parsedOpeningAmount = parseCurrencyInput(openingAmount);
-      if (parsedOpeningAmount <= 0) {
-        throw new Error('El monto inicial debe ser mayor que 0.');
+      if (parsedOpeningAmount < 0) {
+        throw new Error('El monto inicial no puede ser negativo.');
       }
 
       return openCashSession(session.tenantId, session.accessToken, {
@@ -329,6 +402,7 @@ export function PosView() {
       setMessage('Caja cerrada correctamente.');
       toast.success('Caja cerrada correctamente.');
       setClosingAmount(clearCurrencyInput());
+      setClosingDialogOpen(false);
       setCart([]);
       setAmountReceived(clearCurrencyInput());
       await invalidateCashQueries();
@@ -379,13 +453,15 @@ export function PosView() {
         fiscalDocumentType: requiresRecipientDocument ? fiscalDocumentType : undefined,
         fiscalDocumentNumber: requiresRecipientDocument ? fiscalDocumentNumber : undefined,
         paymentMethod,
-        cashSessionId: currentCashSession?.id,
         amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
+        cashSessionId: currentCashSession?.id,
         orderId: loadedOrder?.id,
-        items: cart.map((item) => ({
-          productId: item.product.id,
-          quantity: item.quantity,
-        })),
+        items: loadedOrder
+          ? undefined
+          : cart.map((item) => ({
+              productId: item.product.id,
+              quantity: item.quantity,
+            })),
       });
     },
     onSuccess: async (invoice) => {
@@ -395,6 +471,8 @@ export function PosView() {
           : `Factura ${invoice.invoiceNumber} creada correctamente.`,
       );
       setCart([]);
+      setPaymentMethod('CASH');
+      setDocumentType('CONSUMER_02');
       setLoadedOrder(null);
       setFiscalDocumentNumber('');
       setAmountReceived(clearCurrencyInput());
@@ -402,6 +480,7 @@ export function PosView() {
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
       await queryClient.invalidateQueries({ queryKey: ['products'] });
+      await queryClient.invalidateQueries({ queryKey: ['pos-products-search'] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       await queryClient.invalidateQueries({ queryKey: ['cash-movements'] });
       await queryClient.invalidateQueries({ queryKey: ['employee-logs'] });
@@ -425,13 +504,78 @@ export function PosView() {
         cashSessionId: currentCashSession.id,
       });
     },
-    onSuccess: async (order) => {
-      loadClaimedSalesOrder(order);
-      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      toast.success('Orden tomada en caja', { description: order.orderNumber });
+    onMutate: (order) => {
+      setOrderClaimPending(true);
+      toast.loading('Tomando orden...', {
+        id: `claim-${order.id}`,
+        description: order.orderNumber,
+      });
+      void queryClient.cancelQueries({ queryKey: ['sales-orders'] });
+
+      const optimisticOrder: SalesOrder = {
+        ...order,
+        status: 'IN_CASHIER',
+        claimedById: session?.user.id ?? null,
+        claimedCashSessionId: currentCashSession?.id ?? null,
+        claimedAt: new Date().toISOString(),
+        claimedBy: session
+          ? {
+              id: session.user.id,
+              name: session.user.name,
+              email: session.user.email,
+            }
+          : null,
+      };
+
+      loadClaimedSalesOrder(optimisticOrder);
+      updateCachedSalesOrder(optimisticOrder);
+
+      return { previousOrder: loadedOrder };
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : 'No se pudo tomar la orden.');
+    onSuccess: (result, sourceOrder) => {
+      const confirmedOrder: SalesOrder = {
+        ...sourceOrder,
+        ...result,
+        claimedBy: session
+          ? {
+              id: session.user.id,
+              name: session.user.name,
+              email: session.user.email,
+            }
+          : null,
+      };
+      setLoadedOrder(confirmedOrder);
+      updateCachedSalesOrder(confirmedOrder);
+      void queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      if (releaseAfterClaimRef.current === result.id) {
+        releaseAfterClaimRef.current = null;
+        toast.loading('Orden confirmada. Liberando...', {
+          id: `claim-${result.id}`,
+          description: result.orderNumber,
+        });
+        releaseOrderMutation.mutate(result.id);
+        return;
+      }
+      toast.success('Orden tomada en caja', {
+        id: `claim-${result.id}`,
+        description: result.orderNumber,
+      });
+    },
+    onError: (error, order, context) => {
+      releaseAfterClaimRef.current = null;
+      if (context?.previousOrder) {
+        loadClaimedSalesOrder(context.previousOrder);
+      } else {
+        resetCheckoutState();
+      }
+      updateCachedSalesOrder(order);
+      void queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.error(error instanceof Error ? error.message : 'No se pudo tomar la orden.', {
+        id: `claim-${order.id}`,
+      });
+    },
+    onSettled: () => {
+      setOrderClaimPending(false);
     },
   });
 
@@ -443,19 +587,68 @@ export function PosView() {
 
       return releaseSalesOrder(session.tenantId, session.accessToken, orderId);
     },
-    onSuccess: async (order) => {
-      if (loadedOrder?.id === order.id) {
-        setLoadedOrder(null);
-        setCart([]);
-        setCustomerId('');
-        setFiscalDocumentNumber('');
-        setAmountReceived(clearCurrencyInput());
-        setMessage(`Orden ${order.orderNumber} quitada. Ya puedes seleccionar otra.`);
+    onMutate: (orderId) => {
+      void queryClient.cancelQueries({ queryKey: ['sales-orders'] });
+
+      const previousOrder = loadedOrder?.id === orderId ? loadedOrder : null;
+      const previousState = {
+        cart,
+        customerId,
+        paymentMethod,
+        documentType,
+        fiscalDocumentType,
+        fiscalDocumentNumber,
+        amountReceived,
+        message,
+      };
+
+      if (previousOrder) {
+        const optimisticOrder: SalesOrder = {
+          ...previousOrder,
+          status: 'SENT_TO_CASHIER',
+          claimedById: null,
+          claimedCashSessionId: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+          claimedBy: null,
+          claimedCashSession: null,
+        };
+        resetCheckoutState(
+          `Orden ${previousOrder.orderNumber} quitada. Ya puedes seleccionar otra.`,
+        );
+        updateCachedSalesOrder(optimisticOrder);
       }
-      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      toast.success('Orden liberada', { description: order.orderNumber });
+
+      return { previousOrder, previousState };
     },
-    onError: (error) => {
+    onSuccess: (result, _orderId, context) => {
+      if (context?.previousOrder) {
+        const releasedOrder: SalesOrder = {
+          ...context.previousOrder,
+          ...result,
+          claimedBy: null,
+          claimedCashSession: null,
+        };
+        updateCachedSalesOrder(releasedOrder);
+      }
+      void queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.dismiss(`claim-${result.id}`);
+      toast.success('Orden liberada', { description: result.orderNumber });
+    },
+    onError: (error, _orderId, context) => {
+      if (context?.previousOrder) {
+        setLoadedOrder(context.previousOrder);
+        setCart(context.previousState.cart);
+        setCustomerId(context.previousState.customerId);
+        setPaymentMethod(context.previousState.paymentMethod);
+        setDocumentType(context.previousState.documentType);
+        setFiscalDocumentType(context.previousState.fiscalDocumentType);
+        setFiscalDocumentNumber(context.previousState.fiscalDocumentNumber);
+        setAmountReceived(context.previousState.amountReceived);
+        setMessage(context.previousState.message);
+        updateCachedSalesOrder(context.previousOrder);
+      }
+      void queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       toast.error(error instanceof Error ? error.message : 'No se pudo liberar la orden.');
     },
   });
@@ -472,14 +665,12 @@ export function PosView() {
   }
 
   function addProduct(product: Product) {
-    if (!canCreateDirectSale) {
-      setMessage('El cajero solo puede cobrar ordenes enviadas a caja.');
+    if (!canCreateDirectSale || loadedOrder || completeSaleMutation.isPending) {
+      setMessage('Libera la orden cargada antes de iniciar una venta de mostrador.');
       return false;
     }
 
     const currentQuantity = quantitiesByProduct[product.id] ?? 0;
-
-    unlinkLoadedOrderIfNeeded();
 
     if (!canAddProduct(product, currentQuantity)) {
       setMessage(`No hay stock disponible para ${product.name}.`);
@@ -515,12 +706,11 @@ export function PosView() {
   }
 
   function updateQuantity(productId: string, quantity: number) {
-    if (!canCreateDirectSale) {
-      setMessage('El cajero no puede modificar una orden enviada a caja.');
+    if (!canCreateDirectSale || loadedOrder || completeSaleMutation.isPending) {
+      setMessage('Una orden enviada a caja no se puede modificar durante el cobro.');
       return;
     }
 
-    unlinkLoadedOrderIfNeeded();
     setCart((current) =>
       current
         .map((item) => {
@@ -546,30 +736,31 @@ export function PosView() {
 
   function clearCart() {
     if (loadedOrder) {
-      releaseOrderMutation.mutate(loadedOrder.id);
+      releaseLoadedOrder();
       return;
     }
 
     setCart([]);
+    setPaymentMethod('CASH');
+    setAmountReceived(clearCurrencyInput());
   }
 
-  function requestCloseCashSession() {
-    if (parseCurrencyInput(closingAmount) === 0) {
-      setZeroClosingWarningOpen(true);
+  async function requestCloseCashSession() {
+    const result = await currentSessionQuery.refetch();
+    const latestSession = result.data;
+
+    if (!latestSession) {
+      toast.error('No se pudo actualizar el resumen de caja. Intenta nuevamente.');
       return;
     }
 
-    closeSessionMutation.mutate();
+    const summary = getCashCloseSummary(latestSession);
+    setClosingAmount(formatCurrencyInputFromNumber(summary.expected));
+    setClosingDialogOpen(true);
   }
 
-  function unlinkLoadedOrderIfNeeded() {
-    if (loadedOrder) {
-      releaseOrderMutation.mutate(loadedOrder.id);
-      setLoadedOrder(null);
-      setMessage(
-        'Orden desvinculada por edicion manual. Esta venta se cobrara como venta directa.',
-      );
-    }
+  function changePaymentMethod(value: string) {
+    setPaymentMethod(value);
   }
 
   function populateFiscalDocumentFromCustomer(nextCustomerId: string) {
@@ -650,6 +841,8 @@ export function PosView() {
     }
 
     setLoadedOrder(order);
+    setPaymentMethod('CASH');
+    setAmountReceived(clearCurrencyInput());
     setDocumentType(order.electronicInvoiceRequested ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02');
     setFiscalDocumentType('RNC');
     setCustomerId(order.customerId ?? '');
@@ -659,6 +852,25 @@ export function PosView() {
     }
     setCart(items);
     setMessage(`Orden ${order.orderNumber} cargada para cobrar.`);
+  }
+
+  function resetCheckoutState(nextMessage: string | null = null) {
+    setLoadedOrder(null);
+    setCart([]);
+    setCustomerId('');
+    setPaymentMethod('CASH');
+    setDocumentType('CONSUMER_02');
+    setFiscalDocumentType('RNC');
+    setFiscalDocumentNumber('');
+    setAmountReceived(clearCurrencyInput());
+    setMessage(nextMessage);
+  }
+
+  function updateCachedSalesOrder(order: SalesOrder) {
+    queryClient.setQueriesData<SalesOrder[]>(
+      { queryKey: ['sales-orders', session?.tenantId, 'OPEN'] },
+      (orders) => orders?.map((candidate) => (candidate.id === order.id ? order : candidate)),
+    );
   }
 
   function enableScanner() {
@@ -748,11 +960,36 @@ export function PosView() {
   }
 
   return (
-    <div className="space-y-5">
-      <ModuleHeader
-        title="Caja"
-        description={`Cobro de órdenes enviadas a caja y cierre operativo de ${brand.name}.`}
-      />
+    <div className="flex flex-col gap-3 md:h-full md:min-h-0 md:overflow-hidden">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 shadow-sm">
+            <Store className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-zinc-950">Caja</h1>
+            <p className="text-xs text-muted-foreground">
+              Cobro de órdenes, ventas de mostrador y cierre de caja.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <p className="hidden text-xs font-medium capitalize text-muted-foreground sm:block">
+            {todayLabel}
+          </p>
+          {currentCashSession && canCreateDirectSale && !loadedOrder ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setCounterSaleOpen((current) => !current)}
+            >
+              <Plus className="h-4 w-4" />{' '}
+              {counterSaleOpen ? 'Ocultar mostrador' : 'Venta de mostrador'}
+            </Button>
+          ) : null}
+        </div>
+      </div>
 
       <CashStatusHeader
         sessionName={session.user.name}
@@ -761,6 +998,83 @@ export function PosView() {
         openedAt={currentCashSession?.openedAt}
         openingAmount={currentCashSession?.openingAmount}
       />
+
+      {requestedOrderId ? (
+        <Card className="border-primary/30">
+          <CardHeader>
+            <CardTitle>Orden seleccionada para Caja</CardTitle>
+            <CardDescription>
+              {requestedOrderQuery.isPending
+                ? 'Consultando la orden…'
+                : requestedOrderQuery.error
+                  ? 'No se pudo consultar esta orden. Verifica que esté disponible para tu usuario.'
+                  : requestedOrderQuery.data
+                    ? `${requestedOrderQuery.data.orderNumber} · ${getOrderClientLabel(requestedOrderQuery.data)}`
+                    : 'Orden no disponible.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {requestedOrderQuery.data?.invoice ? (
+              <p className="text-sm">
+                Esta orden ya está facturada.{' '}
+                <Link
+                  className="font-medium text-primary underline"
+                  href={`/invoices/${requestedOrderQuery.data.invoice.id}/print`}
+                >
+                  Ver comprobante
+                </Link>
+              </p>
+            ) : requestedOrderQuery.data &&
+              ['SENT_TO_CASHIER', 'IN_CASHIER'].includes(requestedOrderQuery.data.status) ? (
+              <>
+                <p className="text-sm">
+                  Total: <strong>{formatCurrency(Number(requestedOrderQuery.data.total))}</strong>.{' '}
+                  {currentCashSession
+                    ? 'Cárgala, revisa el comprobante y confirma el pago. Cargar no registra dinero.'
+                    : 'Abre tu sesión de caja para iniciar el cobro.'}
+                </p>
+                <Button
+                  type="button"
+                  disabled={
+                    !currentCashSession ||
+                    !canUsePos ||
+                    Boolean(loadedOrder) ||
+                    cart.length > 0 ||
+                    claimOrderMutation.isPending ||
+                    completeSaleMutation.isPending ||
+                    (requestedOrderQuery.data.status === 'IN_CASHIER' &&
+                      requestedOrderQuery.data.claimedBy?.id !== session.user.id)
+                  }
+                  onClick={() => claimOrderMutation.mutate(requestedOrderQuery.data!)}
+                >
+                  {loadedOrder?.id === requestedOrderId
+                    ? 'Orden cargada'
+                    : 'Cargar orden para cobrar'}
+                </Button>
+                {(loadedOrder && loadedOrder.id !== requestedOrderId) ||
+                (!loadedOrder && cart.length > 0) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Termina o retira la venta actual antes de cargar otra orden.
+                  </p>
+                ) : null}
+                {requestedOrderQuery.data.status === 'IN_CASHIER' &&
+                requestedOrderQuery.data.claimedBy?.id !== session.user.id ? (
+                  <p className="text-xs text-muted-foreground">
+                    En atención por {requestedOrderQuery.data.claimedBy?.name ?? 'otro operador'}.
+                  </p>
+                ) : null}
+              </>
+            ) : requestedOrderQuery.data ? (
+              <p className="text-sm">Esta orden no está disponible para cobro.</p>
+            ) : null}
+            {requestedOrderQuery.isError ? (
+              <Button type="button" variant="outline" onClick={() => requestedOrderQuery.refetch()}>
+                Reintentar
+              </Button>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {!canUsePos ? (
         <Card>
@@ -778,146 +1092,269 @@ export function PosView() {
           isOpening={openSessionMutation.isPending}
           message={message}
           occupiedBy={
-            selectedRegisterOccupied ? (selectedOpenSession?.openedBy?.name ?? 'otro cajero') : null
+            selectedRegisterOccupied
+              ? (selectedOpenSession?.openedBy?.name ?? 'otro usuario')
+              : null
           }
           onRegisterChange={setSelectedRegisterId}
           onOpeningAmountChange={setOpeningAmount}
           onOpen={() => openSessionMutation.mutate()}
         />
       ) : (
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.8fr)] xl:items-start">
-          <div className="space-y-4">
+        <fieldset
+          disabled={completeSaleMutation.isPending}
+          className="grid min-h-0 min-w-0 flex-1 gap-3 md:grid-cols-2"
+        >
+          <div className="surface-scrollbar min-h-0 min-w-0 space-y-2 md:overflow-y-auto">
             <SalesOrdersQueuePanel
-              orders={pendingOrdersQuery.data ?? []}
+              orders={readyOrders}
               loading={pendingOrdersQuery.isLoading}
-              loadedOrder={loadedOrder}
+              failed={pendingOrdersQuery.isError}
+              onRetry={() => pendingOrdersQuery.refetch()}
               loadedOrderId={loadedOrder?.id}
               currentUserId={session.user.id}
               claimingId={claimOrderMutation.variables?.id}
-              isReleasing={releaseOrderMutation.isPending}
-              canChargeOrders={!isAdmin}
+              canChargeOrders={canUsePos}
               onLoad={handleLoadOrder}
-              onReleaseLoaded={releaseLoadedOrder}
             />
-            {isAdmin ? (
-              <Card className="border-zinc-200 bg-zinc-50">
+            {canCreateDirectSale && !loadedOrder && counterSaleOpen ? (
+              <Card>
                 <CardHeader>
-                  <CardTitle>Cobro solo por cajero</CardTitle>
+                  <CardTitle>Venta de mostrador</CardTitle>
                   <CardDescription>
-                    El administrador no cobra desde caja. Los tickets pendientes deben ser cobrados
-                    por un cajero con sesion abierta.
+                    Vende repuestos y servicios rápidos sin crear una orden de trabajo.
                   </CardDescription>
                 </CardHeader>
+                <CardContent className="space-y-4">
+                  <Label htmlFor="pos-product-search">Buscar repuesto o servicio</Label>
+                  <Input
+                    id="pos-product-search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Nombre, SKU, marca o código"
+                  />
+                  <BarcodeInput
+                    barcode={barcode}
+                    scannerEnabled={scannerEnabled}
+                    cameraActive={cameraActive}
+                    scannerMessage={scannerMessage}
+                    barcodeInputRef={barcodeInputRef}
+                    videoRef={videoRef}
+                    isPending={barcodeMutation.isPending}
+                    onBarcodeChange={setBarcode}
+                    onSubmit={(code) => barcodeMutation.mutate(code)}
+                    onEnableScanner={enableScanner}
+                    onDisableScanner={disableScanner}
+                    onStartCamera={startCameraScan}
+                  />
+                  {productsQuery.error ? (
+                    <p role="alert" className="text-sm text-danger">
+                      No se pudo cargar el catálogo.{' '}
+                      <Button type="button" variant="ghost" onClick={() => productsQuery.refetch()}>
+                        Reintentar
+                      </Button>
+                    </p>
+                  ) : (
+                    <PosProductGrid
+                      products={filteredProducts}
+                      quantitiesByProduct={quantitiesByProduct}
+                      isLoading={productsQuery.isLoading}
+                      onAddProduct={addProduct}
+                    />
+                  )}
+                </CardContent>
               </Card>
             ) : null}
           </div>
 
-          <div className="space-y-3 xl:sticky xl:top-24">
-            {loadedOrder ? (
-              <div className="flex flex-col gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <span>
-                    Cobrando ticket pendiente {loadedOrder.orderNumber}. La factura se emitira al
-                    completar el cobro.
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="shrink-0 border-primary/40 bg-white text-primary hover:bg-primary/10"
-                    onClick={releaseLoadedOrder}
-                    disabled={releaseOrderMutation.isPending || completeSaleMutation.isPending}
-                  >
-                    <X className="h-4 w-4" />
-                    Quitar y elegir otra
-                  </Button>
+          <div className="flex min-h-0 min-w-0 flex-col gap-3">
+            <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-zinc-200 shadow-sm">
+              <CardHeader className="shrink-0 flex-row items-center justify-between border-b border-zinc-100 px-3 py-2">
+                <div>
+                  <CardTitle>Cobro actual</CardTitle>
+                  <CardDescription>Revisa los conceptos y completa el pago.</CardDescription>
                 </div>
-                <div className="text-xs font-semibold">
-                  Origen: {loadedOrder.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                </div>
-                {loadedOrder.notes ? (
-                  <div className="mt-1 border-t border-primary/20 pt-1 text-xs text-primary">
-                    <span className="font-semibold">Nota:</span> {loadedOrder.notes}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={clearCart}
+                  disabled={
+                    !cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending
+                  }
+                >
+                  Limpiar
+                </Button>
+              </CardHeader>
+              <CardContent className="surface-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
+                {loadedOrder ? (
+                  <CheckoutOrderSummary order={loadedOrder} />
+                ) : cart.length ? (
+                  <PosCart
+                    items={cart}
+                    onUpdateQuantity={updateQuantity}
+                    onClear={clearCart}
+                    readOnly={cartReadOnly}
+                  />
+                ) : (
+                  <div className="grid min-h-44 place-items-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-6 text-center">
+                    <div>
+                      <ReceiptText className="mx-auto h-8 w-8 text-zinc-400" />
+                      <p className="mt-3 font-semibold text-zinc-800">
+                        Selecciona una orden pendiente
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Se cargará aquí el cobro actual sin salir de esta pantalla.
+                      </p>
+                    </div>
                   </div>
+                )}
+                {loadedOrder ? (
+                  <label className="flex min-h-9 items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 text-xs font-medium">
+                    <input
+                      type="checkbox"
+                      checked={loadedOrder.electronicInvoiceRequested}
+                      disabled
+                      className="h-4 w-4 accent-primary"
+                    />
+                    <span>
+                      Factura electrónica (e-CF)
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {loadedOrder.electronicInvoiceRequested
+                          ? 'Solicitada en la orden'
+                          : 'No solicitada'}
+                      </span>
+                    </span>
+                  </label>
                 ) : null}
-                {loadedOrder.paymentMode === 'CREDIT' ? (
-                  <div className="border-t border-primary/20 pt-2 text-xs">
-                    Venta fiada aprobada · Inicial{' '}
-                    <strong>{formatCurrency(Number(loadedOrder.initialPaymentAmount))}</strong> ·
-                    Saldo{' '}
-                    <strong>
-                      {formatCurrency(
-                        Number(loadedOrder.total) - Number(loadedOrder.initialPaymentAmount),
-                      )}
-                    </strong>
-                  </div>
+                {cart.length ? (
+                  <PosPaymentPanel
+                    customers={activeCustomers}
+                    customerId={customerId}
+                    documentType={documentType}
+                    electronicInvoiceRequested={electronicInvoiceRequested}
+                    requiresE32Recipient={requiresE32Recipient}
+                    fiscalDocumentType={fiscalDocumentType}
+                    fiscalDocumentNumber={fiscalDocumentNumber}
+                    fiscalDocumentValid={fiscalDocumentValid}
+                    fiscalCustomerName={fiscalCustomer?.name}
+                    paymentMethod={paymentMethod}
+                    salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
+                    dueDate={loadedOrder?.dueDate}
+                    customerLocked={Boolean(loadedOrder?.customerId)}
+                    amountReceived={amountReceived}
+                    totals={totals}
+                    message={message}
+                    canCompleteSale={canCompleteSale}
+                    isCompleting={completeSaleMutation.isPending}
+                    onCustomerChange={handleCustomerChange}
+                    onDocumentTypeChange={handleDocumentTypeChange}
+                    onFiscalDocumentTypeChange={handleFiscalDocumentTypeChange}
+                    onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
+                    onPaymentMethodChange={changePaymentMethod}
+                    onAmountReceivedChange={setAmountReceived}
+                    onCompleteSale={() => completeSaleMutation.mutate()}
+                  />
                 ) : null}
-              </div>
-            ) : null}
-            <PosCart
-              items={cart}
-              onUpdateQuantity={updateQuantity}
-              onClear={clearCart}
-              readOnly={cartReadOnly}
-              emptyMessage="Carga una orden pendiente desde la lista para poder cobrarla."
-            />
-            {!isAdmin ? (
-              <PosPaymentPanel
-                customers={activeCustomers}
-                customerId={customerId}
-                documentType={documentType}
-                electronicInvoiceRequested={electronicInvoiceRequested}
-                requiresE32Recipient={requiresE32Recipient}
-                fiscalDocumentType={fiscalDocumentType}
-                fiscalDocumentNumber={fiscalDocumentNumber}
-                fiscalDocumentValid={fiscalDocumentValid}
-                fiscalCustomerName={fiscalCustomer?.name}
-                paymentMethod={paymentMethod}
-                salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
-                dueDate={loadedOrder?.dueDate}
-                customerLocked={Boolean(loadedOrder?.customerId)}
-                amountReceived={amountReceived}
-                totals={totals}
-                message={message}
-                canCompleteSale={canCompleteSale}
-                isCompleting={completeSaleMutation.isPending}
-                onCustomerChange={handleCustomerChange}
-                onDocumentTypeChange={handleDocumentTypeChange}
-                onFiscalDocumentTypeChange={handleFiscalDocumentTypeChange}
-                onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
-                onPaymentMethodChange={setPaymentMethod}
-                onAmountReceivedChange={setAmountReceived}
-                onCompleteSale={() => completeSaleMutation.mutate()}
-              />
-            ) : null}
+              </CardContent>
+            </Card>
 
-            <CloseCashPanel
+            <CloseCashLauncher
               canCloseCashSession={canCloseCashSession}
               cartHasItems={cart.length > 0}
-              closingAmount={closingAmount}
-              isClosing={closeSessionMutation.isPending}
-              onClosingAmountChange={setClosingAmount}
-              onClose={(event) => {
-                event.preventDefault();
-                requestCloseCashSession();
-              }}
+              isClosing={closeSessionMutation.isPending || currentSessionQuery.isFetching}
+              onOpen={requestCloseCashSession}
             />
           </div>
-        </section>
+        </fieldset>
       )}
 
-      <WarningConfirmModal
-        open={zeroClosingWarningOpen}
-        title="Cerrar caja con RD$0.00"
-        description="El monto contado esta en cero. Confirma solo si realmente la caja fisica no tiene efectivo al cierre."
-        confirmLabel="Cerrar en RD$0.00"
+      <CashCloseDialog
+        open={closingDialogOpen}
+        cashSession={currentCashSession}
+        closingAmount={closingAmount}
+        cartHasItems={cart.length > 0}
         isPending={closeSessionMutation.isPending}
-        onClose={() => setZeroClosingWarningOpen(false)}
-        onConfirm={() => {
-          setZeroClosingWarningOpen(false);
-          closeSessionMutation.mutate();
-        }}
+        onClosingAmountChange={setClosingAmount}
+        onClose={() => setClosingDialogOpen(false)}
+        onConfirm={() => closeSessionMutation.mutate()}
       />
+    </div>
+  );
+}
+
+function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="flex items-start justify-between gap-3 bg-zinc-50/80 p-2.5">
+        <div className="flex min-w-0 gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-50 text-violet-700">
+            <ShoppingBag className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
+              <Badge variant="outline">
+                {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {order.orderNumber} · {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
+            </p>
+          </div>
+        </div>
+        <Badge variant="success">Lista para cobrar</Badge>
+      </div>
+
+      <div className="surface-scrollbar max-h-[7.25rem] overflow-x-hidden overflow-y-auto overscroll-contain border-t border-zinc-200">
+        <table className="w-full table-fixed text-xs">
+          <thead className="sticky top-0 bg-white text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-zinc-200">
+              <th className="w-[46%] px-3 py-2 font-semibold">Descripción</th>
+              <th className="w-[12%] px-2 py-2 text-right font-semibold">Cant.</th>
+              <th className="w-[20%] px-2 py-2 text-right font-semibold">Precio</th>
+              <th className="w-[22%] px-3 py-2 text-right font-semibold">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {order.items.map((item) => (
+              <tr key={item.id} className="border-b border-zinc-100 last:border-0">
+                <td
+                  className="truncate px-3 py-1.5 font-medium text-zinc-800"
+                  title={item.description}
+                >
+                  {item.description}
+                </td>
+                <td className="px-2 py-1.5 text-right text-zinc-600">
+                  {Number(item.quantity).toLocaleString('es-DO')}
+                </td>
+                <td className="px-2 py-1.5 text-right text-zinc-600">
+                  {formatCurrency(Number(item.unitPrice))}
+                </td>
+                <td className="px-3 py-1.5 text-right font-semibold">
+                  {formatCurrency(Number(item.subtotal))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center justify-between border-t border-zinc-200 bg-zinc-50/70 px-3 py-2">
+        <div>
+          <p className="text-xs text-muted-foreground">Total de la orden</p>
+          <p className="text-xs text-zinc-500">{order.items.length} producto(s)</p>
+        </div>
+        <p className="text-lg font-bold text-zinc-950">{formatCurrency(Number(order.total))}</p>
+      </div>
+      {order.paymentMode === 'CREDIT' ? (
+        <div className="border-t border-sky-100 bg-sky-50 px-3.5 py-2 text-xs text-sky-900">
+          Crédito aprobado · Inicial{' '}
+          <strong>{formatCurrency(Number(order.initialPaymentAmount))}</strong> · Saldo{' '}
+          <strong>
+            {formatCurrency(Number(order.total) - Number(order.initialPaymentAmount))}
+          </strong>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -925,30 +1362,33 @@ export function PosView() {
 function SalesOrdersQueuePanel({
   orders,
   loading,
-  loadedOrder,
+  failed,
+  onRetry,
   loadedOrderId,
   currentUserId,
   claimingId,
-  isReleasing,
   canChargeOrders,
   onLoad,
-  onReleaseLoaded,
 }: {
   orders: SalesOrder[];
   loading: boolean;
-  loadedOrder: SalesOrder | null;
+  failed: boolean;
+  onRetry: () => void;
   loadedOrderId?: string;
   currentUserId: string;
   claimingId?: string;
-  isReleasing: boolean;
   canChargeOrders: boolean;
   onLoad: (order: SalesOrder) => void;
-  onReleaseLoaded: () => void;
 }) {
   const [queueSearch, setQueueSearch] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [originFilter, setOriginFilter] = useState<'ALL' | 'SALES_INVENTORY' | 'WAREHOUSE'>('ALL');
   const normalizedSearch = queueSearch.trim().toLowerCase();
+  const originOrders = orders.filter((order) =>
+    originFilter === 'ALL' ? true : order.inventorySource === originFilter,
+  );
   const visibleOrders = normalizedSearch
-    ? orders.filter((order) =>
+    ? originOrders.filter((order) =>
         [
           order.orderNumber,
           order.clientName,
@@ -967,144 +1407,183 @@ function SalesOrdersQueuePanel({
           .filter(Boolean)
           .some((value) => value!.toLowerCase().includes(normalizedSearch)),
       )
-    : orders;
+    : originOrders;
 
   return (
-    <Card className="border-zinc-200">
-      <CardHeader className="pb-3">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden border-zinc-200 shadow-sm">
+      <CardHeader className="shrink-0 border-b border-zinc-100 px-3 py-2.5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Solicitudes y tickets pendientes</CardTitle>
+            <CardTitle>Órdenes pendientes de cobro</CardTitle>
             <CardDescription>
-              Las ventas fiadas solo se pueden cobrar después de la aprobación administrativa.
+              Las órdenes aparecen aquí cuando están listas para cobrar.
             </CardDescription>
           </div>
-          <Badge variant={orders.length ? 'warning' : 'outline'}>
+          <Badge
+            variant="outline"
+            className={orders.length ? 'border-blue-100 bg-blue-50 text-blue-700' : undefined}
+          >
             {orders.length} pendiente(s)
           </Badge>
         </div>
       </CardHeader>
-      <CardContent>
-        {loadedOrder ? (
-          <div className="mb-3 rounded-md border border-primary/30 bg-primary/10 p-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-primary">
-                  Ticket cargado: {loadedOrder.orderNumber}
-                </p>
-                <p className="mt-1 text-xs text-primary">
-                  {getOrderSearchLabel(loadedOrder)} - {formatCurrency(Number(loadedOrder.total))}
-                </p>
-                {loadedOrder.notes ? (
-                  <p className="mt-2 inline-block rounded border border-primary/20 bg-white/50 px-1.5 py-0.5 text-xs font-medium text-primary">
-                    Nota: {loadedOrder.notes}
-                  </p>
-                ) : null}
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="border-primary/40 bg-white text-primary hover:bg-primary/10"
-                onClick={onReleaseLoaded}
-                disabled={isReleasing}
-              >
-                <X className="h-4 w-4" />
-                Quitar y elegir otra
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-primary">
-              Quita este ticket si no corresponde para poder seleccionar otro de la lista.
-            </p>
-          </div>
-        ) : null}
-        <div className="mb-3">
-          <div className="relative">
+      <CardContent className="flex min-h-0 flex-1 flex-col p-2.5">
+        <div className="mb-3 flex gap-2">
+          <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={queueSearch}
               onChange={(event) => setQueueSearch(event.target.value)}
               className="bg-white pl-9"
+              aria-label="Buscar órdenes pendientes de cobro"
               placeholder="Buscar por cliente, ticket, orden o monto"
             />
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            className={cn('shrink-0', filtersOpen && 'border-primary bg-primary/5 text-primary')}
+            onClick={() => setFiltersOpen((current) => !current)}
+          >
+            <Filter className="h-4 w-4" /> <span className="hidden sm:inline">Filtros</span>
+          </Button>
         </div>
-        {loading ? (
+        {filtersOpen ? (
+          <div className="mb-3 flex flex-wrap gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2">
+            {(
+              [
+                ['ALL', 'Todos'],
+                ['SALES_INVENTORY', 'Inventario'],
+                ['WAREHOUSE', 'Almacén B2B'],
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={originFilter === value ? 'default' : 'outline'}
+                onClick={() => setOriginFilter(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+        {failed ? (
+          <div role="alert" className="rounded-md border border-danger/30 bg-danger/5 p-3 text-sm">
+            <p>
+              No se pudo actualizar la cola de cobros. No significa que no haya órdenes pendientes.
+            </p>
+            <Button type="button" variant="outline" size="sm" className="mt-2" onClick={onRetry}>
+              Reintentar
+            </Button>
+          </div>
+        ) : loading ? (
           <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
             Cargando ordenes...
           </p>
         ) : visibleOrders.length ? (
-          <div className="grid gap-2 lg:grid-cols-2">
+          <div className="surface-scrollbar grid min-h-0 flex-1 auto-rows-max content-start items-start gap-2 overflow-y-auto pr-1">
             {visibleOrders.map((order) => (
-              <div key={order.id} className={getWaitingCardClass(order)}>
+              <article
+                key={order.id}
+                tabIndex={0}
+                className={getWaitingCardClass(order, loadedOrderId === order.id)}
+                onClick={() => {
+                  if (loadedOrderId !== order.id) onLoad(order);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    if (loadedOrderId !== order.id) onLoad(order);
+                  }
+                }}
+              >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
-                      <Badge variant={getStatusVariant(order.status)}>
-                        {translateStatus(order.status)}
-                      </Badge>
-                      <Badge variant="outline">
-                        {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                      </Badge>
-                      {order.paymentMode === 'CREDIT' ? (
-                        <Badge variant="outline">
-                          {order.creditApproval?.status === 'APPROVED'
-                            ? 'Crédito aprobado'
-                            : 'Crédito pendiente'}
+                  <div className="flex min-w-0 gap-3">
+                    <div
+                      className={cn(
+                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+                        order.inventorySource === 'WAREHOUSE'
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'bg-violet-50 text-violet-700',
+                      )}
+                    >
+                      {order.inventorySource === 'WAREHOUSE' ? (
+                        <Store className="h-5 w-5" />
+                      ) : (
+                        <ShoppingBag className="h-5 w-5" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
+                        <Badge
+                          variant={order.inventorySource === 'WAREHOUSE' ? 'default' : 'outline'}
+                        >
+                          {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
                         </Badge>
+                        {order.paymentMode === 'CREDIT' ? (
+                          <Badge variant="outline">
+                            {order.creditApproval?.status === 'APPROVED'
+                              ? 'Crédito aprobado'
+                              : 'Crédito pendiente'}
+                          </Badge>
+                        ) : null}
+                        {order.sentToCashierAt ? (
+                          <Badge variant={getWaitingVariant(order)}>
+                            {getWaitingMinutes(order)} min
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {order.orderNumber} ·{' '}
+                        {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
+                      </p>
+                      <p className="mt-2 line-clamp-2 text-sm text-zinc-600">
+                        {order.notes ||
+                          order.items
+                            .map((item) => item.description)
+                            .slice(0, 2)
+                            .join(' · ')}
+                      </p>
+                      {order.claimedBy ? (
+                        <p className="mt-1 text-xs text-warning">
+                          Tomada por {order.claimedBy.name}
+                          {order.claimedCashSession?.cashRegister.name
+                            ? ` en ${order.claimedCashSession.cashRegister.name}`
+                            : ''}
+                        </p>
                       ) : null}
-                      {order.sentToCashierAt ? (
-                        <Badge variant={getWaitingVariant(order)}>
-                          {getWaitingMinutes(order)} min
-                        </Badge>
+                      {order.paymentMode === 'CREDIT' ? (
+                        <p className="mt-1 text-xs text-sky-800">
+                          Inicial {formatCurrency(Number(order.initialPaymentAmount))} · Saldo{' '}
+                          {formatCurrency(
+                            Number(order.total) - Number(order.initialPaymentAmount ?? 0),
+                          )}
+                        </p>
                       ) : null}
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {getOrderSearchLabel(order)} -{' '}
-                      {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Cliente: {getOrderClientLabel(order)}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Creada por {order.createdBy.name}
-                    </p>
-                    {order.notes ? (
-                      <p className="mt-1 text-xs text-zinc-600 bg-amber-50 rounded-sm px-1.5 py-0.5 border border-amber-200 inline-block font-medium">
-                        Nota: {order.notes}
-                      </p>
-                    ) : null}
-                    {order.claimedBy ? (
-                      <p className="mt-1 text-xs text-warning">
-                        Tomada por {order.claimedBy.name}
-                        {order.claimedCashSession?.cashRegister.name
-                          ? ` en ${order.claimedCashSession.cashRegister.name}`
-                          : ''}
-                      </p>
-                    ) : null}
-                    {order.paymentMode === 'CREDIT' ? (
-                      <p className="mt-1 text-xs text-sky-800">
-                        Inicial {formatCurrency(Number(order.initialPaymentAmount))} · Saldo{' '}
-                        {formatCurrency(
-                          Number(order.total) - Number(order.initialPaymentAmount ?? 0),
-                        )}
-                      </p>
-                    ) : null}
                   </div>
-                  <p className="shrink-0 text-sm font-bold">
+                  <p className="shrink-0 text-base font-bold text-zinc-950">
                     {formatCurrency(Number(order.total))}
                   </p>
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <span className="text-xs text-muted-foreground">
-                    {order.items.length} producto(s)
-                  </span>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline">
+                      {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
+                    </Badge>
+                    <span>{order.items.length} línea(s)</span>
+                  </div>
                   {canChargeOrders ? (
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => onLoad(order)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onLoad(order);
+                      }}
                       disabled={
                         loadedOrderId === order.id ||
                         claimingId === order.id ||
@@ -1123,10 +1602,10 @@ function SalesOrdersQueuePanel({
                             : 'Cobrar'}
                     </Button>
                   ) : (
-                    <span className="text-xs text-muted-foreground">Solo cajero</span>
+                    <span className="text-xs text-muted-foreground">Sin permiso de cobro</span>
                   )}
                 </div>
-              </div>
+              </article>
             ))}
           </div>
         ) : (
@@ -1139,6 +1618,10 @@ function SalesOrdersQueuePanel({
             </p>
           </div>
         )}
+        <div className="mt-3 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          <ShieldCheck className="h-4 w-4 shrink-0" /> Solo se muestran órdenes aprobadas y listas
+          para cobro.
+        </div>
       </CardContent>
     </Card>
   );
@@ -1158,35 +1641,44 @@ function CashStatusHeader({
   openingAmount?: string | number | null;
 }) {
   return (
-    <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm lg:grid-cols-4">
+    <div className="grid shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm sm:grid-cols-2 md:grid-cols-4 md:divide-x md:divide-zinc-100">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <Store className="h-5 w-5" />
+        <div className="ml-3 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+          <CircleCheckBig className="h-5 w-5" />
         </div>
-        <div>
+        <div className="py-2 pr-3">
           <p className="text-xs text-muted-foreground">Estado</p>
           <p className="font-semibold">{isOpen ? 'Caja abierta' : 'Caja cerrada'}</p>
         </div>
       </div>
-      <div className="flex items-center gap-3">
-        <ShieldCheck className="h-5 w-5 text-zinc-500" />
+      <div className="flex items-center gap-2 px-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+          <ShieldCheck className="h-4 w-4" />
+        </div>
         <div>
           <p className="text-xs text-muted-foreground">Cajero</p>
           <p className="font-semibold">{sessionName}</p>
         </div>
       </div>
-      <div className="flex items-center gap-3">
-        <CalendarClock className="h-5 w-5 text-zinc-500" />
+      <div className="flex items-center gap-2 px-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+          <CalendarClock className="h-4 w-4" />
+        </div>
         <div>
           <p className="text-xs text-muted-foreground">Apertura</p>
           <p className="font-semibold">{openedAt ? formatDateTime(openedAt) : 'Pendiente'}</p>
         </div>
       </div>
-      <div>
-        <p className="text-xs text-muted-foreground">Caja / monto inicial</p>
-        <p className="font-semibold">
-          {registerName ?? 'Sin caja'} - {formatCurrency(Number(openingAmount ?? 0))}
-        </p>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+          <Banknote className="h-4 w-4" />
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Caja / monto inicial</p>
+          <p className="font-semibold">
+            {registerName ?? 'Sin caja'} - {formatCurrency(Number(openingAmount ?? 0))}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1277,7 +1769,7 @@ function ClosedCashPanel({
                   isOpening ||
                   !canOpenCashSession ||
                   Boolean(occupiedBy) ||
-                  parseCurrencyInput(openingAmount) <= 0
+                  parseCurrencyInput(openingAmount) < 0
                 }
               >
                 <DoorOpen className="h-4 w-4" />
@@ -1300,54 +1792,182 @@ function ClosedCashPanel({
   );
 }
 
-function CloseCashPanel({
+function CloseCashLauncher({
   canCloseCashSession,
   cartHasItems,
-  closingAmount,
   isClosing,
-  onClosingAmountChange,
-  onClose,
+  onOpen,
 }: {
   canCloseCashSession: boolean;
   cartHasItems: boolean;
-  closingAmount: string;
   isClosing: boolean;
-  onClosingAmountChange: (value: string) => void;
-  onClose: (event: FormEvent<HTMLFormElement>) => void;
+  onOpen: () => void;
 }) {
   return (
-    <form className="rounded-md border border-zinc-200 bg-white p-3 shadow-sm" onSubmit={onClose}>
-      <Label htmlFor="closingAmount">Cierre de caja</Label>
-      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-        <Input
-          id="closingAmount"
-          type="text"
-          inputMode="decimal"
-          value={closingAmount}
-          onChange={(event) => onClosingAmountChange(sanitizeCurrencyInput(event.target.value))}
-          onBlur={(event) => onClosingAmountChange(formatCurrencyInput(event.target.value))}
-          onFocus={(event) => event.currentTarget.select()}
-          placeholder="Monto contado"
-          required
-        />
-        <Button
-          type="submit"
-          variant="outline"
-          disabled={!canCloseCashSession || isClosing || cartHasItems}
-        >
+    <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-700">
           <DoorClosed className="h-4 w-4" />
-          Cerrar
-        </Button>
+        </div>
+        <div className="min-w-0">
+          <p className="font-semibold text-zinc-950">Cierre de caja</p>
+          <p className="truncate text-xs text-muted-foreground">
+            Revisa el resumen del turno antes de cerrar.
+          </p>
+        </div>
       </div>
-      {cartHasItems ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Limpia o factura el carrito antes de cerrar.
+      <Button
+        type="button"
+        variant="outline"
+        className="shrink-0"
+        disabled={!canCloseCashSession || isClosing || cartHasItems}
+        onClick={onOpen}
+      >
+        <DoorClosed className="h-4 w-4" /> Cerrar
+      </Button>
+    </div>
+  );
+}
+
+function CashCloseDialog({
+  open,
+  cashSession,
+  closingAmount,
+  cartHasItems,
+  isPending,
+  onClosingAmountChange,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  cashSession: CashSession | null | undefined;
+  closingAmount: string;
+  cartHasItems: boolean;
+  isPending: boolean;
+  onClosingAmountChange: (value: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { expected, inflows, outflows, invoiceCount } = getCashCloseSummary(cashSession);
+  const counted = parseCurrencyInput(closingAmount);
+  const difference = counted - expected;
+
+  return (
+    <ActionDialog
+      open={open}
+      title="Cerrar caja"
+      description="Verifica el resumen, cuenta el efectivo físico y confirma el cierre del turno."
+      tone="warning"
+      size="lg"
+      confirmLabel="Confirmar cierre"
+      cancelLabel="Volver a caja"
+      isPending={isPending}
+      confirmDisabled={!cashSession || cartHasItems}
+      onClose={onClose}
+      onConfirm={onConfirm}
+      summary={
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-muted-foreground">Caja</p>
+            <p className="font-semibold">{cashSession?.cashRegister.name ?? 'Sin caja'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Apertura</p>
+            <p className="font-semibold">{formatDateTime(cashSession?.openedAt)}</p>
+          </div>
+        </div>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <CloseSummaryMetric
+          label="Fondo inicial"
+          value={formatCurrency(Number(cashSession?.openingAmount ?? 0))}
+        />
+        <CloseSummaryMetric label="Entradas en efectivo" value={formatCurrency(inflows)} />
+        <CloseSummaryMetric label="Salidas en efectivo" value={formatCurrency(outflows)} />
+        <CloseSummaryMetric label="Facturas emitidas" value={String(invoiceCount)} />
+      </div>
+      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-sm text-muted-foreground">Efectivo esperado</span>
+          <strong className="text-lg">{formatCurrency(expected)}</strong>
+        </div>
+        <Label className="mt-4 block" htmlFor="closing-dialog-amount">
+          Efectivo contado
+        </Label>
+        <div className="relative mt-2">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+            RD$
+          </span>
+          <Input
+            id="closing-dialog-amount"
+            data-dialog-autofocus
+            inputMode="decimal"
+            value={closingAmount}
+            onChange={(event) => onClosingAmountChange(sanitizeCurrencyInput(event.target.value))}
+            onBlur={(event) => onClosingAmountChange(formatCurrencyInput(event.target.value))}
+            onFocus={(event) => event.currentTarget.select()}
+            className="h-12 pl-12 text-lg font-semibold"
+          />
+        </div>
+        <div
+          className={cn(
+            'mt-3 flex items-center justify-between rounded-md px-3 py-2 text-sm',
+            Math.abs(difference) < 0.005
+              ? 'bg-emerald-50 text-emerald-800'
+              : 'bg-amber-50 text-amber-900',
+          )}
+        >
+          <span>Diferencia</span>
+          <strong>{formatCurrency(difference)}</strong>
+        </div>
+      </div>
+      {counted === 0 ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          El monto contado está en RD$0.00. Confirma solamente si la caja física realmente no tiene
+          efectivo.
         </p>
       ) : null}
-      {!canCloseCashSession ? (
-        <p className="mt-2 text-xs text-danger">Sin permiso para cerrar caja.</p>
-      ) : null}
-    </form>
+    </ActionDialog>
+  );
+}
+
+function getCashCloseSummary(cashSession: CashSession | null | undefined) {
+  const cashMovements = (cashSession?.movements ?? []).filter(
+    (movement) => !movement.method || movement.method === 'CASH',
+  );
+  const negativeTypes = new Set(['CASH_OUT', 'REFUND', 'SUPPLIER_PAYMENT']);
+  const expected = cashMovements.reduce(
+    (total, movement) =>
+      movement.type === 'CLOSING'
+        ? total
+        : negativeTypes.has(movement.type)
+          ? total - Number(movement.amount)
+          : total + Number(movement.amount),
+    0,
+  );
+  const inflows = cashMovements
+    .filter(
+      (movement) =>
+        !['OPENING', 'CLOSING'].includes(movement.type) && !negativeTypes.has(movement.type),
+    )
+    .reduce((total, movement) => total + Number(movement.amount), 0);
+  const outflows = cashMovements
+    .filter((movement) => negativeTypes.has(movement.type))
+    .reduce((total, movement) => total + Number(movement.amount), 0);
+  const invoiceCount = (cashSession?.invoices ?? []).filter(
+    (invoice) => invoice.status !== 'CANCELLED',
+  ).length;
+
+  return { expected, inflows, outflows, invoiceCount };
+}
+
+function CloseSummaryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 font-semibold text-zinc-950">{value}</p>
+    </div>
   );
 }
 
@@ -1370,16 +1990,22 @@ function getWaitingVariant(order: SalesOrder) {
   return 'outline' as const;
 }
 
-function getWaitingCardClass(order: SalesOrder) {
+function getWaitingCardClass(order: SalesOrder, selected = false) {
   const minutes = getWaitingMinutes(order);
+  const base =
+    'cursor-pointer rounded-xl border p-3.5 outline-none transition focus-visible:ring-2 focus-visible:ring-primary/40';
+
+  if (selected) {
+    return `${base} border-primary bg-primary/[0.06] shadow-sm`;
+  }
 
   if (minutes >= 30) {
-    return 'rounded-md border border-danger/40 bg-danger/5 p-3';
+    return `${base} border-danger/30 bg-danger/[0.035]`;
   }
 
   if (minutes >= 10) {
-    return 'rounded-md border border-warning/40 bg-warning/10 p-3';
+    return `${base} border-warning/30 bg-warning/[0.05]`;
   }
 
-  return 'rounded-md border border-zinc-200 bg-zinc-50 p-3';
+  return `${base} border-zinc-200 bg-white hover:border-zinc-300`;
 }

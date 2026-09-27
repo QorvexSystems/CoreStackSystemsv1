@@ -76,21 +76,21 @@ export class PosService {
     await this.ensureCanCreateDirectSale(tenantId, user);
     const query = q.trim();
 
-    if (!query) {
-      return [];
-    }
-
     return this.prisma.product.findMany({
       where: {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
-        OR: [
-          { name: { contains: query, mode: 'insensitive' } },
-          { sku: { contains: query, mode: 'insensitive' } },
-          { barcode: { contains: query, mode: 'insensitive' } },
-          { brand: { contains: query, mode: 'insensitive' } },
-        ],
+        ...(query
+          ? {
+              OR: [
+                { name: { contains: query, mode: 'insensitive' as const } },
+                { sku: { contains: query, mode: 'insensitive' as const } },
+                { barcode: { contains: query, mode: 'insensitive' as const } },
+                { brand: { contains: query, mode: 'insensitive' as const } },
+              ],
+            }
+          : {}),
       },
       include: { category: true },
       orderBy: [{ stock: 'asc' }, { name: 'asc' }],
@@ -154,14 +154,8 @@ export class PosService {
   async completeSale(tenantId: string, user: AuthenticatedUser, dto: CompleteSaleDto) {
     const membership = await this.ensureCanUsePos(tenantId, user);
 
-    if (this.isAdminMembership(membership)) {
-      throw new ForbiddenException(
-        'Admins cannot complete POS sales. Cashiers must charge orders.',
-      );
-    }
-
-    if (!dto.orderId) {
-      throw new ForbiddenException('Direct POS sales are disabled. Load an order to charge.');
+    if (!dto.orderId && !this.isAdminMembership(membership)) {
+      throw new ForbiddenException('Only admins can create direct POS sales.');
     }
     this.ensureSupportedPaymentMethod(dto.paymentMethod);
 
@@ -586,8 +580,7 @@ export class PosService {
                     email: customer.email,
                   }
                 : null,
-              recipientEmail:
-                order?.ecfRecipientEmail ?? customer?.email ?? tenant.email,
+              recipientEmail: order?.ecfRecipientEmail ?? customer?.email ?? tenant.email,
               cashRegisterName: cashSession.cashRegister.name,
               paymentMethod: dto.paymentMethod,
               paymentMode: isCreditSale ? 'CREDIT' : 'CASH',

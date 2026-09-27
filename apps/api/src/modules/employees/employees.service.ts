@@ -34,7 +34,13 @@ const permissionKeys = [
   'canTakeOrders',
 ] as const;
 const maxTenantUsers = 5;
-const tenantAssignableRoles: Role[] = [Role.ADMIN, Role.ACCOUNTANT, Role.CASHIER, Role.ORDER_TAKER];
+const tenantAssignableRoles: Role[] = [
+  Role.ADMIN,
+  Role.ACCOUNTANT,
+  Role.CASHIER,
+  Role.ORDER_TAKER,
+  Role.WAREHOUSE_KEEPER,
+];
 
 @Injectable()
 export class EmployeesService {
@@ -483,6 +489,10 @@ export class EmployeesService {
       };
     }
 
+    if (role === Role.WAREHOUSE_KEEPER) {
+      return this.blankPermissions();
+    }
+
     if (role === Role.CASHIER) {
       return {
         ...data,
@@ -493,8 +503,8 @@ export class EmployeesService {
     if (role === Role.ADMIN) {
       return {
         ...data,
-        canUsePos: false,
-        canOpenCashSession: false,
+        canUsePos: true,
+        canOpenCashSession: true,
         canTakeOrders: true,
       };
     }

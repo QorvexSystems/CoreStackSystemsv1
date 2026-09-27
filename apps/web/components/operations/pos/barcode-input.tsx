@@ -14,6 +14,7 @@ type BarcodeInputProps = {
   videoRef: RefObject<HTMLVideoElement | null>;
   isPending: boolean;
   keepFocus?: boolean;
+  showCamera?: boolean;
   onBarcodeChange: (value: string) => void;
   onSubmit: (code: string) => void;
   onEnableScanner: () => void;
@@ -34,6 +35,7 @@ export function BarcodeInput({
   videoRef,
   isPending,
   keepFocus = false,
+  showCamera = true,
   onBarcodeChange,
   onSubmit,
   onEnableScanner,
@@ -50,7 +52,9 @@ export function BarcodeInput({
       return;
     }
 
-    const canAutoSubmit = code.length >= autoSubmitLongCodeLength || (scannerEnabled && code.length >= autoSubmitMinLength);
+    const canAutoSubmit =
+      code.length >= autoSubmitLongCodeLength ||
+      (scannerEnabled && code.length >= autoSubmitMinLength);
 
     if (!canAutoSubmit || cameraActive || isPending) {
       return;
@@ -60,7 +64,8 @@ export function BarcodeInput({
       const nextCode = normalizeScannedCode(barcode);
 
       const nextCanAutoSubmit =
-        nextCode.length >= autoSubmitLongCodeLength || (scannerEnabled && nextCode.length >= autoSubmitMinLength);
+        nextCode.length >= autoSubmitLongCodeLength ||
+        (scannerEnabled && nextCode.length >= autoSubmitMinLength);
 
       if (!nextCode || !nextCanAutoSubmit || nextCode === lastSubmittedCodeRef.current) {
         return;
@@ -94,18 +99,25 @@ export function BarcodeInput({
   }
 
   return (
-    <div className="rounded-md border border-zinc-200 bg-white p-3 shadow-sm">
+    <div className="rounded-lg border border-zinc-200 bg-white p-3 shadow-sm">
       <div className="mb-3 flex flex-wrap gap-2">
-        <Button type="button" variant={scannerEnabled ? 'default' : 'outline'} onClick={onEnableScanner}>
+        <Button
+          type="button"
+          className="h-11"
+          variant={scannerEnabled ? 'default' : 'outline'}
+          onClick={onEnableScanner}
+        >
           <ScanLine className="h-4 w-4" />
           Activar lector
         </Button>
-        <Button type="button" variant="outline" onClick={onStartCamera}>
-          <Camera className="h-4 w-4" />
-          Camara QR
-        </Button>
+        {showCamera ? (
+          <Button type="button" className="h-11" variant="outline" onClick={onStartCamera}>
+            <Camera className="h-4 w-4" />
+            Camara QR
+          </Button>
+        ) : null}
         {scannerEnabled ? (
-          <Button type="button" variant="ghost" onClick={onDisableScanner}>
+          <Button type="button" className="h-11" variant="ghost" onClick={onDisableScanner}>
             <X className="h-4 w-4" />
             Apagar
           </Button>
@@ -124,22 +136,33 @@ export function BarcodeInput({
                 window.setTimeout(() => barcodeInputRef.current?.focus(), 40);
               }
             }}
-            className="pl-9"
+            className="h-11 pl-9"
             placeholder="Escanea o escribe codigo QR o codigo de barras"
             autoComplete="off"
             inputMode="text"
           />
         </div>
-        <Button type="submit" disabled={isPending} aria-label="Buscar por codigo">
+        <Button
+          className="h-11 w-11 px-0"
+          type="submit"
+          disabled={isPending}
+          aria-label="Buscar por codigo"
+        >
           <Search className="h-4 w-4" />
         </Button>
       </form>
 
-      {cameraActive ? (
-        <video ref={videoRef} className="mt-3 aspect-video w-full rounded-md bg-black object-cover" muted />
+      {showCamera && cameraActive ? (
+        <video
+          ref={videoRef}
+          className="mt-3 aspect-video w-full rounded-md bg-black object-cover"
+          muted
+        />
       ) : null}
 
-      {scannerMessage ? <p className="mt-2 text-sm text-muted-foreground">{scannerMessage}</p> : null}
+      {scannerMessage ? (
+        <p className="mt-2 text-sm text-muted-foreground">{scannerMessage}</p>
+      ) : null}
     </div>
   );
 }

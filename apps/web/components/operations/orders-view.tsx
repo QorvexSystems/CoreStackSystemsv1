@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, CreditCard, FileText, Search, Send, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,8 @@ import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
 import { cn, formatCurrency, formatDate } from '@/lib/utils';
 import { CancelReasonModal } from './cancel-reason-modal';
 import { ModuleHeader } from './module-header';
+import { OrderActivityDrawer } from './orders/order-activity-drawer';
+import { CartSummaryBar, OrderCartDrawer } from './orders/order-cart-drawer';
 import { BarcodeInput } from './pos/barcode-input';
 import { PosCart } from './pos/pos-cart';
 import { PosProductGrid } from './pos/pos-product-grid';
@@ -195,9 +197,12 @@ export function OrdersView() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [brandFilter, setBrandFilter] = useState('ALL');
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const [notesExpanded, setNotesExpanded] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
-  const [mobileSection, setMobileSection] = useState<'products' | 'order'>('products');
+  const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
+  const [activityDrawer, setActivityDrawer] = useState<'orders' | 'quotations' | null>(null);
   const [loadedEditOrderId, setLoadedEditOrderId] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
@@ -215,7 +220,7 @@ export function OrdersView() {
       searchOrderProducts(
         session?.tenantId ?? '',
         session?.accessToken ?? '',
-        search || 'RIV',
+        search,
         inventorySource,
       ),
     enabled: canUseOrderTaking,
@@ -320,7 +325,7 @@ export function OrdersView() {
         }));
 
         setCart(cartItems);
-        setMobileSection('order');
+        setCartDrawerOpen(true);
         setLoadedEditOrderId(editOrderId);
         loadedEditOrderRef.current = null;
 
@@ -374,7 +379,8 @@ export function OrdersView() {
           return leftStartsWithSearch ? -1 : 1;
         }
 
-        const balanceDifference = Number(right.creditBalance ?? 0) - Number(left.creditBalance ?? 0);
+        const balanceDifference =
+          Number(right.creditBalance ?? 0) - Number(left.creditBalance ?? 0);
         if (balanceDifference) return balanceDifference;
         return left.name.localeCompare(right.name, 'es');
       })
@@ -391,7 +397,10 @@ export function OrdersView() {
   );
   const filteredProducts = productPool
     .filter((product) => categoryFilter === 'ALL' || product.category?.name === categoryFilter)
-    .filter((product) => brandFilter === 'ALL' || product.brand === brandFilter);
+    .filter((product) => brandFilter === 'ALL' || product.brand === brandFilter)
+    .filter(
+      (product) => !availableOnly || !product.trackInventory || getAvailableStock(product) > 0,
+    );
   const quantitiesByProduct = Object.fromEntries(
     cart.map((item) => [item.product.id, item.quantity]),
   );
@@ -441,12 +450,7 @@ export function OrdersView() {
         throw new Error('Sesion requerida.');
       }
 
-      return getOrderProductByBarcode(
-        session.tenantId,
-        session.accessToken,
-        code,
-        inventorySource,
-      );
+      return getOrderProductByBarcode(session.tenantId, session.accessToken, code, inventorySource);
     },
     onSuccess: (product) => {
       const added = addProduct(product);
@@ -566,6 +570,7 @@ export function OrdersView() {
       setElectronicInvoiceRequested(false);
       setEcfRecipientEmail('');
       setNotes('');
+      setNotesExpanded(false);
       setCustomerId('');
       setPriceLevel('REGULAR');
       setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
@@ -575,7 +580,7 @@ export function OrdersView() {
       setCreditRequestNote('');
       setClientName('');
       setQuotationDocumentNumber('');
-      setMobileSection('products');
+      setCartDrawerOpen(false);
       setLoadedEditOrderId(null);
       loadedEditOrderRef.current = editOrderId ? editOrderId : null;
       editToastShownRef.current = null;
@@ -736,7 +741,9 @@ export function OrdersView() {
 
   function handleClientNameChange(nextClientName: string) {
     const registeredCustomerId = getRegisteredCustomerId(customerId);
-    const currentCustomer = activeCustomers.find((customer) => customer.id === registeredCustomerId);
+    const currentCustomer = activeCustomers.find(
+      (customer) => customer.id === registeredCustomerId,
+    );
 
     // Al cambiar manualmente el texto, se desasocia el cliente seleccionado
     // para nunca adjudicar una orden a otra persona por coincidencia parcial.
@@ -785,6 +792,7 @@ export function OrdersView() {
     setCart([]);
     setCategoryFilter('ALL');
     setBrandFilter('ALL');
+    setAvailableOnly(false);
     setMessage(
       nextInventorySource === 'WAREHOUSE'
         ? 'Catálogo B2B de almacén seleccionado.'
@@ -879,61 +887,64 @@ export function OrdersView() {
   }
 
   return (
-    <div className={cn('space-y-5', cart.length ? 'pb-24 xl:pb-0' : '')}>
+    <div
+      className="space-y-5 pb-24"
+      style={
+        {
+          '--primary': '217 91% 55%',
+          '--ring': '217 91% 55%',
+          '--primary-foreground': '0 0% 100%',
+          '--success': '142 71% 35%',
+          '--warning': '38 92% 45%',
+          '--danger': '0 72% 51%',
+        } as CSSProperties
+      }
+    >
       <ModuleHeader
         title="Toma de ordenes"
-        description="Modo escaner para crear tickets pendientes. La factura se emite solamente cuando caja cobra."
+        description="Escanea, busca y agrega productos. Revisa la orden cuando estés listo para enviarla a caja."
       />
 
-      <div className="grid grid-cols-2 gap-2 rounded-md border border-zinc-200 bg-white p-1 shadow-sm xl:hidden">
-        <button
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
           type="button"
-          onClick={() => setMobileSection('products')}
-          className={cn(
-            'rounded-md px-3 py-2.5 text-sm font-semibold transition',
-            mobileSection === 'products'
-              ? 'bg-zinc-950 text-white shadow-sm'
-              : 'text-zinc-600 hover:bg-zinc-50',
-          )}
+          variant="outline"
+          onClick={() => {
+            setCartDrawerOpen(false);
+            setActivityDrawer('orders');
+          }}
         >
-          Productos
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileSection('order')}
-          className={cn(
-            'flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-semibold transition',
-            mobileSection === 'order'
-              ? 'bg-zinc-950 text-white shadow-sm'
-              : 'text-zinc-600 hover:bg-zinc-50',
-          )}
-        >
-          Orden
-          <span
-            className={cn(
-              'inline-flex min-w-6 justify-center rounded-full px-2 py-0.5 text-xs',
-              mobileSection === 'order' ? 'bg-white/15 text-white' : 'bg-zinc-100 text-zinc-700',
-            )}
-          >
-            {cart.length}
+          <ClipboardCheck className="h-4 w-4" />
+          Órdenes abiertas
+          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-100 px-1.5 text-xs font-semibold text-zinc-700">
+            {pendingOrdersQuery.data?.length ?? 0}
           </span>
-        </button>
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setCartDrawerOpen(false);
+            setActivityDrawer('quotations');
+          }}
+        >
+          <FileText className="h-4 w-4" />
+          Cotizaciones
+          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-100 px-1.5 text-xs font-semibold text-zinc-700">
+            {quotationsQuery.data?.length ?? 0}
+          </span>
+        </Button>
       </div>
 
-      <section className="grid gap-4 xl:h-[calc(100vh-9rem)] xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.8fr)] xl:items-start xl:overflow-hidden">
-        <div
-          className={cn(
-            'space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:space-y-3',
-            mobileSection === 'products' ? 'block' : 'hidden xl:flex',
-          )}
-        >
-          <Card className="border-zinc-200 bg-zinc-50 xl:shrink-0">
-            <CardHeader className="pb-3">
+      <section className="xl:h-[calc(100vh-9rem)] xl:overflow-hidden">
+        <div className="space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:space-y-3">
+          <Card className="overflow-hidden border-zinc-200 bg-white xl:shrink-0">
+            <CardHeader className="border-b border-zinc-100 bg-zinc-50/70 pb-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <CardTitle>Productos</CardTitle>
+                  <CardTitle>Catálogo de productos</CardTitle>
                   <CardDescription>
-                    Busca por tipo, proveedor, nombre, SKU o codigo.
+                    Busca por nombre o SKU, filtra el catálogo o usa el lector.
                   </CardDescription>
                 </div>
                 {lastScannedProduct ? (
@@ -941,7 +952,7 @@ export function OrdersView() {
                 ) : null}
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-3 p-3 sm:p-4">
               <BarcodeInput
                 barcode={barcode}
                 scannerEnabled={scannerEnabled}
@@ -958,20 +969,20 @@ export function OrdersView() {
                 onStartCamera={startCameraScan}
               />
 
-              <div className="grid gap-3 md:grid-cols-[1.2fr_0.9fr_0.9fr]">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr_auto]">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    className="bg-white pl-9"
-                    placeholder="Buscar producto"
+                    className="h-11 bg-white pl-9"
+                    placeholder="Buscar por nombre o SKU"
                   />
                 </div>
                 <select
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
                 >
                   <option value="ALL">Todos los tipos</option>
                   {categories.map((category) => (
@@ -983,7 +994,7 @@ export function OrdersView() {
                 <select
                   value={brandFilter}
                   onChange={(event) => setBrandFilter(event.target.value)}
-                  className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
                 >
                   <option value="ALL">Marca/proveedor</option>
                   {brands.map((brand) => (
@@ -992,6 +1003,15 @@ export function OrdersView() {
                     </option>
                   ))}
                 </select>
+                <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-md border border-input bg-white px-3 text-sm font-medium sm:col-span-2 lg:col-span-1">
+                  <span className="whitespace-nowrap">Solo disponibles</span>
+                  <input
+                    type="checkbox"
+                    checked={availableOnly}
+                    onChange={(event) => setAvailableOnly(event.target.checked)}
+                    className="h-5 w-5 rounded border-input accent-primary"
+                  />
+                </label>
               </div>
             </CardContent>
           </Card>
@@ -1005,15 +1025,30 @@ export function OrdersView() {
               onAddProduct={addProduct}
             />
           </div>
+
+          <CartSummaryBar
+            itemCount={cart.length}
+            total={totals.total}
+            onOpen={() => {
+              setActivityDrawer(null);
+              setCartDrawerOpen(true);
+            }}
+          />
         </div>
 
-        <div
-          className={cn(
-            'surface-scrollbar space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1',
-            mobileSection === 'order' ? 'block' : 'hidden xl:block',
-          )}
+        <OrderCartDrawer
+          open={cartDrawerOpen}
+          itemCount={cart.length}
+          total={totals.total}
+          onClose={() => setCartDrawerOpen(false)}
+          onClear={() => setCart([])}
         >
-          <PosCart items={cart} onUpdateQuantity={updateQuantity} onClear={() => setCart([])} />
+          <PosCart
+            items={cart}
+            onUpdateQuantity={updateQuantity}
+            onClear={() => setCart([])}
+            showHeader={false}
+          />
           <Card>
             <CardHeader>
               <div className="flex items-start justify-between gap-2">
@@ -1047,6 +1082,7 @@ export function OrdersView() {
                       setCart([]);
                       setElectronicInvoiceRequested(false);
                       setNotes('');
+                      setNotesExpanded(false);
                       setCustomerId('');
                       setPriceLevel('REGULAR');
                       setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
@@ -1056,7 +1092,7 @@ export function OrdersView() {
                       setCreditRequestNote('');
                       setClientName('');
                       setQuotationDocumentNumber('');
-                      setMobileSection('products');
+                      setCartDrawerOpen(false);
                       setLoadedEditOrderId(null);
                       loadedEditOrderRef.current = editOrderId;
                       editToastShownRef.current = null;
@@ -1070,7 +1106,7 @@ export function OrdersView() {
             </CardHeader>
             <CardContent>
               <form
-                className="space-y-4"
+                className="space-y-4 [&_input]:min-h-11 [&_select]:h-11"
                 onSubmit={(event) => {
                   event.preventDefault();
                   createOrderMutation.mutate();
@@ -1081,7 +1117,7 @@ export function OrdersView() {
                   <div className="grid grid-cols-2 gap-2 rounded-md border border-zinc-200 bg-white p-1">
                     <button
                       type="button"
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         destination === 'CASH_SALE'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
@@ -1092,7 +1128,7 @@ export function OrdersView() {
                     </button>
                     <button
                       type="button"
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         destination === 'QUOTATION'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
@@ -1110,7 +1146,7 @@ export function OrdersView() {
                     <button
                       type="button"
                       disabled={Boolean(editOrderId)}
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         inventorySource === 'SALES_INVENTORY'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
@@ -1122,7 +1158,7 @@ export function OrdersView() {
                     <button
                       type="button"
                       disabled={Boolean(editOrderId)}
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         inventorySource === 'WAREHOUSE'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
@@ -1141,26 +1177,27 @@ export function OrdersView() {
 
                 {destination === 'CASH_SALE' ? (
                   <div className="space-y-3">
-                    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
-                      <input
-                        type="checkbox"
-                        checked={electronicInvoiceRequested}
+                    <div className="space-y-2">
+                      <Label htmlFor="orderReceiptType">Comprobante</Label>
+                      <select
+                        id="orderReceiptType"
+                        value={electronicInvoiceRequested ? 'ECF' : 'FINAL'}
                         onChange={(event) => {
-                          setElectronicInvoiceRequested(event.target.checked);
-                          if (!event.target.checked) setEcfRecipientEmail('');
+                          const wantsElectronicInvoice = event.target.value === 'ECF';
+                          setElectronicInvoiceRequested(wantsElectronicInvoice);
+                          if (!wantsElectronicInvoice) setEcfRecipientEmail('');
                         }}
-                        className="mt-1 h-4 w-4 rounded border-input accent-primary"
-                      />
-                      <span>
-                        <span className="block text-sm font-semibold">Factura electrónica (e-CF)</span>
-                        <span className="block text-xs text-muted-foreground">
-                          Caja usará E31/E32 y se enviará una copia a facturación y al cliente.
-                        </span>
-                      </span>
-                    </label>
+                        className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm"
+                      >
+                        <option value="FINAL">Consumidor final</option>
+                        <option value="ECF">Factura electrónica (e-CF)</option>
+                      </select>
+                    </div>
                     {electronicInvoiceRequested ? (
                       <div className="space-y-2 rounded-md border border-zinc-200 bg-white p-3">
-                        <Label htmlFor="ecfRecipientEmail">Correo del cliente para la copia e-CF</Label>
+                        <Label htmlFor="ecfRecipientEmail">
+                          Correo del cliente para la copia e-CF
+                        </Label>
                         <Input
                           id="ecfRecipientEmail"
                           type="email"
@@ -1171,8 +1208,8 @@ export function OrdersView() {
                           required
                         />
                         <p className="text-xs text-muted-foreground">
-                          Se enviará una copia individual a este correo y otra a
-                          {' '}facturacion@corestack-systems.com.
+                          Se enviará una copia individual a este correo y otra a{' '}
+                          facturacion@corestack-systems.com.
                         </p>
                       </div>
                     ) : null}
@@ -1303,9 +1340,7 @@ export function OrdersView() {
                                       : 'bg-success/10 text-success',
                                   )}
                                 >
-                                  {balance > 0
-                                    ? `Debe ${formatCurrency(balance)}`
-                                    : 'Al dia'}
+                                  {balance > 0 ? `Debe ${formatCurrency(balance)}` : 'Al dia'}
                                 </span>
                               </button>
                             );
@@ -1374,29 +1409,36 @@ export function OrdersView() {
                           id="quotationDocumentNumber"
                           value={quotationDocumentNumber}
                           onChange={(event) => setQuotationDocumentNumber(event.target.value)}
-                          placeholder={quotationDocumentType === 'RNC' ? '123456789' : '00123456789'}
+                          placeholder={
+                            quotationDocumentType === 'RNC' ? '123456789' : '00123456789'
+                          }
                           inputMode="numeric"
                         />
                       </div>
                       {quotationDocumentNumber ? (
                         <p
                           className={
-                            (quotationDocumentType === 'RNC'
-                              ? validateDominicanRnc(quotationDocumentNumber)
-                              : validateDominicanCedula(quotationDocumentNumber))
+                            (
+                              quotationDocumentType === 'RNC'
+                                ? validateDominicanRnc(quotationDocumentNumber)
+                                : validateDominicanCedula(quotationDocumentNumber)
+                            )
                               ? 'text-xs text-success'
                               : 'text-xs text-danger'
                           }
                         >
-                          {(quotationDocumentType === 'RNC'
-                            ? validateDominicanRnc(quotationDocumentNumber)
-                            : validateDominicanCedula(quotationDocumentNumber))
+                          {(
+                            quotationDocumentType === 'RNC'
+                              ? validateDominicanRnc(quotationDocumentNumber)
+                              : validateDominicanCedula(quotationDocumentNumber)
+                          )
                             ? 'Documento válido.'
                             : 'Verifica el dígito verificador dominicano.'}
                         </p>
                       ) : (
                         <p className="text-xs text-muted-foreground">
-                          Puedes dejarlo vacío. Si lo indicas, validaremos la cédula o el RNC antes de guardar.
+                          Puedes dejarlo vacío. Si lo indicas, validaremos la cédula o el RNC antes
+                          de guardar.
                         </p>
                       )}
                     </div>
@@ -1467,30 +1509,44 @@ export function OrdersView() {
                       <Button
                         type="button"
                         size="sm"
-                        variant={
-                          customerId === finalDiscountCustomerId ? 'default' : 'outline'
+                        variant={customerId === finalDiscountCustomerId ? 'default' : 'outline'}
+                        onClick={() =>
+                          handleCustomerSelection(
+                            customerId === finalDiscountCustomerId ? '' : finalDiscountCustomerId,
+                          )
                         }
-                        onClick={() => handleCustomerSelection(finalDiscountCustomerId)}
                       >
                         Descuento 5%
                       </Button>
                       <Button
                         type="button"
                         size="sm"
-                        variant={
-                          customerId === finalPreferredCustomerId ? 'default' : 'outline'
+                        variant={customerId === finalPreferredCustomerId ? 'default' : 'outline'}
+                        onClick={() =>
+                          handleCustomerSelection(
+                            customerId === finalPreferredCustomerId ? '' : finalPreferredCustomerId,
+                          )
                         }
-                        onClick={() => handleCustomerSelection(finalPreferredCustomerId)}
                       >
                         Cliente preferencial 10%
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={notesExpanded || notes ? 'default' : 'outline'}
+                        onClick={() => setNotesExpanded((current) => !current)}
+                      >
+                        <FileText className="h-4 w-4" />
+                        {notesExpanded || notes ? 'Ocultar nota' : 'Agregar nota'}
                       </Button>
                     </div>
                   </div>
                 ) : null}
                 {priceLevel !== 'REGULAR' ? (
                   <p className="text-xs font-medium text-emerald-700">
-                    Se aplicara un descuento de {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}%
-                    {' '}a los productos de esta orden.
+                    Se aplicara un descuento de{' '}
+                    {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}% a los productos de
+                    esta orden.
                   </p>
                 ) : null}
 
@@ -1610,17 +1666,19 @@ export function OrdersView() {
                   </div>
                 ) : null}
 
-                <div className="space-y-2">
-                  <Label htmlFor="orderNotes">Notas</Label>
-                  <textarea
-                    id="orderNotes"
-                    value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
-                    className="min-h-20 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    maxLength={500}
-                    placeholder="Referencia del cliente o comentario interno"
-                  />
-                </div>
+                {paymentMode === 'CREDIT' || notesExpanded || notes ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="orderNotes">Notas</Label>
+                    <textarea
+                      id="orderNotes"
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      className="min-h-20 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      maxLength={500}
+                      placeholder="Referencia del cliente o comentario interno"
+                    />
+                  </div>
+                ) : null}
 
                 <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm">
                   <div className="flex justify-between">
@@ -1645,65 +1703,82 @@ export function OrdersView() {
 
                 {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
 
-                <Button
-                  type="submit"
-                  className="h-14 w-full text-base"
-                  disabled={!cart.length || createOrderMutation.isPending}
-                >
-                  {editOrderId ? (
-                    <>
-                      <FileText className="h-5 w-5" />
-                      Actualizar cotizacion
-                    </>
-                  ) : destination === 'QUOTATION' ? (
-                    <>
-                      <FileText className="h-5 w-5" />
-                      Guardar cotizacion
-                    </>
-                  ) : paymentMode === 'CREDIT' ? (
-                    <>
-                      <CreditCard className="h-5 w-5" />
-                      Solicitar aprobación de crédito
-                    </>
-                  ) : (
-                    <>
-                      <Send className="h-5 w-5" />
-                      Enviar a caja
-                    </>
-                  )}
-                </Button>
+                <div className="sticky bottom-0 z-10 -mx-1 border-t border-zinc-200 bg-white/95 px-1 pb-1 pt-3 backdrop-blur">
+                  <Button
+                    type="submit"
+                    className="h-14 w-full text-base font-bold"
+                    disabled={!cart.length || createOrderMutation.isPending}
+                  >
+                    {editOrderId ? (
+                      <>
+                        <FileText className="h-5 w-5" />
+                        Actualizar cotizacion
+                      </>
+                    ) : destination === 'QUOTATION' ? (
+                      <>
+                        <FileText className="h-5 w-5" />
+                        Guardar cotizacion
+                      </>
+                    ) : paymentMode === 'CREDIT' ? (
+                      <>
+                        <CreditCard className="h-5 w-5" />
+                        Solicitar aprobación de crédito
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-5 w-5" />
+                        Enviar a caja
+                      </>
+                    )}
+                  </Button>
+                </div>
               </form>
             </CardContent>
           </Card>
+        </OrderCartDrawer>
+      </section>
 
-          {destination === 'CASH_SALE' ? (
-            <PendingOrdersPanel
-              orders={pendingOrdersQuery.data ?? []}
-              loading={pendingOrdersQuery.isLoading}
-              cancellingId={cancelOrderMutation.variables?.orderId}
-              onCancel={(order) => {
-                setCancelTargetId(order.id);
-                setCancelTargetLabel(order.orderNumber);
-                setCancelReason('');
-                setCancelModalOpen(true);
-              }}
-            />
-          ) : null}
-
-          <QuotationsPanel
-            orders={quotationsQuery.data ?? []}
-            loading={quotationsQuery.isLoading}
-            showManagement={Boolean(isAdminSession(session) || canTakeOrders(session))}
+      <OrderActivityDrawer
+        open={activityDrawer !== null}
+        title={activityDrawer === 'orders' ? 'Órdenes abiertas' : 'Cotizaciones'}
+        description={
+          activityDrawer === 'orders'
+            ? 'Preventas pendientes de aprobación o cobro. Aún no son facturas.'
+            : 'Cotizaciones registradas sin cobro. Puedes imprimirlas o cancelarlas si aplica.'
+        }
+        onClose={() => setActivityDrawer(null)}
+      >
+        {activityDrawer === 'orders' ? (
+          <PendingOrdersPanel
+            orders={pendingOrdersQuery.data ?? []}
+            loading={pendingOrdersQuery.isLoading}
             cancellingId={cancelOrderMutation.variables?.orderId}
+            embedded
             onCancel={(order) => {
+              setActivityDrawer(null);
               setCancelTargetId(order.id);
               setCancelTargetLabel(order.orderNumber);
               setCancelReason('');
               setCancelModalOpen(true);
             }}
           />
-        </div>
-      </section>
+        ) : (
+          <QuotationsPanel
+            orders={quotationsQuery.data ?? []}
+            loading={quotationsQuery.isLoading}
+            showManagement={Boolean(isAdminSession(session) || canTakeOrders(session))}
+            cancellingId={cancelOrderMutation.variables?.orderId}
+            embedded
+            onCancel={(order) => {
+              setActivityDrawer(null);
+              setCancelTargetId(order.id);
+              setCancelTargetLabel(order.orderNumber);
+              setCancelReason('');
+              setCancelModalOpen(true);
+            }}
+          />
+        )}
+      </OrderActivityDrawer>
 
       <CancelReasonModal
         open={cancelModalOpen}
@@ -1737,36 +1812,6 @@ export function OrdersView() {
           setCancelReason('');
         }}
       />
-
-      {cart.length ? (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 px-3 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)] backdrop-blur xl:hidden">
-          <div className="mx-auto flex max-w-3xl items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium text-muted-foreground">
-                {cart.length} producto(s) en la orden
-              </p>
-              <p className="text-base font-extrabold text-zinc-950">
-                {formatCurrency(totals.total)}
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 px-3"
-              onClick={() => setMobileSection('products')}
-            >
-              Productos
-            </Button>
-            <Button
-              type="button"
-              className="h-11 px-4"
-              onClick={() => setMobileSection('order')}
-            >
-              Revisar
-            </Button>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1775,22 +1820,26 @@ function PendingOrdersPanel({
   orders,
   loading,
   cancellingId,
+  embedded = false,
   onCancel,
 }: {
   orders: SalesOrder[];
   loading: boolean;
   cancellingId?: string;
+  embedded?: boolean;
   onCancel: (order: SalesOrder) => void;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Órdenes abiertas</CardTitle>
-        <CardDescription>
-          Preventas pendientes de aprobación o cobro. Aún no son facturas.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
+    <Card className={cn(embedded && 'border-0 bg-transparent shadow-none')}>
+      {!embedded ? (
+        <CardHeader>
+          <CardTitle>Órdenes abiertas</CardTitle>
+          <CardDescription>
+            Preventas pendientes de aprobación o cobro. Aún no son facturas.
+          </CardDescription>
+        </CardHeader>
+      ) : null}
+      <CardContent className={cn('space-y-2', embedded && 'p-0')}>
         {loading ? (
           <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
             Cargando ordenes...
@@ -1880,12 +1929,14 @@ function QuotationsPanel({
   loading,
   showManagement,
   cancellingId,
+  embedded = false,
   onCancel,
 }: {
   orders: SalesOrder[];
   loading: boolean;
   showManagement: boolean;
   cancellingId?: string;
+  embedded?: boolean;
   onCancel: (order: SalesOrder) => void;
 }) {
   if (!showManagement) {
@@ -1893,14 +1944,16 @@ function QuotationsPanel({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Cotizaciones</CardTitle>
-        <CardDescription>
-          Cotizaciones registradas sin cobro. Puedes imprimirlas o cancelarlas si aplica.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
+    <Card className={cn(embedded && 'border-0 bg-transparent shadow-none')}>
+      {!embedded ? (
+        <CardHeader>
+          <CardTitle>Cotizaciones</CardTitle>
+          <CardDescription>
+            Cotizaciones registradas sin cobro. Puedes imprimirlas o cancelarlas si aplica.
+          </CardDescription>
+        </CardHeader>
+      ) : null}
+      <CardContent className={cn('space-y-2', embedded && 'p-0')}>
         {loading ? (
           <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
             Cargando cotizaciones...

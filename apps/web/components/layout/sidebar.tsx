@@ -28,7 +28,12 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { getSession, type AuthSession } from '@/lib/auth-session';
-import { canTakeOrders, isAccountantSession, isAdminSession } from '@/lib/authorization';
+import {
+  canTakeOrders,
+  canUsePosSession,
+  isAccountantSession,
+  isAdminSession,
+} from '@/lib/authorization';
 import { brand, platform } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 
@@ -164,9 +169,7 @@ export function SidebarContent({
     if (!activeSection) return;
 
     const groupId = activeSection.id as NavigationGroupId;
-    setExpandedGroups((current) =>
-      current[groupId] ? current : { ...current, [groupId]: true },
-    );
+    setExpandedGroups((current) => (current[groupId] ? current : { ...current, [groupId]: true }));
   }, [pathname]);
 
   return (
@@ -198,7 +201,11 @@ export function SidebarContent({
             aria-label={collapsed ? 'Desplegar menú' : 'Contraer menú'}
             title={collapsed ? 'Desplegar menú' : undefined}
           >
-            {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            {collapsed ? (
+              <PanelLeftOpen className="h-5 w-5" />
+            ) : (
+              <PanelLeftClose className="h-5 w-5" />
+            )}
             <span className={cn(collapsed && 'hidden')}>Contraer menú</span>
           </button>
         </div>
@@ -250,8 +257,18 @@ export function SidebarContent({
       </nav>
 
       <div className={cn('shrink-0 border-t border-slate-800 p-4', collapsed && 'px-3')}>
-        <div className={cn('rounded-lg border border-slate-800 bg-slate-900/80 p-3', collapsed && 'px-2.5')}>
-          <div className={cn('flex items-center gap-2 text-sm font-medium', collapsed && 'justify-center')}>
+        <div
+          className={cn(
+            'rounded-lg border border-slate-800 bg-slate-900/80 p-3',
+            collapsed && 'px-2.5',
+          )}
+        >
+          <div
+            className={cn(
+              'flex items-center gap-2 text-sm font-medium',
+              collapsed && 'justify-center',
+            )}
+          >
             <img src={platform.logoPath} alt="" className="h-5 w-5 rounded object-cover" />
             <span className={cn(collapsed && 'hidden')}>{platform.name}</span>
           </div>
@@ -413,12 +430,7 @@ function SidebarNavigationLink({
       title={collapsed ? item.name : undefined}
       aria-current={isActive ? 'page' : undefined}
     >
-      <Icon
-        className={cn(
-          'h-5 w-5 shrink-0',
-          isActive && 'text-white',
-        )}
-      />
+      <Icon className={cn('h-5 w-5 shrink-0', isActive && 'text-white')} />
       <span className={cn('min-w-0 truncate', collapsed && 'hidden')}>{item.name}</span>
     </Link>
   );
@@ -436,16 +448,18 @@ export function MobileNavigation() {
   const quickNavigationIds = new Set(quickNavigation.map((item) => item.href));
   const moreNavigation = visibleNavigation.filter(
     (item) =>
-      !quickNavigationIds.has(item.href) && item.section !== 'accounting' && item.section !== 'logs',
+      !quickNavigationIds.has(item.href) &&
+      item.section !== 'accounting' &&
+      item.section !== 'logs',
   );
   const popoverItems =
     activePopover === 'more'
       ? moreNavigation
-      : sections.find((section) => section.id === activePopover)?.items ?? [];
+      : (sections.find((section) => section.id === activePopover)?.items ?? []);
   const popoverTitle =
     activePopover === 'more'
       ? 'Más opciones'
-      : sections.find((section) => section.id === activePopover)?.label ?? '';
+      : (sections.find((section) => section.id === activePopover)?.label ?? '');
 
   useEffect(() => {
     setActivePopover(null);
@@ -539,7 +553,9 @@ export function MobileNavigation() {
             <MobilePopoverTrigger
               label={accountingSection.label ?? 'Contable'}
               icon={accountingSection.icon ?? Landmark}
-              active={accountingSection.items.some((item) => isNavigationItemActive(pathname, item))}
+              active={accountingSection.items.some((item) =>
+                isNavigationItemActive(pathname, item),
+              )}
               open={activePopover === 'accounting'}
               onClick={() =>
                 setActivePopover((current) => (current === 'accounting' ? null : 'accounting'))
@@ -610,6 +626,10 @@ export function getNavigationSections(session: AuthSession | null): NavigationSe
 }
 
 export function getVisibleNavigation(session: AuthSession | null) {
+  if (session?.role === 'WAREHOUSE_KEEPER') {
+    return navigation.filter((item) => item.href === '/warehouse');
+  }
+
   if (isAccountantSession(session)) {
     const accountantPaths = new Set([
       '/dashboard',
@@ -632,14 +652,10 @@ export function getVisibleNavigation(session: AuthSession | null) {
   }
 
   if (isAdminSession(session)) {
-    if (session?.role === 'ADMIN') {
-      return navigation.filter((item) => item.href !== '/pos');
-    }
-
     return navigation;
   }
 
-  if (canTakeOrders(session) && session?.permissions.canUsePos) {
+  if (canTakeOrders(session) && canUsePosSession(session)) {
     return navigation.filter(
       (item) => item.href === '/orders' || item.href === '/pos' || item.href === '/returns',
     );
@@ -649,7 +665,7 @@ export function getVisibleNavigation(session: AuthSession | null) {
     return navigation.filter((item) => item.href === '/orders');
   }
 
-  if (session?.permissions.canUsePos) {
+  if (canUsePosSession(session)) {
     return navigation.filter((item) => item.href === '/pos' || item.href === '/returns');
   }
 

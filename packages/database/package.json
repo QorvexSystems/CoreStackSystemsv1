@@ -18,6 +18,11 @@
     "migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy --schema prisma/schema.prisma",
     "cleanup:rivnu": "dotenv -e ../../.env -- tsx prisma/cleanup-rivnu-for-launch.ts",
     "cleanup:rivnu:operational": "dotenv -e ../../.env -- tsx prisma/cleanup-rivnu-operational-data.ts",
+    "import:allpa-products": "dotenv -e ../../.env -- tsx prisma/import-allpa-products.ts",
+    "ensure:allpa-warehouse-keeper": "dotenv -e ../../.env -- tsx prisma/ensure-allpa-warehouse-keeper.ts",
+    "update:allpa-team": "dotenv -e ../../.env -- tsx prisma/update-allpa-team.ts",
+    "enable:allpa-admin-pos": "dotenv -e ../../.env -- tsx prisma/enable-allpa-admin-pos.ts",
+    "repair:warehouse-stock": "dotenv -e ../../.env -- tsx prisma/repair-warehouse-stock-rows.ts",
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "studio": "dotenv -e ../../.env -- prisma studio --schema prisma/schema.prisma",
     "lint": "tsc -p tsconfig.json --noEmit"

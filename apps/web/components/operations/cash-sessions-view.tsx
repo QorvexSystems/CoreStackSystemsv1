@@ -60,8 +60,9 @@ export function CashSessionsView() {
   const selectedRegisterOpenSession = openSessions.find(
     (cashSession) => cashSession.cashRegister.id === selectedRegisterId,
   );
-  const canOpenCashSession =
-    Boolean(session?.permissions.canOpenCashSession) && !isAdminSession(session);
+  const canOpenCashSession = Boolean(
+    session?.permissions.canOpenCashSession || isAdminSession(session),
+  );
 
   useEffect(() => {
     const firstRegister = registersQuery.data?.find(
