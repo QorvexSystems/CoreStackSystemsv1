@@ -9,7 +9,9 @@ import {
   GoodsReceiptStatus,
   InvoiceDocumentType,
   InvoiceStatus,
+  PaymentStatus,
   PaymentMethod,
+  ProductInventoryDestination,
   ProductStatus,
   PurchaseOrderStatus,
   ReturnRequestStatus,
@@ -17,6 +19,7 @@ import {
   SalesOrderDestination,
   SalesOrderStatus,
   SupplierInvoiceStatus,
+  WarehouseMovementType,
 } from '@qorvex/database';
 import { addBusinessDays, businessDateKey } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -67,23 +70,16 @@ export class DashboardService {
     const seriesStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
     const [
-      invoicesForMonth,
-      invoicesForToday,
+      paymentsForMonth,
+      paymentsForToday,
       returnsMonth,
       returnsToday,
       pendingReturnsAggregate,
-      pendingInvoices,
-      paidInvoices,
-      draftInvoices,
-      cancelledInvoices,
+      invoiceStatusCounts,
       activeCustomers,
-      activeProducts,
       activeEmployees,
-      openCashSessions,
       openCashSessionDetails,
-      pendingOrders,
-      claimedOrders,
-      pendingQuotations,
+      orderStatusCounts,
       completedOrdersToday,
       completedReturns,
       pendingReturns,
@@ -93,7 +89,7 @@ export class DashboardService {
       recentEmployeeLogs,
       fiscalSequences,
       productsForStock,
-      invoicesForSeries,
+      paymentsForSeries,
       returnsForSeries,
       quotationSalesInCashier,
       completedQuotationSalesToday,
@@ -106,33 +102,32 @@ export class DashboardService {
       pendingCreditApprovals,
       creditApprovalsExceedingLimit,
       recentAuditActivity,
+      warehouseStocksForSummary,
+      cashMovementsToday,
+      invoicesToday,
+      completedWarehouseOrders,
+      warehouseDispatchReferences,
     ] = await Promise.all([
-      this.prisma.invoice.findMany({
+      this.prisma.payment.aggregate({
         where: {
           tenantId,
-          status: { in: revenueStatuses },
-          issuedAt: {
+          status: PaymentStatus.COMPLETED,
+          paidAt: {
             gte: monthStart,
             lt: nextMonthStart,
           },
         },
-        select: {
-          paidAmount: true,
-          total: true,
-        },
+        _sum: { amount: true },
       }),
-      this.prisma.invoice.findMany({
+      this.prisma.payment.aggregate({
         where: {
           tenantId,
-          status: { in: revenueStatuses },
-          issuedAt: {
+          status: PaymentStatus.COMPLETED,
+          paidAt: {
             gte: todayStart,
           },
         },
-        select: {
-          paidAmount: true,
-          total: true,
-        },
+        _sum: { amount: true },
       }),
       this.prisma.returnRequest.aggregate({
         where: {
@@ -162,29 +157,10 @@ export class DashboardService {
         },
         _sum: { refundAmount: true },
       }),
-      this.prisma.invoice.count({
-        where: {
-          tenantId,
-          status: { in: pendingInvoiceStatuses },
-        },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          tenantId,
-          status: { in: [InvoiceStatus.PAID, InvoiceStatus.ACCEPTED] },
-        },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          tenantId,
-          status: InvoiceStatus.DRAFT,
-        },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          tenantId,
-          status: { in: [InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.VOIDED] },
-        },
+      this.prisma.invoice.groupBy({
+        by: ['status'],
+        where: { tenantId },
+        _count: { _all: true },
       }),
       this.prisma.customer.count({
         where: {
@@ -192,22 +168,10 @@ export class DashboardService {
           status: CustomerStatus.ACTIVE,
         },
       }),
-      this.prisma.product.count({
-        where: {
-          tenantId,
-          status: ProductStatus.ACTIVE,
-        },
-      }),
       this.prisma.employeeProfile.count({
         where: {
           tenantId,
           status: EmployeeStatus.ACTIVE,
-        },
-      }),
-      this.prisma.cashSession.count({
-        where: {
-          tenantId,
-          status: CashSessionStatus.OPEN,
         },
       }),
       this.prisma.cashSession.findMany({
@@ -228,26 +192,10 @@ export class DashboardService {
         },
         orderBy: { openedAt: 'desc' },
       }),
-      this.prisma.salesOrder.count({
-        where: {
-          tenantId,
-          destination: SalesOrderDestination.CASH_SALE,
-          status: SalesOrderStatus.SENT_TO_CASHIER,
-        },
-      }),
-      this.prisma.salesOrder.count({
-        where: {
-          tenantId,
-          destination: SalesOrderDestination.CASH_SALE,
-          status: SalesOrderStatus.IN_CASHIER,
-        },
-      }),
-      this.prisma.salesOrder.count({
-        where: {
-          tenantId,
-          destination: SalesOrderDestination.QUOTATION,
-          status: SalesOrderStatus.QUOTATION,
-        },
+      this.prisma.salesOrder.groupBy({
+        by: ['status', 'destination'],
+        where: { tenantId },
+        _count: { _all: true },
       }),
       this.prisma.salesOrder.count({
         where: {
@@ -332,7 +280,7 @@ export class DashboardService {
         where: {
           tenantId,
           status: ProductStatus.ACTIVE,
-          trackInventory: true,
+          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         },
         orderBy: {
           stock: 'asc',
@@ -344,20 +292,21 @@ export class DashboardService {
           stock: true,
           reservedStock: true,
           minStock: true,
+          trackInventory: true,
+          category: { select: { name: true } },
         },
       }),
-      this.prisma.invoice.findMany({
+      this.prisma.payment.findMany({
         where: {
           tenantId,
-          status: { in: revenueStatuses },
-          issuedAt: {
+          status: PaymentStatus.COMPLETED,
+          paidAt: {
             gte: seriesStart,
           },
         },
         select: {
-          issuedAt: true,
-          paidAmount: true,
-          total: true,
+          paidAt: true,
+          amount: true,
         },
       }),
       this.prisma.returnRequest.findMany({
@@ -480,19 +429,121 @@ export class DashboardService {
         orderBy: { createdAt: 'desc' },
         take: 6,
       }),
+      this.prisma.warehouseStock.findMany({
+        where: {
+          tenantId,
+          product: {
+            status: ProductStatus.ACTIVE,
+            inventoryDestination: ProductInventoryDestination.WAREHOUSE,
+          },
+        },
+        select: {
+          quantity: true,
+          product: { select: { minStock: true } },
+        },
+      }),
+      this.prisma.cashMovement.findMany({
+        where: {
+          tenantId,
+          createdAt: { gte: todayStart },
+        },
+        select: {
+          type: true,
+          amount: true,
+          method: true,
+        },
+      }),
+      this.prisma.invoice.count({
+        where: {
+          tenantId,
+          status: { in: revenueStatuses },
+          issuedAt: { gte: todayStart },
+        },
+      }),
+      this.prisma.salesOrder.findMany({
+        where: {
+          tenantId,
+          inventorySource: ProductInventoryDestination.WAREHOUSE,
+          status: SalesOrderStatus.COMPLETED,
+          invoiceId: { not: null },
+        },
+        select: { orderNumber: true },
+      }),
+      this.prisma.warehouseMovement.findMany({
+        where: {
+          tenantId,
+          type: WarehouseMovementType.DISPATCH,
+          reference: { not: null },
+        },
+        select: { reference: true },
+        distinct: ['reference'],
+      }),
     ]);
 
+    const activeProducts = productsForStock.length;
     const lowStockProductsList = productsForStock.filter(
-      (product) => product.stock - product.reservedStock <= product.minStock,
+      (product) =>
+        product.trackInventory && product.stock - product.reservedStock <= product.minStock,
     );
+    const productsInStock = productsForStock.filter((product) => product.stock > 0).length;
+    const categoryCounts = new Map<string, number>();
+    for (const product of productsForStock) {
+      const categoryName = product.category?.name?.trim() || 'Sin categoría';
+      categoryCounts.set(categoryName, (categoryCounts.get(categoryName) ?? 0) + 1);
+    }
+    const productCategories = Array.from(categoryCounts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((first, second) => second.count - first.count || first.name.localeCompare(second.name))
+      .slice(0, 5);
     const recentInventoryAlerts = lowStockProductsList.slice(0, 5);
-    const grossSalesMonth = this.sumInvoicePaidAmount(invoicesForMonth);
-    const grossSalesToday = this.sumInvoicePaidAmount(invoicesForToday);
+    const grossSalesMonth = this.decimalToNumber(paymentsForMonth._sum.amount);
+    const grossSalesToday = this.decimalToNumber(paymentsForToday._sum.amount);
     const refundsMonth = this.decimalToNumber(returnsMonth._sum.refundAmount);
     const refundsToday = this.decimalToNumber(returnsToday._sum.refundAmount);
     const netSalesMonth = grossSalesMonth - refundsMonth;
     const netSalesToday = grossSalesToday - refundsToday;
     const pendingReturnAmount = this.decimalToNumber(pendingReturnsAggregate._sum.refundAmount);
+    const countOrders = (status: SalesOrderStatus, destination?: SalesOrderDestination) =>
+      orderStatusCounts
+        .filter(
+          (entry) =>
+            entry.status === status && (!destination || entry.destination === destination),
+        )
+        .reduce((total, entry) => total + entry._count._all, 0);
+    const totalOrders = orderStatusCounts.reduce(
+      (total, entry) => total + entry._count._all,
+      0,
+    );
+    const completedOrders = countOrders(SalesOrderStatus.COMPLETED);
+    const pendingOrders = countOrders(
+      SalesOrderStatus.SENT_TO_CASHIER,
+      SalesOrderDestination.CASH_SALE,
+    );
+    const claimedOrders = countOrders(
+      SalesOrderStatus.IN_CASHIER,
+      SalesOrderDestination.CASH_SALE,
+    );
+    const pendingQuotations = countOrders(
+      SalesOrderStatus.QUOTATION,
+      SalesOrderDestination.QUOTATION,
+    );
+    const otherOrders = Math.max(
+      totalOrders - completedOrders - pendingOrders - claimedOrders - pendingQuotations,
+      0,
+    );
+    const countInvoicesByStatus = (...statuses: InvoiceStatus[]) =>
+      invoiceStatusCounts
+        .filter((entry) => statuses.includes(entry.status))
+        .reduce((total, entry) => total + entry._count._all, 0);
+    const pendingInvoices = countInvoicesByStatus(...pendingInvoiceStatuses);
+    const paidInvoices = countInvoicesByStatus(InvoiceStatus.PAID, InvoiceStatus.ACCEPTED);
+    const draftInvoices = countInvoicesByStatus(InvoiceStatus.DRAFT);
+    const cancelledInvoices = countInvoicesByStatus(
+      InvoiceStatus.CANCELLED,
+      InvoiceStatus.VOID,
+      InvoiceStatus.VOIDED,
+    );
+    const openCashSessions = openCashSessionDetails.length;
     const quotationSalesInCashierAmount = this.sumOrderAmount(quotationSalesInCashier);
     const completedQuotationSalesTodayAmount = this.sumOrderAmount(completedQuotationSalesToday);
     const receivablesAccounting = this.buildAgingSummary(receivableInvoicesForAccounting, {
@@ -534,6 +585,38 @@ export class DashboardService {
           this.decimalToNumber(item.quantityReceived) - this.decimalToNumber(item.quantityInvoiced),
         ) > 0.000001,
     ).length;
+    const dispatchedWarehouseOrders = new Set(
+      warehouseDispatchReferences.flatMap((movement) =>
+        movement.reference ? [movement.reference] : [],
+      ),
+    );
+    const warehouseUnits = warehouseStocksForSummary.reduce(
+      (total, stock) => total + stock.quantity,
+      0,
+    );
+    const warehouseLowStockProducts = warehouseStocksForSummary.filter(
+      (stock) => stock.quantity <= stock.product.minStock,
+    ).length;
+    const pendingWarehouseDispatches = completedWarehouseOrders.filter(
+      (order) => !dispatchedWarehouseOrders.has(order.orderNumber),
+    ).length;
+    const cashInTypes: CashMovementType[] = [
+      CashMovementType.SALE_PAYMENT,
+      CashMovementType.CREDIT_PAYMENT,
+      CashMovementType.CASH_IN,
+    ];
+    const cashOutTypes: CashMovementType[] = [
+      CashMovementType.CASH_OUT,
+      CashMovementType.REFUND,
+      CashMovementType.SUPPLIER_PAYMENT,
+    ];
+    const cashMovements = cashMovementsToday.filter(
+      (movement) => !movement.method || movement.method === PaymentMethod.CASH,
+    );
+    const cashEntries = cashMovements.filter((movement) => cashInTypes.includes(movement.type));
+    const cashExits = cashMovements.filter((movement) => cashOutTypes.includes(movement.type));
+    const salesSeries = this.buildSalesSeries(paymentsForSeries, returnsForSeries, now);
+    const previousMonthNetSales = salesSeries.at(-2)?.total ?? 0;
 
     return {
       totalBilledMonth: netSalesMonth,
@@ -552,6 +635,9 @@ export class DashboardService {
       activeCustomers,
       activeProducts,
       activeEmployees,
+      totalOrders,
+      completedOrders,
+      invoicesToday,
       openCashSessions,
       pendingOrders,
       claimedOrders,
@@ -565,6 +651,39 @@ export class DashboardService {
       pendingReturns,
       completedReturns,
       lowStockProducts: lowStockProductsList.length,
+      inventorySummary: {
+        productsInStock,
+        inStockPercentage: activeProducts
+          ? Math.round((productsInStock / activeProducts) * 1000) / 10
+          : 0,
+      },
+      productCategories,
+      orderStatusSummary: {
+        total: totalOrders,
+        completed: completedOrders,
+        pendingCashier: pendingOrders + claimedOrders,
+        quotations: pendingQuotations,
+        other: otherOrders,
+      },
+      cashToday: {
+        entriesAmount: cashEntries.reduce(
+          (total, movement) => total + this.decimalToNumber(movement.amount),
+          0,
+        ),
+        entriesCount: cashEntries.length,
+        exitsAmount: cashExits.reduce(
+          (total, movement) => total + this.decimalToNumber(movement.amount),
+          0,
+        ),
+        exitsCount: cashExits.length,
+      },
+      previousMonthNetSales,
+      warehouse: {
+        productCount: warehouseStocksForSummary.length,
+        unitCount: warehouseUnits,
+        lowStockProducts: warehouseLowStockProducts,
+        pendingDispatches: pendingWarehouseDispatches,
+      },
       openCashSessionDetails: openCashSessionDetails.map((session) => ({
         id: session.id,
         registerName: session.cashRegister.name,
@@ -683,16 +802,20 @@ export class DashboardService {
         createdAt: activity.createdAt,
       })),
       recentInventoryAlerts,
-      salesSeries: this.buildSalesSeries(invoicesForSeries, returnsForSeries, now),
+      salesSeries,
+      dailySalesSeries: this.buildDailySalesSeries(paymentsForSeries, returnsForSeries, now),
     };
   }
 
   async getProductSales(tenantId: string) {
+    const now = new Date();
+    const salesSince = new Date(now.getFullYear(), now.getMonth() - 11, 1);
     const [products, invoiceItems] = await Promise.all([
       this.prisma.product.findMany({
         where: {
           tenantId,
           status: ProductStatus.ACTIVE,
+          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         },
         include: {
           category: { select: { id: true, name: true } },
@@ -701,15 +824,17 @@ export class DashboardService {
       }),
       this.prisma.invoiceItem.findMany({
         where: {
-          productId: { not: null },
           invoice: {
             tenantId,
             status: { in: revenueStatuses },
+            issuedAt: { gte: salesSince },
           },
         },
         select: {
           invoiceId: true,
           productId: true,
+          sku: true,
+          barcode: true,
           quantity: true,
           total: true,
           invoice: {
@@ -726,6 +851,7 @@ export class DashboardService {
 
     return {
       generatedAt: new Date(),
+      periodStart: salesSince,
       productCount: products.length,
       productsWithSales: ranking.mostSold.filter((product) => product.quantitySold > 0).length,
       productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0).length,
@@ -735,10 +861,9 @@ export class DashboardService {
   }
 
   private buildSalesSeries(
-    invoices: Array<{
-      issuedAt: Date | null;
-      paidAmount: { toNumber(): number };
-      total: { toNumber(): number };
+    payments: Array<{
+      paidAt: Date | null;
+      amount: { toNumber(): number };
     }>,
     returns: Array<{
       completedAt: Date | null;
@@ -753,13 +878,13 @@ export class DashboardService {
       buckets.set(this.monthKey(date), 0);
     }
 
-    for (const invoice of invoices) {
-      if (!invoice.issuedAt) {
+    for (const payment of payments) {
+      if (!payment.paidAt) {
         continue;
       }
 
-      const key = this.monthKey(invoice.issuedAt);
-      buckets.set(key, (buckets.get(key) ?? 0) + this.getInvoicePaidAmount(invoice));
+      const key = this.monthKey(payment.paidAt);
+      buckets.set(key, (buckets.get(key) ?? 0) + this.decimalToNumber(payment.amount));
     }
 
     for (const returnRequest of returns) {
@@ -777,6 +902,54 @@ export class DashboardService {
     }));
   }
 
+  private buildDailySalesSeries(
+    payments: Array<{
+      paidAt: Date | null;
+      amount: { toNumber(): number };
+    }>,
+    returns: Array<{
+      completedAt: Date | null;
+      refundAmount: { toNumber(): number };
+    }>,
+    now: Date,
+  ) {
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const buckets = new Map<number, number>(
+      Array.from({ length: daysInMonth }, (_, index) => [index + 1, 0]),
+    );
+
+    for (const payment of payments) {
+      if (
+        !payment.paidAt ||
+        payment.paidAt.getFullYear() !== now.getFullYear() ||
+        payment.paidAt.getMonth() !== now.getMonth()
+      ) {
+        continue;
+      }
+
+      const day = payment.paidAt.getDate();
+      buckets.set(day, (buckets.get(day) ?? 0) + this.decimalToNumber(payment.amount));
+    }
+
+    for (const returnRequest of returns) {
+      if (
+        !returnRequest.completedAt ||
+        returnRequest.completedAt.getFullYear() !== now.getFullYear() ||
+        returnRequest.completedAt.getMonth() !== now.getMonth()
+      ) {
+        continue;
+      }
+
+      const day = returnRequest.completedAt.getDate();
+      buckets.set(
+        day,
+        (buckets.get(day) ?? 0) - this.decimalToNumber(returnRequest.refundAmount),
+      );
+    }
+
+    return Array.from(buckets.entries()).map(([day, total]) => ({ day, total }));
+  }
+
   private monthKey(date: Date) {
     return new Intl.DateTimeFormat('es-DO', {
       month: 'short',
@@ -792,10 +965,13 @@ export class DashboardService {
       unit: string;
       price: { toNumber(): number };
       category: { id: string; name: string } | null;
+      barcode: string | null;
     }>,
     invoiceItems: Array<{
       invoiceId: string;
       productId: string | null;
+      sku: string | null;
+      barcode: string | null;
       quantity: { toNumber(): number };
       total: { toNumber(): number };
       invoice: {
@@ -804,6 +980,9 @@ export class DashboardService {
       };
     }>,
   ) {
+    const activeProductIds = new Set(products.map((product) => product.id));
+    const productIdsBySku = this.buildUniqueProductCodeIndex(products, 'sku');
+    const productIdsByBarcode = this.buildUniqueProductCodeIndex(products, 'barcode');
     const aggregates = new Map<
       string,
       {
@@ -815,11 +994,16 @@ export class DashboardService {
     >();
 
     for (const item of invoiceItems) {
-      if (!item.productId) {
+      const productId =
+        (item.productId && activeProductIds.has(item.productId) ? item.productId : null) ??
+        this.findProductIdByCode(productIdsBySku, item.sku) ??
+        this.findProductIdByCode(productIdsByBarcode, item.barcode);
+
+      if (!productId) {
         continue;
       }
 
-      const aggregate = aggregates.get(item.productId) ?? {
+      const aggregate = aggregates.get(productId) ?? {
         quantitySold: 0,
         grossAmount: 0,
         invoiceIds: new Set<string>(),
@@ -835,7 +1019,7 @@ export class DashboardService {
         aggregate.lastSoldAt = soldAt;
       }
 
-      aggregates.set(item.productId, aggregate);
+      aggregates.set(productId, aggregate);
     }
 
     const ranking = products.map((product) => {
@@ -866,6 +1050,29 @@ export class DashboardService {
         return quantityDiff || first.grossAmount - second.grossAmount || first.name.localeCompare(second.name);
       }),
     };
+  }
+
+  private buildUniqueProductCodeIndex<
+    T extends { id: string; sku: string | null; barcode: string | null },
+  >(products: T[], field: 'sku' | 'barcode') {
+    const index = new Map<string, string | null>();
+
+    for (const product of products) {
+      const code = this.normalizeProductCode(product[field]);
+      if (!code) continue;
+      index.set(code, index.has(code) ? null : product.id);
+    }
+
+    return index;
+  }
+
+  private findProductIdByCode(index: Map<string, string | null>, value: string | null) {
+    const code = this.normalizeProductCode(value);
+    return code ? (index.get(code) ?? null) : null;
+  }
+
+  private normalizeProductCode(value: string | null) {
+    return value?.trim().toUpperCase() || null;
   }
 
   private decimalToNumber(value: { toNumber(): number } | null | undefined) {
@@ -924,12 +1131,6 @@ export class DashboardService {
       dueSoonCount,
       openInvoiceCount: invoices.length,
     };
-  }
-
-  private sumInvoicePaidAmount(
-    invoices: Array<{ paidAmount: { toNumber(): number }; total: { toNumber(): number } }>,
-  ) {
-    return invoices.reduce((sum, invoice) => sum + this.getInvoicePaidAmount(invoice), 0);
   }
 
   private sumOrderAmount(orders: Array<{ total: { toNumber(): number } }>) {

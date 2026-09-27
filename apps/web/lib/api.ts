@@ -39,6 +39,9 @@ export type DashboardSummary = {
   activeCustomers: number;
   activeProducts: number;
   activeEmployees: number;
+  totalOrders: number;
+  completedOrders: number;
+  invoicesToday: number;
   openCashSessions: number;
   pendingOrders: number;
   claimedOrders: number;
@@ -52,6 +55,34 @@ export type DashboardSummary = {
   pendingReturns: number;
   completedReturns: number;
   lowStockProducts: number;
+  inventorySummary: {
+    productsInStock: number;
+    inStockPercentage: number;
+  };
+  productCategories: Array<{
+    name: string;
+    count: number;
+  }>;
+  orderStatusSummary: {
+    total: number;
+    completed: number;
+    pendingCashier: number;
+    quotations: number;
+    other: number;
+  };
+  cashToday: {
+    entriesAmount: number;
+    entriesCount: number;
+    exitsAmount: number;
+    exitsCount: number;
+  };
+  previousMonthNetSales: number;
+  warehouse: {
+    productCount: number;
+    unitCount: number;
+    lowStockProducts: number;
+    pendingDispatches: number;
+  };
   openCashSessionDetails: Array<{
     id: string;
     registerName: string;
@@ -144,6 +175,10 @@ export type DashboardSummary = {
     month: string;
     total: number;
   }>;
+  dailySalesSeries: Array<{
+    day: number;
+    total: number;
+  }>;
 };
 
 export type ProductSalesMetric = {
@@ -162,6 +197,7 @@ export type ProductSalesMetric = {
 
 export type ProductSalesRanking = {
   generatedAt: string;
+  periodStart: string;
   productCount: number;
   productsWithSales: number;
   productsWithoutSales: number;
@@ -262,7 +298,15 @@ export type WarehouseStock = {
 
 export type WarehouseMovement = {
   id: string;
-  type: 'PURCHASE' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
+  type:
+    | 'PURCHASE'
+    | 'SALE'
+    | 'MANUAL_RECEIPT'
+    | 'MANUAL_DISPATCH'
+    | 'STOCK_COUNT'
+    | 'DISPATCH'
+    | 'ADJUSTMENT_IN'
+    | 'ADJUSTMENT_OUT';
   quantity: number;
   previousQuantity: number | null;
   newQuantity: number | null;
@@ -283,7 +327,46 @@ export type WarehouseProductPayload = {
   unit?: string;
   cost?: number;
   salePrice?: number;
+  minStock?: number;
+  taxCategory?: 'ITBIS_18' | 'ITBIS_16' | 'EXEMPT';
+  taxRate?: number;
   initialQuantity?: number;
+};
+
+export type WarehouseDispatchPayload = {
+  quantity: number;
+  reference: string;
+  reason: string;
+};
+
+export type WarehouseStockMovementPayload = {
+  quantity: number;
+  unitCost?: number;
+  reference: string;
+  reason: string;
+};
+
+export type WarehouseStockCountPayload = {
+  countedQuantity: number;
+  reference?: string;
+  reason: string;
+};
+
+export type WarehousePendingDispatch = {
+  id: string;
+  orderNumber: string;
+  completedAt: string | null;
+  clientName: string | null;
+  customer: { id: string; name: string; phone: string | null } | null;
+  invoice: { id: string; invoiceNumber: string; status: string; total: string } | null;
+  items: Array<{
+    id: string;
+    productId: string | null;
+    sku: string | null;
+    barcode: string | null;
+    description: string;
+    quantity: string;
+  }>;
 };
 
 export type Invoice = {
@@ -585,6 +668,21 @@ export type SalesOrder = {
     product: Product | null;
   }>;
 };
+
+export type SalesOrderTransitionResult = Pick<
+  SalesOrder,
+  | 'id'
+  | 'orderNumber'
+  | 'total'
+  | 'destination'
+  | 'status'
+  | 'clientName'
+  | 'claimedById'
+  | 'claimedCashSessionId'
+  | 'claimedAt'
+  | 'claimExpiresAt'
+  | 'releasedAt'
+>;
 
 export type CreateSalesOrderPayload = {
   destination: 'CASH_SALE' | 'QUOTATION';
@@ -1970,7 +2068,7 @@ export function claimSalesOrder(
   orderId: string,
   payload: { cashSessionId?: string },
 ) {
-  return fetchJson<SalesOrder>(`/orders/${orderId}/claim`, {
+  return fetchJson<SalesOrderTransitionResult>(`/orders/${orderId}/claim`, {
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify(payload),
@@ -1978,7 +2076,7 @@ export function claimSalesOrder(
 }
 
 export function releaseSalesOrder(tenantId: string, accessToken: string, orderId: string) {
-  return fetchJson<SalesOrder>(`/orders/${orderId}/release`, {
+  return fetchJson<SalesOrderTransitionResult>(`/orders/${orderId}/release`, {
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
   });
@@ -2357,6 +2455,100 @@ export function deleteWarehouseProduct(tenantId: string, accessToken: string, pr
     method: 'DELETE',
     headers: tenantHeaders(tenantId, accessToken),
   });
+}
+
+export function dispatchWarehouseProduct(
+  tenantId: string,
+  accessToken: string,
+  productId: string,
+  payload: WarehouseDispatchPayload,
+) {
+  return fetchJson<{ product: Product; stock: WarehouseStock }>(
+    `/warehouse/products/${productId}/dispatch`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function receiveWarehouseStock(
+  tenantId: string,
+  accessToken: string,
+  productId: string,
+  payload: WarehouseStockMovementPayload,
+) {
+  return fetchJson<{ product: Product; stock: WarehouseStock }>(
+    `/warehouse/products/${productId}/receive`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function receiveWarehouseStockBatch(
+  tenantId: string,
+  accessToken: string,
+  payload: {
+    items: Array<{ productId: string; quantity: number }>;
+    reference: string;
+    reason: string;
+  },
+) {
+  return fetchJson<{ receivedProducts: number }>('/warehouse/stock/receive-batch', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function countWarehouseStock(
+  tenantId: string,
+  accessToken: string,
+  productId: string,
+  payload: WarehouseStockCountPayload,
+) {
+  return fetchJson<{ product: Product; stock: WarehouseStock }>(
+    `/warehouse/products/${productId}/count`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function activateWarehouseProduct(tenantId: string, accessToken: string, productId: string) {
+  return fetchJson<Product>(`/warehouse/products/${productId}/activate`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getWarehousePendingDispatches(tenantId: string, accessToken: string) {
+  return fetchJson<WarehousePendingDispatch[]>('/warehouse/dispatches/pending', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function confirmWarehouseOrderDispatch(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  items: Array<{ orderItemId: string; quantity: number }>,
+  note?: string,
+) {
+  return fetchJson<{ id: string; orderNumber: string; invoiceNumber: string | null }>(
+    `/warehouse/dispatches/${orderId}/confirm`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify({ items, note: note?.trim() || undefined }),
+    },
+  );
 }
 
 export function createCashRegister(

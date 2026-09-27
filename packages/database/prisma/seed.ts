@@ -184,8 +184,8 @@ async function main() {
         create: {
           tenantId: allpaTenant.id,
           role: Role.ADMIN,
-          canUsePos: false,
-          canOpenCashSession: false,
+          canUsePos: true,
+          canOpenCashSession: true,
           canCloseCashSession: true,
           canApplyDiscount: true,
           canCancelInvoice: true,
@@ -265,6 +265,30 @@ async function main() {
           hireDate: new Date('2025-06-01T00:00:00.000Z'),
           documentType: DocumentType.CEDULA,
           documentNumber: '00111223344',
+          status: EmployeeStatus.ACTIVE,
+        },
+      },
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      email: 'almacenista@allpa.local',
+      name: 'Almacenista ALLPA',
+      phone: '809-555-0104',
+      passwordHash,
+      memberships: {
+        create: {
+          tenantId: allpaTenant.id,
+          role: Role.WAREHOUSE_KEEPER,
+        },
+      },
+      employeeProfiles: {
+        create: {
+          tenantId: allpaTenant.id,
+          employeeCode: 'ALL-ALM-001',
+          jobTitle: 'Almacenista',
+          hireDate: new Date('2026-09-25T00:00:00.000Z'),
           status: EmployeeStatus.ACTIVE,
         },
       },

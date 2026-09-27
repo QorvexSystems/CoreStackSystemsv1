@@ -55,7 +55,17 @@ const defaultState: ProductFormState = {
   trackInventory: true,
 };
 
-export function ProductForm({ productId }: { productId?: string }) {
+export function ProductForm({
+  productId,
+  embedded = false,
+  onSaved,
+  onCancel,
+}: {
+  productId?: string;
+  embedded?: boolean;
+  onSaved?: () => void;
+  onCancel?: () => void;
+}) {
   const session = useCurrentSession();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -127,6 +137,10 @@ export function ProductForm({ productId }: { productId?: string }) {
     onSuccess: async (product) => {
       await queryClient.invalidateQueries({ queryKey: ['products'] });
       toast.success('Producto guardado', { description: product.name });
+      if (embedded) {
+        onSaved?.();
+        return;
+      }
       router.push('/products');
     },
     onError: (error) => {
@@ -179,6 +193,31 @@ export function ProductForm({ productId }: { productId?: string }) {
     return <SessionRequired session={session} />;
   }
 
+  if (productId && productQuery.isLoading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2" aria-label="Cargando producto">
+        {Array.from({ length: 10 }).map((_, index) => (
+          <div key={index} className="space-y-2">
+            <div className="h-4 w-24 animate-pulse rounded bg-zinc-200" />
+            <div className="h-10 animate-pulse rounded-md bg-zinc-100" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (productId && productQuery.isError) {
+    return (
+      <div className="rounded-lg border border-danger/20 bg-danger/5 p-5 text-center">
+        <p className="font-semibold text-foreground">No se pudo cargar el producto.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Comprueba la conexión e inténtalo nuevamente.</p>
+        <Button type="button" variant="outline" className="mt-4" onClick={() => void productQuery.refetch()}>
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
+
   function updateField<K extends keyof ProductFormState>(key: K, value: ProductFormState[K]) {
     if (key === 'imageUrl') {
       setImagePreviewFailed(false);
@@ -210,233 +249,250 @@ export function ProductForm({ productId }: { productId?: string }) {
     saveMutation.mutate();
   }
 
-  return (
-    <div className="space-y-6">
-      <ModuleHeader
-        title={productId ? 'Editar producto' : 'Nuevo producto'}
-        description={`Datos persistidos en PostgreSQL para el catálogo operativo de ${brand.name}.`}
-      />
-
-      <Card>
+  const formCard = (
+    <Card className={embedded ? 'border-0 shadow-none' : undefined}>
+      {!embedded ? (
         <CardHeader>
           <CardTitle>Ficha del producto</CardTitle>
           <CardDescription>
             El sistema valida duplicados de SKU y código de barras dentro de la empresa.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-            <Field label="Nombre" required>
+      ) : null}
+      <CardContent className={embedded ? 'p-0' : undefined}>
+        <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
+          <Field label="Nombre" required>
+            <Input
+              value={form.name}
+              onChange={(event) => updateField('name', event.target.value)}
+              required
+            />
+          </Field>
+          <Field label="Codigo de producto">
+            <Input
+              value={form.sku}
+              onChange={(event) => updateField('sku', event.target.value)}
+              placeholder="Automatico"
+            />
+          </Field>
+          <Field label="Codigo de barras">
+            <div className="space-y-2">
               <Input
-                value={form.name}
-                onChange={(event) => updateField('name', event.target.value)}
-                required
-              />
-            </Field>
-            <Field label="Codigo de producto">
-              <Input
-                value={form.sku}
-                onChange={(event) => updateField('sku', event.target.value)}
+                value={form.barcode}
+                onChange={(event) => updateField('barcode', event.target.value)}
                 placeholder="Automatico"
+                autoComplete="off"
               />
-            </Field>
-            <Field label="Codigo de barras">
-              <div className="space-y-2">
+              <BarcodeCameraScanner onDetected={(value) => updateField('barcode', value)} />
+            </div>
+          </Field>
+          <Field label="Imagen del producto">
+            <div className="space-y-2">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                 <Input
-                  value={form.barcode}
-                  onChange={(event) => updateField('barcode', event.target.value)}
-                  placeholder="Automatico"
-                  autoComplete="off"
+                  value={form.imageUrl}
+                  onChange={(event) => updateField('imageUrl', event.target.value)}
+                  placeholder="URL o imagen cargada"
                 />
-                <BarcodeCameraScanner onDetected={(value) => updateField('barcode', value)} />
-              </div>
-            </Field>
-            <Field label="Imagen del producto">
-              <div className="space-y-2">
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                  <Input
-                    value={form.imageUrl}
-                    onChange={(event) => updateField('imageUrl', event.target.value)}
-                    placeholder="URL o imagen cargada"
-                  />
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    className="hidden"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
 
-                      if (file) {
-                        imageUploadMutation.mutate(file);
-                      }
+                    if (file) {
+                      imageUploadMutation.mutate(file);
+                    }
 
-                      event.currentTarget.value = '';
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={imageUploadMutation.isPending}
-                  >
-                    <Upload className="h-4 w-4" />
-                    {imageUploadMutation.isPending ? 'Subiendo...' : 'Subir imagen'}
-                  </Button>
-                </div>
-                {form.imageUrl ? (
-                  <div className="flex aspect-[4/3] w-full items-center justify-center rounded-md border border-border bg-zinc-50 p-3">
-                    {imagePreviewFailed ? (
-                      <div className="max-w-sm text-center text-sm text-muted-foreground">
-                        <p>No se pudo cargar la imagen.</p>
-                        <p className="mt-1 text-xs">
-                          Usa un enlace directo a una imagen JPG, PNG, WEBP o GIF, o sube el archivo
-                          desde tu equipo.
-                        </p>
-                      </div>
-                    ) : (
-                      <img
-                        src={form.imageUrl}
-                        alt="Vista previa del producto"
-                        className="max-h-full max-w-full object-contain"
-                        referrerPolicy="no-referrer"
-                        onLoad={() => setImagePreviewFailed(false)}
-                        onError={() => setImagePreviewFailed(true)}
-                      />
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </Field>
-            <Field label="Marca">
-              <Input
-                value={form.brand}
-                onChange={(event) => updateField('brand', event.target.value)}
-              />
-            </Field>
-            <Field label="Unidad">
-              <select
-                value={form.unit}
-                onChange={(event) => updateField('unit', event.target.value)}
-                className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
-              >
-                <option value="UNIT">Unidad</option>
-                <option value="BAG">Saco</option>
-                <option value="METER">Metro (MT)</option>
-                <option value="FOOT">Pie (FT)</option>
-                <option value="YARD">Yarda (YD)</option>
-                <option value="ROLL">Rollo</option>
-                <option value="POUND">Libra (LB/POUND)</option>
-                <option value="GALLON">Galon</option>
-                <option value="PACK">Paquete</option>
-              </select>
-            </Field>
-            <Field label="Estado">
-              <select
-                value={form.status}
-                onChange={(event) => updateField('status', event.target.value)}
-                className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
-              >
-                <option value="ACTIVE">Activo</option>
-                <option value="INACTIVE">Inactivo</option>
-                <option value="DISCONTINUED">Descontinuado</option>
-              </select>
-            </Field>
-            <Field label="Precio (RD$)" required>
-              <div className="space-y-3">
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.price}
-                  onChange={(event) =>
-                    updateField('price', sanitizeCurrencyInput(event.target.value))
-                  }
-                  onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
-                  onFocus={(event) => event.currentTarget.select()}
-                  required
+                    event.currentTarget.value = '';
+                  }}
                 />
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Precio descuento (5%)</Label>
-                    <Input
-                      value={discountPrice}
-                      readOnly
-                      tabIndex={-1}
-                      className="bg-zinc-100 text-zinc-600"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">
-                      Cliente preferencial (10%)
-                    </Label>
-                    <Input
-                      value={preferredPrice}
-                      readOnly
-                      tabIndex={-1}
-                      className="bg-zinc-100 text-zinc-600"
-                    />
-                  </div>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={imageUploadMutation.isPending}
+                >
+                  <Upload className="h-4 w-4" />
+                  {imageUploadMutation.isPending ? 'Subiendo...' : 'Subir imagen'}
+                </Button>
               </div>
-            </Field>
-            <Field label="Costo (RD$)">
+              {form.imageUrl ? (
+                <div className="flex aspect-[4/3] w-full items-center justify-center rounded-md border border-border bg-zinc-50 p-3">
+                  {imagePreviewFailed ? (
+                    <div className="max-w-sm text-center text-sm text-muted-foreground">
+                      <p>No se pudo cargar la imagen.</p>
+                      <p className="mt-1 text-xs">
+                        Usa un enlace directo a una imagen JPG, PNG, WEBP o GIF, o sube el archivo
+                        desde tu equipo.
+                      </p>
+                    </div>
+                  ) : (
+                    <img
+                      src={form.imageUrl}
+                      alt="Vista previa del producto"
+                      className="max-h-full max-w-full object-contain"
+                      referrerPolicy="no-referrer"
+                      onLoad={() => setImagePreviewFailed(false)}
+                      onError={() => setImagePreviewFailed(true)}
+                    />
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </Field>
+          <Field label="Marca">
+            <Input
+              value={form.brand}
+              onChange={(event) => updateField('brand', event.target.value)}
+            />
+          </Field>
+          <Field label="Unidad">
+            <select
+              value={form.unit}
+              onChange={(event) => updateField('unit', event.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="UNIT">Unidad</option>
+              <option value="BAG">Saco</option>
+              <option value="METER">Metro (MT)</option>
+              <option value="FOOT">Pie (FT)</option>
+              <option value="YARD">Yarda (YD)</option>
+              <option value="ROLL">Rollo</option>
+              <option value="POUND">Libra (LB/POUND)</option>
+              <option value="GALLON">Galon</option>
+              <option value="PACK">Paquete</option>
+            </select>
+          </Field>
+          <Field label="Estado">
+            <select
+              value={form.status}
+              onChange={(event) => updateField('status', event.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="ACTIVE">Activo</option>
+              <option value="INACTIVE">Inactivo</option>
+              <option value="DISCONTINUED">Descontinuado</option>
+            </select>
+          </Field>
+          <Field label="Precio (RD$)" required>
+            <div className="space-y-3">
               <Input
                 type="text"
                 inputMode="decimal"
-                value={form.cost}
-                onChange={(event) => updateField('cost', sanitizeCurrencyInput(event.target.value))}
-                onBlur={(event) => updateField('cost', formatCurrencyInput(event.target.value))}
+                value={form.price}
+                onChange={(event) =>
+                  updateField('price', sanitizeCurrencyInput(event.target.value))
+                }
+                onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
                 onFocus={(event) => event.currentTarget.select()}
-              />
-            </Field>
-            <Field label="ITBIS">
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.taxRate}
-                onChange={(event) => updateField('taxRate', event.target.value)}
-              />
-            </Field>
-            <Field label="Stock actual" required>
-              <Input
-                type="number"
-                min="0"
-                step="0.001"
-                inputMode="decimal"
-                value={form.stock}
-                onChange={(event) => updateField('stock', event.target.value)}
                 required
               />
-            </Field>
-            <Field label="Stock minimo" required>
-              <Input
-                type="number"
-                min="0"
-                step="0.001"
-                inputMode="decimal"
-                value={form.minStock}
-                onChange={(event) => updateField('minStock', event.target.value)}
-                required
-              />
-            </Field>
-            <label className="flex items-center gap-2 pt-7 text-sm font-medium">
-              <input
-                type="checkbox"
-                checked={form.trackInventory}
-                onChange={(event) => updateField('trackInventory', event.target.checked)}
-              />
-              Controlar inventario
-            </label>
-            <div className="md:col-span-2">
-              <Button type="submit" disabled={saveMutation.isPending}>
-                <Save className="h-4 w-4" />
-                Guardar
-              </Button>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Precio descuento (5%)</Label>
+                  <Input
+                    value={discountPrice}
+                    readOnly
+                    tabIndex={-1}
+                    className="bg-zinc-100 text-zinc-600"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">
+                    Cliente preferencial (10%)
+                  </Label>
+                  <Input
+                    value={preferredPrice}
+                    readOnly
+                    tabIndex={-1}
+                    className="bg-zinc-100 text-zinc-600"
+                  />
+                </div>
+              </div>
             </div>
-          </form>
-        </CardContent>
-      </Card>
+          </Field>
+          <Field label="Costo (RD$)">
+            <Input
+              type="text"
+              inputMode="decimal"
+              value={form.cost}
+              onChange={(event) => updateField('cost', sanitizeCurrencyInput(event.target.value))}
+              onBlur={(event) => updateField('cost', formatCurrencyInput(event.target.value))}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          </Field>
+          <Field label="ITBIS">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.taxRate}
+              onChange={(event) => updateField('taxRate', event.target.value)}
+            />
+          </Field>
+          <Field label="Stock actual" required>
+            <Input
+              type="number"
+              min="0"
+              step="0.001"
+              inputMode="decimal"
+              value={form.stock}
+              onChange={(event) => updateField('stock', event.target.value)}
+              required
+            />
+          </Field>
+          <Field label="Stock minimo" required>
+            <Input
+              type="number"
+              min="0"
+              step="0.001"
+              inputMode="decimal"
+              value={form.minStock}
+              onChange={(event) => updateField('minStock', event.target.value)}
+              required
+            />
+          </Field>
+          <label className="flex items-center gap-2 pt-7 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={form.trackInventory}
+              onChange={(event) => updateField('trackInventory', event.target.checked)}
+            />
+            Controlar inventario
+          </label>
+          <div className="flex justify-end gap-2 border-t border-zinc-200 pt-4 md:col-span-2">
+            {embedded ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onCancel}
+                disabled={saveMutation.isPending}
+              >
+                Cancelar
+              </Button>
+            ) : null}
+            <Button type="submit" disabled={saveMutation.isPending}>
+              <Save className="h-4 w-4" />
+              {saveMutation.isPending ? 'Guardando...' : 'Guardar producto'}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+
+  if (embedded) return formCard;
+
+  return (
+    <div className="space-y-6">
+      <ModuleHeader
+        title={productId ? 'Editar producto' : 'Nuevo producto'}
+        description={`Datos persistidos en PostgreSQL para el catálogo operativo de ${brand.name}.`}
+      />
+      {formCard}
     </div>
   );
 }

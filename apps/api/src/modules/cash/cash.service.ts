@@ -31,11 +31,7 @@ export class CashService {
     });
   }
 
-  async createRegister(
-    tenantId: string,
-    user: AuthenticatedUser,
-    dto: CreateCashRegisterDto,
-  ) {
+  async createRegister(tenantId: string, user: AuthenticatedUser, dto: CreateCashRegisterDto) {
     this.requireCashRegisterManagement(tenantId, user);
 
     const name = dto.name.trim();
@@ -82,6 +78,24 @@ export class CashService {
       include: {
         cashRegister: true,
         openedBy: { select: { id: true, name: true, email: true } },
+        movements: {
+          select: {
+            id: true,
+            type: true,
+            amount: true,
+            method: true,
+            reason: true,
+            reference: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        invoices: {
+          select: {
+            id: true,
+            status: true,
+          },
+        },
       },
       orderBy: { openedAt: 'desc' },
     });
@@ -184,69 +198,55 @@ export class CashService {
   ) {
     this.requirePermission(tenantId, user, 'canCloseCashSession');
 
-    const session = await this.prisma.cashSession.findFirst({
-      where: {
-        id: cashSessionId,
-        tenantId,
-        status: CashSessionStatus.OPEN,
-      },
-    });
-
-    if (!session) {
-      throw new NotFoundException('Open cash session not found for tenant.');
-    }
-
-    const claimedOrders = await this.prisma.salesOrder.count({
-      where: {
-        tenantId,
-        claimedCashSessionId: cashSessionId,
-        status: SalesOrderStatus.IN_CASHIER,
-      },
-    });
-
-    if (claimedOrders > 0) {
-      throw new BadRequestException(
-        'Close pending claimed sales orders before closing cash session.',
-      );
-    }
-
-    const movements = await this.prisma.cashMovement.findMany({
-      where: {
-        tenantId,
-        cashSessionId,
-      },
-      select: {
-        type: true,
-        amount: true,
-        method: true,
-      },
-    });
-    const negativeMovementTypes: CashMovementType[] = [
-      CashMovementType.CASH_OUT,
-      CashMovementType.REFUND,
-      CashMovementType.SUPPLIER_PAYMENT,
-    ];
-    const expectedAmount = movements
-      .reduce((sum, movement) => {
-        if (movement.type === CashMovementType.CLOSING) {
-          return sum;
-        }
-
-        if (movement.method && movement.method !== PaymentMethod.CASH) {
-          return sum;
-        }
-
-        if (negativeMovementTypes.includes(movement.type)) {
-          return sum.sub(movement.amount);
-        }
-
-        return sum.add(movement.amount);
-      }, new Prisma.Decimal(0))
-      .toDecimalPlaces(2);
-    const closingAmount = new Prisma.Decimal(dto.closingAmount);
-    const difference = closingAmount.sub(expectedAmount).toDecimalPlaces(2);
-
     return this.prisma.$transaction(async (tx) => {
+      const openSession = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "CashSession"
+        WHERE "id" = ${cashSessionId}
+          AND "tenantId" = ${tenantId}
+          AND "status" = 'OPEN'::"CashSessionStatus"
+        FOR UPDATE
+      `;
+
+      if (openSession.length !== 1) {
+        throw new NotFoundException('Open cash session not found for tenant.');
+      }
+
+      const claimedOrders = await tx.salesOrder.count({
+        where: {
+          tenantId,
+          claimedCashSessionId: cashSessionId,
+          status: SalesOrderStatus.IN_CASHIER,
+        },
+      });
+
+      if (claimedOrders > 0) {
+        throw new BadRequestException(
+          'Close pending claimed sales orders before closing cash session.',
+        );
+      }
+
+      const movements = await tx.cashMovement.findMany({
+        where: { tenantId, cashSessionId },
+        select: { type: true, amount: true, method: true },
+      });
+      const negativeMovementTypes: CashMovementType[] = [
+        CashMovementType.CASH_OUT,
+        CashMovementType.REFUND,
+        CashMovementType.SUPPLIER_PAYMENT,
+      ];
+      const expectedAmount = movements
+        .reduce((sum, movement) => {
+          if (movement.type === CashMovementType.CLOSING) return sum;
+          if (movement.method && movement.method !== PaymentMethod.CASH) return sum;
+          return negativeMovementTypes.includes(movement.type)
+            ? sum.sub(movement.amount)
+            : sum.add(movement.amount);
+        }, new Prisma.Decimal(0))
+        .toDecimalPlaces(2);
+      const closingAmount = new Prisma.Decimal(dto.closingAmount);
+      const difference = closingAmount.sub(expectedAmount).toDecimalPlaces(2);
+
       const closed = await tx.cashSession.update({
         where: { id: cashSessionId },
         data: {
@@ -387,8 +387,8 @@ export class CashService {
     const membership = user.memberships.find((candidate) => candidate.tenantId === tenantId);
     const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 
-    if (!membership || !membership.canOpenCashSession || adminRoles.includes(membership.role)) {
-      throw new ForbiddenException('Admins cannot open cash sessions.');
+    if (!membership || (!membership.canOpenCashSession && !adminRoles.includes(membership.role))) {
+      throw new ForbiddenException('Employee does not have permission to open cash sessions.');
     }
   }
 

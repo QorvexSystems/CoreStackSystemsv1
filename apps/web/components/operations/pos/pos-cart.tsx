@@ -1,6 +1,7 @@
 'use client';
 
-import { Minus, Plus, Trash2 } from 'lucide-react';
+import { Minus, Package, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +14,7 @@ type PosCartProps = {
   onUpdateQuantity: (productId: string, quantity: number) => void;
   onClear: () => void;
   readOnly?: boolean;
+  showHeader?: boolean;
   emptyMessage?: string;
 };
 
@@ -21,23 +23,32 @@ export function PosCart({
   onUpdateQuantity,
   onClear,
   readOnly = false,
+  showHeader = true,
   emptyMessage = 'Agrega productos desde la izquierda o escanea un codigo para empezar.',
 }: PosCartProps) {
   return (
-    <div className="rounded-md border border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-200 p-4">
-        <div>
-          <h2 className="text-base font-semibold text-zinc-950">Carrito</h2>
-          <p className="text-xs text-muted-foreground">{items.length} linea(s) agregada(s)</p>
+    <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+      {showHeader ? (
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-200 p-4">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-950">Productos agregados</h2>
+            <p className="text-xs text-muted-foreground">{items.length} linea(s) agregada(s)</p>
+          </div>
+          {!readOnly ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClear}
+              disabled={!items.length}
+            >
+              Limpiar
+            </Button>
+          ) : null}
         </div>
-        {!readOnly ? (
-          <Button type="button" variant="outline" size="sm" onClick={onClear} disabled={!items.length}>
-            Limpiar
-          </Button>
-        ) : null}
-      </div>
+      ) : null}
 
-      <div className="surface-scrollbar max-h-[26rem] space-y-2 overflow-y-auto p-3">
+      <div className="surface-scrollbar max-h-[min(38dvh,24rem)] space-y-2 overflow-y-auto p-3 xl:max-h-[20rem]">
         {items.length ? (
           items.map((item) => {
             const unitPrice = item.unitPrice ?? getProductPrice(item.product);
@@ -48,10 +59,16 @@ export function PosCart({
             const stockWarning = item.product.trackInventory && item.quantity >= availableStock;
 
             return (
-              <div key={item.product.id} className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+              <div
+                key={item.product.id}
+                className="rounded-lg border border-zinc-200 bg-zinc-50 p-3"
+              >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-zinc-950">{item.product.name}</p>
+                  <CartProductImage item={item} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-zinc-950">
+                      {item.product.name}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {formatCurrency(unitPrice)} x {formatQuantity(item.quantity)}
                     </p>
@@ -73,6 +90,7 @@ export function PosCart({
                         type="button"
                         variant="ghost"
                         size="icon"
+                        className="h-11 w-11"
                         onClick={() => onUpdateQuantity(item.product.id, 0)}
                         aria-label="Quitar producto"
                       >
@@ -88,7 +106,10 @@ export function PosCart({
                       type="button"
                       variant="outline"
                       size="icon"
-                      onClick={() => onUpdateQuantity(item.product.id, item.quantity - quantityStep)}
+                      className="h-11 w-11"
+                      onClick={() =>
+                        onUpdateQuantity(item.product.id, item.quantity - quantityStep)
+                      }
                       aria-label="Reducir cantidad"
                     >
                       <Minus className="h-4 w-4" />
@@ -109,7 +130,7 @@ export function PosCart({
                       }
                       onFocus={(event) => event.currentTarget.select()}
                       aria-label={`Cantidad de ${item.product.name}`}
-                      className="h-9 w-24 text-center text-sm font-semibold"
+                      className="h-10 w-20 text-center text-sm font-semibold"
                     />
                   )}
                   {!readOnly ? (
@@ -117,10 +138,12 @@ export function PosCart({
                       type="button"
                       variant="outline"
                       size="icon"
-                      onClick={() => onUpdateQuantity(item.product.id, item.quantity + quantityStep)}
+                      className="h-11 w-11"
+                      onClick={() =>
+                        onUpdateQuantity(item.product.id, item.quantity + quantityStep)
+                      }
                       disabled={
-                        item.product.trackInventory &&
-                        item.quantity + quantityStep > availableStock
+                        item.product.trackInventory && item.quantity + quantityStep > availableStock
                       }
                       aria-label="Aumentar cantidad"
                     >
@@ -145,5 +168,29 @@ export function PosCart({
         )}
       </div>
     </div>
+  );
+}
+
+function CartProductImage({ item }: { item: CartItem }) {
+  const [failed, setFailed] = useState(false);
+
+  if (item.product.imageUrl && !failed) {
+    return (
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white p-1.5">
+        <img
+          src={item.product.imageUrl}
+          alt=""
+          className="max-h-full max-w-full object-contain"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white text-zinc-400">
+      <Package className="h-5 w-5" aria-hidden="true" />
+    </span>
   );
 }

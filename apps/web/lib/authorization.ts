@@ -39,8 +39,22 @@ export function isAccountantSession(session: AuthSession | null | undefined) {
   return session?.role === 'ACCOUNTANT';
 }
 
+export function isWarehouseKeeperSession(session: AuthSession | null | undefined) {
+  return session?.role === 'WAREHOUSE_KEEPER';
+}
+
 export function canTakeOrders(session: AuthSession | null | undefined) {
-  return Boolean(isAdminSession(session) || session?.role === 'ORDER_TAKER');
+  return Boolean(
+    isAdminSession(session) ||
+    session?.role === 'ORDER_TAKER' ||
+    session?.permissions.canTakeOrders,
+  );
+}
+
+export function canUsePosSession(session: AuthSession | null | undefined) {
+  return Boolean(
+    isAdminSession(session) || session?.role === 'CASHIER' || session?.permissions.canUsePos,
+  );
 }
 
 export function canAccessPath(session: AuthSession | null | undefined, pathname: string) {
@@ -56,8 +70,8 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
     );
   }
 
-  if (session.role === 'ADMIN' && (pathname === '/pos' || pathname.startsWith('/pos/'))) {
-    return false;
+  if (isWarehouseKeeperSession(session)) {
+    return pathname === '/warehouse';
   }
 
   if (pathname === '/quotations' || pathname.startsWith('/quotations/')) {
@@ -65,14 +79,14 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
   }
 
   if (pathname === '/returns' || pathname.startsWith('/returns/')) {
-    return isAdminSession(session) || Boolean(session.permissions.canUsePos);
+    return canUsePosSession(session);
   }
 
   if (isAdminSession(session)) {
     return true;
   }
 
-  if (session.permissions.canUsePos && (pathname === '/pos' || pathname.startsWith('/pos/'))) {
+  if (canUsePosSession(session) && (pathname === '/pos' || pathname.startsWith('/pos/'))) {
     return true;
   }
 
@@ -100,11 +114,15 @@ export function getDefaultPathForSession(session: AuthSession | null | undefined
     return '/dashboard';
   }
 
+  if (isWarehouseKeeperSession(session)) {
+    return '/warehouse';
+  }
+
   if (canTakeOrders(session)) {
     return '/orders';
   }
 
-  if (session.permissions.canUsePos) {
+  if (canUsePosSession(session)) {
     return '/pos';
   }
 

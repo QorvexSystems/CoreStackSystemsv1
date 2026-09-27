@@ -12,6 +12,8 @@ coverage
 .turbo
 .tmp
 .dev-logs/
+/AbarrotesPDV/
+/docs/
 .DS_Store
 .vscode/
 Qorvex_RIVNU_Plantilla_Importacion_Product*.xlsx

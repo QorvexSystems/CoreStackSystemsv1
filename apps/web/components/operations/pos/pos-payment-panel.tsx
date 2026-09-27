@@ -1,17 +1,20 @@
 'use client';
 
-import { ReceiptText } from 'lucide-react';
+import { Delete, ReceiptText, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { Customer } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import {
+  appendCurrencyInput,
+  backspaceCurrencyInput,
+  clearCurrencyInput,
   formatCurrencyInput,
   formatCurrencyInputFromNumber,
+  parseCurrencyInput,
   sanitizeCurrencyInput,
 } from './currency-input';
-import { PaymentCalculator } from './payment-calculator';
 import type { PosTotals } from './types';
 
 type PosPaymentPanelProps = {
@@ -82,265 +85,307 @@ export function PosPaymentPanel({
   const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
   const fiscalLabel = requiresRnc ? 'E31' : requiresE32Recipient ? 'E32' : 'B01';
 
+  function appendAmount(value: string) {
+    onAmountReceivedChange(appendCurrencyInput(amountReceived, value));
+  }
+
+  function addAmount(value: number) {
+    onAmountReceivedChange(
+      formatCurrencyInputFromNumber(parseCurrencyInput(amountReceived) + value),
+    );
+  }
+
+  const numberKeys = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0'];
+
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="customer">Cliente</Label>
-            <select
-              id="customer"
-              value={customerId}
-              disabled={customerLocked}
-              onChange={(event) => onCustomerChange(event.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
-            >
-              <option value="">Consumidor final</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-            {requiresRecipientDocument ? (
-              <p className="text-xs text-muted-foreground">
-                {requiresE32Recipient
-                  ? 'Por superar RD$250,000, E32 requiere identificar y registrar al comprador.'
-                  : 'Requiere un cliente registrado para sustentar el crédito fiscal.'}
-              </p>
-            ) : null}
-          </div>
+    <div className="space-y-2">
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="space-y-1">
+          <Label htmlFor="customer" className="text-xs font-semibold">
+            Cliente
+          </Label>
+          <select
+            id="customer"
+            value={customerId}
+            disabled={customerLocked}
+            onChange={(event) => onCustomerChange(event.target.value)}
+            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
+          >
+            <option value="">Consumidor final</option>
+            {customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>
+                {customer.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="documentType">Comprobante</Label>
-            <select
-              id="documentType"
-              value={documentType}
-              onChange={(event) => onDocumentTypeChange(event.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {electronicInvoiceRequested ? (
-                <>
-                  <option value="CONSUMER_ELECTRONIC_32">Factura de consumo electrónica E32</option>
-                  <option value="FISCAL_CREDIT_ELECTRONIC_31">
-                    Factura de crédito fiscal electrónica E31
-                  </option>
-                </>
-              ) : (
-                <>
-                  <option value="CONSUMER_02">Factura de consumo B02</option>
-                  <option value="FISCAL_CREDIT_01">Factura de crédito fiscal B01</option>
-                </>
-              )}
-            </select>
+        <div className="space-y-1">
+          <Label htmlFor="documentType" className="text-xs font-semibold">
+            Comprobante
+          </Label>
+          <select
+            id="documentType"
+            value={documentType}
+            onChange={(event) => onDocumentTypeChange(event.target.value)}
+            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             {electronicInvoiceRequested ? (
-              <p className="text-xs text-muted-foreground">
-                Esta orden solicita e-CF; la copia se enviará al correo configurado cuando Resend
-                esté activo.
-              </p>
-            ) : null}
-          </div>
+              <>
+                <option value="CONSUMER_ELECTRONIC_32">Factura de consumo E32</option>
+                <option value="FISCAL_CREDIT_ELECTRONIC_31">Crédito fiscal E31</option>
+              </>
+            ) : (
+              <>
+                <option value="CONSUMER_02">Factura de consumo B02</option>
+                <option value="FISCAL_CREDIT_01">Crédito fiscal B01</option>
+              </>
+            )}
+          </select>
         </div>
 
-        {requiresRecipientDocument ? (
-          <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-3">
-            <div className="mb-3">
-              <p className="font-semibold text-zinc-950">Datos fiscales para {fiscalLabel}</p>
-              <p className="text-xs text-muted-foreground">
-                {requiresRnc
-                  ? 'E31 requiere el RNC del cliente. Se valida antes de facturar.'
-                  : requiresE32Recipient
-                    ? 'E32 igual o superior a RD$250,000 requiere el RNC o la cédula y el nombre del comprador.'
-                    : 'Indica el RNC o la cédula del cliente. El documento se valida antes de facturar.'}
-              </p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
-              <div className="space-y-2">
-                <Label htmlFor="fiscalDocumentType">Documento</Label>
-                <select
-                  id="fiscalDocumentType"
-                  value={fiscalDocumentType}
-                  disabled={requiresRnc}
-                  onChange={(event) =>
-                    onFiscalDocumentTypeChange(event.target.value as 'RNC' | 'CEDULA')
-                  }
-                  className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="RNC">RNC</option>
-                  <option value="CEDULA">Cédula</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="fiscalDocumentNumber">
-                  {fiscalDocumentType === 'RNC' ? 'RNC del cliente' : 'Cédula del cliente'}
-                </Label>
-                <Input
-                  id="fiscalDocumentNumber"
-                  inputMode="numeric"
-                  value={fiscalDocumentNumber}
-                  onChange={(event) => onFiscalDocumentNumberChange(event.target.value)}
-                  placeholder={fiscalDocumentType === 'RNC' ? '000-00000-0' : '000-0000000-0'}
-                />
-              </div>
-            </div>
-            {fiscalDocumentNumber ? (
-              <p
-                className={
-                  fiscalDocumentValid && fiscalCustomerName
-                    ? 'mt-2 text-xs text-success'
-                    : 'mt-2 text-xs text-danger'
-                }
-              >
-                {fiscalDocumentValid
-                  ? fiscalCustomerName
-                    ? `Documento válido. Cliente: ${fiscalCustomerName}.`
-                    : 'Documento válido, pero no hay un cliente activo registrado con ese dato.'
-                  : `Verifica el ${fiscalDocumentType === 'RNC' ? 'RNC' : 'número de cédula'}.`}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="mt-3 grid gap-3">
-          <div className="space-y-2">
-            <Label htmlFor="paymentMethod">Metodo de pago</Label>
-            <select
-              id="paymentMethod"
-              value={paymentMethod}
-              onChange={(event) => onPaymentMethodChange(event.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="CASH">Efectivo</option>
-              <option value="CARD">Tarjeta</option>
-              <option value="TRANSFER">Transferencia</option>
-            </select>
-          </div>
+        <div className="space-y-1">
+          <Label htmlFor="paymentMethod" className="text-xs font-semibold">
+            Método de pago
+          </Label>
+          <select
+            id="paymentMethod"
+            value={paymentMethod}
+            onChange={(event) => onPaymentMethodChange(event.target.value)}
+            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="CASH">Efectivo</option>
+            <option value="CARD">Tarjeta</option>
+            <option value="TRANSFER">Transferencia</option>
+          </select>
         </div>
-        {creditSale ? (
-          <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
-            Venta fiada aprobada. En esta factura se cobra únicamente la inicial de{' '}
-            <strong>{formatCurrency(totals.requiredPayment)}</strong>
-            {dueDate
-              ? ` y el saldo vence el ${new Date(dueDate).toLocaleDateString('es-DO')}.`
-              : '.'}
-          </div>
-        ) : null}
       </div>
 
-      <div className="rounded-md border-2 border-primary/40 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3">
-          <div className="flex-1 space-y-2">
-            <Label htmlFor="amountReceived">
+      {requiresRecipientDocument ? (
+        <div className="rounded-md border border-primary/25 bg-primary/[0.035] p-2.5">
+          <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
+            <div className="space-y-1">
+              <Label htmlFor="fiscalDocumentType" className="text-xs">
+                Documento {fiscalLabel}
+              </Label>
+              <select
+                id="fiscalDocumentType"
+                value={fiscalDocumentType}
+                disabled={requiresRnc}
+                onChange={(event) =>
+                  onFiscalDocumentTypeChange(event.target.value as 'RNC' | 'CEDULA')
+                }
+                className="h-9 w-full rounded-md border border-input bg-white px-2 text-sm"
+              >
+                <option value="RNC">RNC</option>
+                <option value="CEDULA">Cédula</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="fiscalDocumentNumber" className="text-xs">
+                Número del cliente
+              </Label>
+              <Input
+                id="fiscalDocumentNumber"
+                inputMode="numeric"
+                value={fiscalDocumentNumber}
+                onChange={(event) => onFiscalDocumentNumberChange(event.target.value)}
+                placeholder={fiscalDocumentType === 'RNC' ? '000-00000-0' : '000-0000000-0'}
+                className="h-9"
+              />
+            </div>
+          </div>
+          {fiscalDocumentNumber ? (
+            <p
+              className={
+                fiscalDocumentValid && fiscalCustomerName
+                  ? 'mt-1.5 text-xs text-success'
+                  : 'mt-1.5 text-xs text-danger'
+              }
+            >
+              {fiscalDocumentValid
+                ? fiscalCustomerName
+                  ? `Documento válido · ${fiscalCustomerName}`
+                  : 'Documento válido, pero el cliente no está registrado.'
+                : `Verifica el ${fiscalDocumentType === 'RNC' ? 'RNC' : 'número de cédula'}.`}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {creditSale ? (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+          Crédito aprobado · Inicial <strong>{formatCurrency(totals.requiredPayment)}</strong>
+          {dueDate ? ` · Vence ${new Date(dueDate).toLocaleDateString('es-DO')}` : ''}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-lg bg-slate-950 px-3 py-2.5 text-white shadow-sm">
+          <p className="text-[11px] text-slate-300">Total a cobrar</p>
+          <p className="mt-0.5 text-xl font-bold leading-none">
+            {formatCurrency(totals.requiredPayment)}
+          </p>
+        </div>
+        <div className="rounded-lg bg-zinc-100 px-3 py-2.5 text-zinc-900">
+          <p className="text-[11px] text-zinc-500">Recibido</p>
+          <p className="mt-0.5 text-xl font-bold leading-none">{formatCurrency(totals.received)}</p>
+        </div>
+        <div className="rounded-lg bg-zinc-100 px-3 py-2.5 text-zinc-900">
+          <p className="text-[11px] text-zinc-500">Devuelta</p>
+          <p className="mt-0.5 text-xl font-bold leading-none">{formatCurrency(totals.change)}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(13rem,0.8fr)]">
+        <div className="space-y-2">
+          <div className="space-y-1">
+            <Label htmlFor="amountReceived" className="text-xs font-semibold">
               {cashPayment ? 'Monto entregado por el cliente' : 'Monto pagado'}
             </Label>
-            <Input
-              id="amountReceived"
-              type="text"
-              inputMode="decimal"
-              value={amountReceived}
-              disabled={!cashPayment}
-              onChange={(event) =>
-                onAmountReceivedChange(sanitizeCurrencyInput(event.target.value))
-              }
-              onBlur={(event) => onAmountReceivedChange(formatCurrencyInput(event.target.value))}
-              onFocus={(event) => event.currentTarget.select()}
-              placeholder={
-                totals.requiredPayment
-                  ? formatCurrencyInputFromNumber(totals.requiredPayment)
-                  : '0.00'
-              }
-              className="h-14 text-2xl font-semibold"
-            />
-          </div>
-          <div className={creditSale ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'}>
-            <div className="rounded-md bg-zinc-950 px-4 py-3 text-white">
-              <p className="text-xs text-zinc-300">Total</p>
-              <p className="text-2xl font-bold">{formatCurrency(totals.total)}</p>
-            </div>
-            {creditSale ? (
-              <div className="rounded-md bg-sky-100 px-4 py-3 text-sky-950">
-                <p className="text-xs">Inicial</p>
-                <p className="text-2xl font-bold">{formatCurrency(totals.requiredPayment)}</p>
-              </div>
-            ) : null}
-            <div className="rounded-md bg-success/10 px-4 py-3 text-success">
-              <p className="text-xs">Devuelta</p>
-              <p className="text-2xl font-bold">{formatCurrency(totals.change)}</p>
+            <div className="relative">
+              <Input
+                id="amountReceived"
+                type="text"
+                inputMode="decimal"
+                value={amountReceived}
+                disabled={!cashPayment}
+                onChange={(event) =>
+                  onAmountReceivedChange(sanitizeCurrencyInput(event.target.value))
+                }
+                onBlur={(event) => onAmountReceivedChange(formatCurrencyInput(event.target.value))}
+                onFocus={(event) => event.currentTarget.select()}
+                placeholder={
+                  totals.requiredPayment
+                    ? formatCurrencyInputFromNumber(totals.requiredPayment)
+                    : '0.00'
+                }
+                className="h-11 pr-12 text-lg font-semibold"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                RD$
+              </span>
             </div>
           </div>
 
-          {cashInsufficient ? (
-            <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">
-              El efectivo recibido debe cubrir el monto requerido para completar la venta.
-            </p>
-          ) : null}
+          <div className="grid grid-cols-6 gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!cashPayment}
+              onClick={() =>
+                onAmountReceivedChange(formatCurrencyInputFromNumber(totals.requiredPayment))
+              }
+            >
+              Exacto
+            </Button>
+            {[50, 100, 500, 1000].map((amount) => (
+              <Button
+                key={amount}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!cashPayment}
+                onClick={() => addAmount(amount)}
+              >
+                +{amount}
+              </Button>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-danger hover:text-danger"
+              disabled={!cashPayment}
+              onClick={() => onAmountReceivedChange(clearCurrencyInput())}
+              aria-label="Limpiar monto recibido"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span className="sr-only">Limpiar</span>
+            </Button>
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs">
+            <div className="flex justify-between py-0.5">
+              <span className="text-muted-foreground">Subtotal</span>
+              <span className="font-medium">{formatCurrency(totals.subtotal)}</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-muted-foreground">Descuento</span>
+              <span className="font-medium">{formatCurrency(totals.discount)}</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-muted-foreground">ITBIS</span>
+              <span className="font-medium">{formatCurrency(totals.tax)}</span>
+            </div>
+            <div className="mt-1 flex justify-between border-t border-zinc-200 pt-1.5 text-sm font-bold">
+              <span>Total</span>
+              <span>{formatCurrency(totals.total)}</span>
+            </div>
+            {creditSale ? (
+              <>
+                <div className="mt-1 flex justify-between font-semibold text-sky-800">
+                  <span>Inicial</span>
+                  <span>{formatCurrency(totals.requiredPayment)}</span>
+                </div>
+                <div className="flex justify-between font-semibold text-amber-800">
+                  <span>Saldo</span>
+                  <span>{formatCurrency(totals.remainingBalance)}</span>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
+            {numberKeys.map((key) => (
+              <Button
+                key={key}
+                type="button"
+                variant="outline"
+                className="h-10 text-sm font-semibold"
+                disabled={!cashPayment}
+                onClick={() => appendAmount(key)}
+              >
+                {key}
+              </Button>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10"
+              disabled={!cashPayment}
+              onClick={() => onAmountReceivedChange(backspaceCurrencyInput(amountReceived))}
+              aria-label="Borrar último dígito"
+            >
+              <Delete className="h-4 w-4" />
+            </Button>
+          </div>
 
           <Button
             type="button"
-            className="h-16 w-full text-lg font-bold"
+            className="h-[3.25rem] min-h-[3.25rem] w-full bg-slate-900 font-bold text-white hover:bg-slate-800"
             disabled={!canCompleteSale || cashInsufficient || isCompleting}
             onClick={onCompleteSale}
           >
-            <ReceiptText className="h-5 w-5" />
+            <ReceiptText className="h-4 w-4" />
             {isCompleting ? 'Facturando...' : 'Facturar e imprimir'}
           </Button>
-
-          <p className="text-center text-xs text-muted-foreground">
-            Al confirmar, se emite la factura y se abre el recibo para imprimir automaticamente.
-          </p>
         </div>
-        {!cashPayment ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Tarjeta y transferencia se registran por el monto exacto requerido.
-          </p>
-        ) : null}
       </div>
 
-      <PaymentCalculator
-        total={totals.requiredPayment}
-        amountReceived={amountReceived}
-        disabled={!cashPayment}
-        onAmountChange={onAmountReceivedChange}
-      />
+      {cashInsufficient ? (
+        <p className="rounded-md bg-danger/10 px-3 py-1.5 text-xs text-danger">
+          El efectivo recibido debe cubrir el monto requerido.
+        </p>
+      ) : null}
 
-      <div className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span>Subtotal</span>
-            <span>{formatCurrency(totals.subtotal)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Descuento</span>
-            <span>{formatCurrency(totals.discount)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>ITBIS</span>
-            <span>{formatCurrency(totals.tax)}</span>
-          </div>
-          <div className="flex justify-between border-t border-zinc-200 pt-3 text-xl font-bold text-zinc-950">
-            <span>Total</span>
-            <span>{formatCurrency(totals.total)}</span>
-          </div>
-          {creditSale ? (
-            <>
-              <div className="flex justify-between text-base font-semibold text-sky-800">
-                <span>Inicial a cobrar</span>
-                <span>{formatCurrency(totals.requiredPayment)}</span>
-              </div>
-              <div className="flex justify-between text-base font-semibold text-amber-800">
-                <span>Saldo pendiente</span>
-                <span>{formatCurrency(totals.remainingBalance)}</span>
-              </div>
-            </>
-          ) : null}
-          <div className="flex justify-between text-base font-semibold text-success">
-            <span>Devuelta</span>
-            <span>{formatCurrency(totals.change)}</span>
-          </div>
-        </div>
-
-        {message ? <p className="mt-3 text-sm text-muted-foreground">{message}</p> : null}
-      </div>
+      {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
+      <p className="text-center text-[11px] text-muted-foreground">
+        Al confirmar, se emite la factura y se abre el recibo para imprimir automáticamente.
+      </p>
     </div>
   );
 }

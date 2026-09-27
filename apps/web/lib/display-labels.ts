@@ -112,6 +112,7 @@ const roleLabels: Record<string, string> = {
   ACCOUNTANT: 'Contador',
   CASHIER: 'Cajero',
   ORDER_TAKER: 'Ordenanza',
+  WAREHOUSE_KEEPER: 'Almacenista',
 };
 
 const documentTypeLabels: Record<string, string> = {

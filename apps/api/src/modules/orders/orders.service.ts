@@ -66,13 +66,14 @@ type ComputedOrderItem = {
 
 @Injectable()
 export class OrdersService {
+  private readonly expiredClaimSweepAt = new Map<string, number>();
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(tenantId: string, user: AuthenticatedUser, status?: string) {
-    await this.releaseExpiredClaims(tenantId);
-
     const membership = this.getMembership(tenantId, user);
     this.ensureCanViewOrders(membership);
+    await this.releaseExpiredClaims(tenantId);
 
     const parsedStatuses = this.parseStatuses(status);
     const ownOrdersOnly =
@@ -98,8 +99,6 @@ export class OrdersService {
   }
 
   async findOne(tenantId: string, user: AuthenticatedUser, id: string) {
-    await this.releaseExpiredClaims(tenantId);
-
     const membership = this.getMembership(tenantId, user);
     this.ensureCanViewOrders(membership);
 
@@ -133,21 +132,21 @@ export class OrdersService {
     await this.ensureCanTakeOrders(tenantId, user);
     const query = q.trim();
 
-    if (!query) {
-      return [];
-    }
-
     return this.prisma.product.findMany({
       where: {
         tenantId,
         inventoryDestination: inventorySource,
         status: ProductStatus.ACTIVE,
-        OR: [
-          { name: { contains: query, mode: 'insensitive' } },
-          { sku: { contains: query, mode: 'insensitive' } },
-          { barcode: { contains: query, mode: 'insensitive' } },
-          { brand: { contains: query, mode: 'insensitive' } },
-        ],
+        ...(query
+          ? {
+              OR: [
+                { name: { contains: query, mode: 'insensitive' as const } },
+                { sku: { contains: query, mode: 'insensitive' as const } },
+                { barcode: { contains: query, mode: 'insensitive' as const } },
+                { brand: { contains: query, mode: 'insensitive' as const } },
+              ],
+            }
+          : {}),
       },
       include: { category: true },
       orderBy: [{ stock: 'asc' }, { name: 'asc' }],
@@ -382,15 +381,9 @@ export class OrdersService {
   async claim(tenantId: string, user: AuthenticatedUser, id: string, dto: ClaimSalesOrderDto) {
     const membership = await this.ensureCanUsePosForOrders(tenantId, user);
 
-    if (adminRoles.includes(membership.role)) {
-      throw new ForbiddenException('Admins cannot claim sales orders for charging.');
-    }
-
     const cashSession = await this.findOpenCashSessionForUser(tenantId, user.id, dto.cashSessionId);
     const now = new Date();
     const claimExpiresAt = new Date(now.getTime() + claimTtlMs);
-
-    await this.releaseExpiredClaims(tenantId);
 
     return this.prisma.$transaction(async (tx) => {
       const claimed = await tx.salesOrder.updateMany({
@@ -424,7 +417,7 @@ export class OrdersService {
       if (claimed.count !== 1) {
         const existing = await tx.salesOrder.findFirst({
           where: { id, tenantId },
-          include: this.orderInclude(),
+          select: { status: true },
         });
 
         if (!existing) {
@@ -445,7 +438,19 @@ export class OrdersService {
       await this.lockOpenCashSessionForUser(tx, tenantId, user.id, cashSession.id);
       const order = await tx.salesOrder.findUniqueOrThrow({
         where: { id },
-        include: this.orderInclude(),
+        select: {
+          id: true,
+          orderNumber: true,
+          total: true,
+          destination: true,
+          status: true,
+          clientName: true,
+          claimedById: true,
+          claimedCashSessionId: true,
+          claimedAt: true,
+          claimExpiresAt: true,
+          releasedAt: true,
+        },
       });
 
       await tx.employeeActivityLog.create({
@@ -479,7 +484,12 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.salesOrder.findFirst({
         where: { id, tenantId },
-        include: this.orderInclude(),
+        select: {
+          id: true,
+          status: true,
+          claimedById: true,
+          claimedCashSessionId: true,
+        },
       });
 
       if (!order) {
@@ -506,7 +516,19 @@ export class OrdersService {
           claimExpiresAt: null,
           releasedAt: new Date(),
         },
-        include: this.orderInclude(),
+        select: {
+          id: true,
+          orderNumber: true,
+          total: true,
+          destination: true,
+          status: true,
+          clientName: true,
+          claimedById: true,
+          claimedCashSessionId: true,
+          claimedAt: true,
+          claimExpiresAt: true,
+          releasedAt: true,
+        },
       });
 
       await tx.employeeActivityLog.create({
@@ -549,7 +571,9 @@ export class OrdersService {
           (order.status === SalesOrderStatus.CREATED ||
             order.status === SalesOrderStatus.SENT_TO_CASHIER ||
             order.status === SalesOrderStatus.QUOTATION) &&
-          (membership.role === Role.ORDER_TAKER || adminRoles.includes(membership.role))) ||
+          (membership.role === Role.ORDER_TAKER ||
+            membership.canTakeOrders ||
+            adminRoles.includes(membership.role))) ||
         (order.claimedById === user.id &&
           order.status === SalesOrderStatus.IN_CASHIER &&
           (membership.role === Role.CASHIER || membership.canUsePos));
@@ -863,9 +887,17 @@ export class OrdersService {
       const discountRate = this.getDiscountRate(priceLevel);
       const inventorySource = dto.inventorySource ?? order.inventorySource;
       if (inventorySource !== order.inventorySource) {
-        throw new BadRequestException('The inventory source cannot be changed after creating a quotation.');
+        throw new BadRequestException(
+          'The inventory source cannot be changed after creating a quotation.',
+        );
       }
-      const computed = await this.computeOrder(tenantId, dto.items, tx, priceLevel, inventorySource);
+      const computed = await this.computeOrder(
+        tenantId,
+        dto.items,
+        tx,
+        priceLevel,
+        inventorySource,
+      );
 
       // Update order fields
       const updated = await tx.salesOrder.update({
@@ -1215,21 +1247,11 @@ export class OrdersService {
       FROM "CashSession"
       WHERE "id" = ${cashSessionId}
         AND "tenantId" = ${tenantId}
+        AND "openedById" = ${userId}
+        AND "status" = 'OPEN'::"CashSessionStatus"
       FOR UPDATE
     `;
     if (rows.length !== 1) {
-      throw new BadRequestException('Selected cash session was not found.');
-    }
-    const openSession = await tx.cashSession.findFirst({
-      where: {
-        id: cashSessionId,
-        tenantId,
-        openedById: userId,
-        status: CashSessionStatus.OPEN,
-      },
-      select: { id: true },
-    });
-    if (!openSession) {
       throw new BadRequestException('Selected cash session is no longer open for this cashier.');
     }
   }
@@ -1290,6 +1312,7 @@ export class OrdersService {
     if (
       !adminRoles.includes(membership.role) &&
       !membership.canUsePos &&
+      !membership.canTakeOrders &&
       membership.role !== Role.CASHIER &&
       membership.role !== Role.ORDER_TAKER
     ) {
@@ -1300,7 +1323,11 @@ export class OrdersService {
   private async ensureCanTakeOrders(tenantId: string, user: AuthenticatedUser) {
     const membership = this.getMembership(tenantId, user);
 
-    if (!adminRoles.includes(membership.role) && membership.role !== Role.ORDER_TAKER) {
+    if (
+      !adminRoles.includes(membership.role) &&
+      membership.role !== Role.ORDER_TAKER &&
+      !membership.canTakeOrders
+    ) {
       throw new ForbiddenException('Employee does not have permission to take orders.');
     }
 
@@ -1356,7 +1383,10 @@ export class OrdersService {
         status: CashSessionStatus.OPEN,
         ...(cashSessionId ? { id: cashSessionId } : {}),
       },
-      include: { cashRegister: true },
+      select: {
+        id: true,
+        cashRegister: { select: { name: true } },
+      },
       orderBy: { openedAt: 'desc' },
     });
 
@@ -1370,22 +1400,36 @@ export class OrdersService {
   }
 
   private async releaseExpiredClaims(tenantId: string) {
+    const sweepIntervalMs = 60_000;
+    const currentTime = Date.now();
+    const lastSweepAt = this.expiredClaimSweepAt.get(tenantId) ?? 0;
+
+    if (currentTime - lastSweepAt < sweepIntervalMs) {
+      return;
+    }
+
+    this.expiredClaimSweepAt.set(tenantId, currentTime);
     const now = new Date();
-    await this.prisma.salesOrder.updateMany({
-      where: {
-        tenantId,
-        status: SalesOrderStatus.IN_CASHIER,
-        claimExpiresAt: { lt: now },
-      },
-      data: {
-        status: SalesOrderStatus.SENT_TO_CASHIER,
-        claimedById: null,
-        claimedCashSessionId: null,
-        claimedAt: null,
-        claimExpiresAt: null,
-        releasedAt: now,
-      },
-    });
+    try {
+      await this.prisma.salesOrder.updateMany({
+        where: {
+          tenantId,
+          status: SalesOrderStatus.IN_CASHIER,
+          claimExpiresAt: { lt: now },
+        },
+        data: {
+          status: SalesOrderStatus.SENT_TO_CASHIER,
+          claimedById: null,
+          claimedCashSessionId: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+          releasedAt: now,
+        },
+      });
+    } catch (error) {
+      this.expiredClaimSweepAt.delete(tenantId);
+      throw error;
+    }
   }
 
   private orderInclude() {

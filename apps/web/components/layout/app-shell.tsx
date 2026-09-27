@@ -22,14 +22,14 @@ import { GlobalSearch } from './global-search';
 import { MobileNavigation, Sidebar } from './sidebar';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
   const pathname = usePathname();
   const router = useRouter();
 
   const summaryQuery = useQuery({
-    queryKey: ['dashboard-summary', session?.tenantId, 'layout'],
+    queryKey: ['dashboard-summary', session?.tenantId],
     queryFn: () => getDashboardSummary(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session && canAccessPath(session, '/dashboard')),
     refetchInterval: 60_000,

@@ -37,6 +37,7 @@ enum Role {
   ACCOUNTANT
   CASHIER
   ORDER_TAKER
+  WAREHOUSE_KEEPER
   QORVEX_SUPER_ADMIN
 }
 
@@ -327,6 +328,10 @@ enum PurchaseOrderDestination {
 enum WarehouseMovementType {
   PURCHASE
   SALE
+  MANUAL_RECEIPT
+  MANUAL_DISPATCH
+  STOCK_COUNT
+  DISPATCH
   ADJUSTMENT_IN
   ADJUSTMENT_OUT
 }
@@ -592,10 +597,10 @@ model Customer {
   salesOrders         SalesOrder[]
   creditSaleApprovals CreditSaleApproval[]
 
+  @@unique([tenantId, documentType, documentNumber])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, creditEnabled, creditStatus])
-  @@unique([tenantId, documentType, documentNumber])
   @@index([creditEnabledById])
   @@index([createdAt])
 }
@@ -617,39 +622,39 @@ model ProductCategory {
 }
 
 model Product {
-  id                     String                @id @default(cuid())
+  id                     String                      @id @default(cuid())
   tenantId               String
   categoryId             String?
   name                   String
   sku                    String?
   barcode                String?
   barcodeType            BarcodeType?
-  generatedBarcode       Boolean               @default(false)
+  generatedBarcode       Boolean                     @default(false)
   barcodeLabelPrintedAt  DateTime?
-  barcodeLabelPrintCount Int                   @default(0)
+  barcodeLabelPrintCount Int                         @default(0)
   barcodeLastScannedAt   DateTime?
   barcodeCreatedById     String?
   description            String?
   imageUrl               String?
   brand                  String?
-  unit                   ProductUnit           @default(UNIT)
-  price                  Decimal               @db.Decimal(12, 2)
-  salePrice              Decimal               @default(0) @db.Decimal(12, 2)
-  cost                   Decimal?              @db.Decimal(12, 2)
-  costWithTax            Decimal?              @db.Decimal(14, 2)
-  margin                 Decimal?              @db.Decimal(8, 4)
-  taxCategory            TaxCategory           @default(ITBIS_18)
-  taxRate                Decimal               @default(0.18) @db.Decimal(5, 4)
-  trackInventory         Boolean               @default(true)
+  unit                   ProductUnit                 @default(UNIT)
+  price                  Decimal                     @db.Decimal(12, 2)
+  salePrice              Decimal                     @default(0) @db.Decimal(12, 2)
+  cost                   Decimal?                    @db.Decimal(12, 2)
+  costWithTax            Decimal?                    @db.Decimal(14, 2)
+  margin                 Decimal?                    @db.Decimal(8, 4)
+  taxCategory            TaxCategory                 @default(ITBIS_18)
+  taxRate                Decimal                     @default(0.18) @db.Decimal(5, 4)
+  trackInventory         Boolean                     @default(true)
   inventoryDestination   ProductInventoryDestination @default(SALES_INVENTORY)
-  stock                  Float                 @default(0)
-  reservedStock          Float                 @default(0)
-  minStock               Float                 @default(0)
-  status                 ProductStatus         @default(ACTIVE)
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  category               ProductCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  stock                  Float                       @default(0)
+  reservedStock          Float                       @default(0)
+  minStock               Float                       @default(0)
+  status                 ProductStatus               @default(ACTIVE)
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+  tenant                 Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category               ProductCategory?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   inventoryMovements     InventoryMovement[]
   warehouseStocks        WarehouseStock[]
   warehouseMovements     WarehouseMovement[]
@@ -820,60 +825,61 @@ model InvoiceItem {
 }
 
 model SalesOrder {
-  id                      String                @id @default(cuid())
-  tenantId                String
-  customerId              String?
-  destination             SalesOrderDestination @default(CASH_SALE)
-  inventorySource         ProductInventoryDestination @default(SALES_INVENTORY)
-  clientName              String?
-    quotationDocumentType   DocumentType?
-    quotationDocumentNumber String?
-    electronicInvoiceRequested Boolean             @default(false)
-    ecfRecipientEmail        String?
-    orderNumber             String
-  status                  SalesOrderStatus      @default(SENT_TO_CASHIER)
-  priceLevel              SalesOrderPriceLevel  @default(REGULAR)
-  discountRate            Decimal               @default(0) @db.Decimal(5, 4)
-  subtotal                Decimal               @default(0) @db.Decimal(12, 2)
-  taxTotal                Decimal               @default(0) @db.Decimal(12, 2)
-  discountTotal           Decimal               @default(0) @db.Decimal(12, 2)
-  total                   Decimal               @default(0) @db.Decimal(12, 2)
-  paymentMode             SalePaymentMode       @default(CASH)
-  initialPaymentOption    InitialPaymentOption?
-  initialPaymentRate      Decimal               @default(0) @db.Decimal(5, 4)
-  initialPaymentAmount    Decimal               @default(0) @db.Decimal(14, 2)
-  creditTermOption        CreditTermOption?
-  creditTermDays          Int?
-  dueDate                 DateTime?
-  creditRequestNote       String?
-  notes                   String?
-  createdById             String
-  completedById           String?
-  claimedById             String?
-  claimedCashSessionId    String?
-  invoiceId               String?               @unique
-  sentToCashierAt         DateTime?
-  claimedAt               DateTime?
-  claimExpiresAt          DateTime?
-  releasedAt              DateTime?
-  completedAt             DateTime?
-  cancelledAt             DateTime?
-  cancelReason            String?
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
-  tenant                  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer                Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  createdBy               User                  @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  completedBy             User?                 @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
-  claimedBy               User?                 @relation("SalesOrderClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  claimedCashSession      CashSession?          @relation("SalesOrderClaimedCashSession", fields: [claimedCashSessionId], references: [id], onDelete: SetNull)
-  invoice                 Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  items                   SalesOrderItem[]
-  creditApproval          CreditSaleApproval?
+  id                         String                      @id @default(cuid())
+  tenantId                   String
+  customerId                 String?
+  destination                SalesOrderDestination       @default(CASH_SALE)
+  inventorySource            ProductInventoryDestination @default(SALES_INVENTORY)
+  clientName                 String?
+  quotationDocumentType      DocumentType?
+  quotationDocumentNumber    String?
+  electronicInvoiceRequested Boolean                     @default(false)
+  ecfRecipientEmail          String?
+  orderNumber                String
+  status                     SalesOrderStatus            @default(SENT_TO_CASHIER)
+  priceLevel                 SalesOrderPriceLevel        @default(REGULAR)
+  discountRate               Decimal                     @default(0) @db.Decimal(5, 4)
+  subtotal                   Decimal                     @default(0) @db.Decimal(12, 2)
+  taxTotal                   Decimal                     @default(0) @db.Decimal(12, 2)
+  discountTotal              Decimal                     @default(0) @db.Decimal(12, 2)
+  total                      Decimal                     @default(0) @db.Decimal(12, 2)
+  paymentMode                SalePaymentMode             @default(CASH)
+  initialPaymentOption       InitialPaymentOption?
+  initialPaymentRate         Decimal                     @default(0) @db.Decimal(5, 4)
+  initialPaymentAmount       Decimal                     @default(0) @db.Decimal(14, 2)
+  creditTermOption           CreditTermOption?
+  creditTermDays             Int?
+  dueDate                    DateTime?
+  creditRequestNote          String?
+  notes                      String?
+  createdById                String
+  completedById              String?
+  claimedById                String?
+  claimedCashSessionId       String?
+  invoiceId                  String?                     @unique
+  sentToCashierAt            DateTime?
+  claimedAt                  DateTime?
+  claimExpiresAt             DateTime?
+  releasedAt                 DateTime?
+  completedAt                DateTime?
+  cancelledAt                DateTime?
+  cancelReason               String?
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  tenant                     Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer                   Customer?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy                  User                        @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy                User?                       @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  claimedBy                  User?                       @relation("SalesOrderClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedCashSession         CashSession?                @relation("SalesOrderClaimedCashSession", fields: [claimedCashSessionId], references: [id], onDelete: SetNull)
+  invoice                    Invoice?                    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  items                      SalesOrderItem[]
+  creditApproval             CreditSaleApproval?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([tenantId, status, claimExpiresAt])
   @@index([tenantId, inventorySource, status])
   @@index([tenantId, paymentMode, dueDate])
   @@index([tenantId, createdAt])
@@ -979,19 +985,19 @@ model SupplierProduct {
 }
 
 model PurchaseOrder {
-  id                             String               @id @default(cuid())
+  id                             String                   @id @default(cuid())
   tenantId                       String
   supplierId                     String
   orderNumber                    String
-  status                         PurchaseOrderStatus  @default(DRAFT)
+  status                         PurchaseOrderStatus      @default(DRAFT)
   destination                    PurchaseOrderDestination @default(SALES_INVENTORY)
-  currency                       Currency             @default(DOP)
+  currency                       Currency                 @default(DOP)
   requestDate                    DateTime?
   expectedDeliveryDate           DateTime?
-  subtotal                       Decimal              @default(0) @db.Decimal(14, 2)
-  taxTotal                       Decimal              @default(0) @db.Decimal(14, 2)
-  discountTotal                  Decimal              @default(0) @db.Decimal(14, 2)
-  total                          Decimal              @default(0) @db.Decimal(14, 2)
+  subtotal                       Decimal                  @default(0) @db.Decimal(14, 2)
+  taxTotal                       Decimal                  @default(0) @db.Decimal(14, 2)
+  discountTotal                  Decimal                  @default(0) @db.Decimal(14, 2)
+  total                          Decimal                  @default(0) @db.Decimal(14, 2)
   notes                          String?
   supplierNameSnapshot           String
   supplierDocumentTypeSnapshot   DocumentType
@@ -1013,17 +1019,17 @@ model PurchaseOrder {
   cancelledAt                    DateTime?
   pauseReason                    String?
   cancelReason                   String?
-  createdAt                      DateTime             @default(now())
-  updatedAt                      DateTime             @updatedAt
-  tenant                         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  supplier                       Supplier             @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  createdBy                      User                 @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  requestedBy                    User?                @relation("PurchaseOrderRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
-  reviewedBy                     User?                @relation("PurchaseOrderReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
-  approvedBy                     User?                @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  issuedBy                       User?                @relation("PurchaseOrderIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
-  pausedBy                       User?                @relation("PurchaseOrderPausedBy", fields: [pausedById], references: [id], onDelete: SetNull)
-  cancelledBy                    User?                @relation("PurchaseOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  createdAt                      DateTime                 @default(now())
+  updatedAt                      DateTime                 @updatedAt
+  tenant                         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier                       Supplier                 @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy                      User                     @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  requestedBy                    User?                    @relation("PurchaseOrderRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  reviewedBy                     User?                    @relation("PurchaseOrderReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  approvedBy                     User?                    @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  issuedBy                       User?                    @relation("PurchaseOrderIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  pausedBy                       User?                    @relation("PurchaseOrderPausedBy", fields: [pausedById], references: [id], onDelete: SetNull)
+  cancelledBy                    User?                    @relation("PurchaseOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
   items                          PurchaseOrderItem[]
   events                         PurchaseOrderEvent[]
   supplierInvoice                SupplierInvoice?
@@ -1597,6 +1603,7 @@ model CashSession {
 
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([tenantId, openedById, status, openedAt])
   @@index([openedById])
   @@index([cashRegisterId])
 }
@@ -1655,21 +1662,21 @@ model EmployeeActivityLog {
 }
 
 model FiscalSequence {
-  id           String               @id @default(cuid())
-  tenantId     String
-  documentType InvoiceDocumentType
-  prefix       String
-  startNumber  Int
-  endNumber    Int
-  nextNumber   Int
-  authorizationNumber String?
-  issuerDocumentType DocumentType?
+  id                   String               @id @default(cuid())
+  tenantId             String
+  documentType         InvoiceDocumentType
+  prefix               String
+  startNumber          Int
+  endNumber            Int
+  nextNumber           Int
+  authorizationNumber  String?
+  issuerDocumentType   DocumentType?
   issuerDocumentNumber String?
-  validUntil   DateTime?
-  status       FiscalSequenceStatus @default(ACTIVE)
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
-  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  validUntil           DateTime?
+  status               FiscalSequenceStatus @default(ACTIVE)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([tenantId, documentType, status])

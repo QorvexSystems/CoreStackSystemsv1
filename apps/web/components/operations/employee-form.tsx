@@ -69,7 +69,17 @@ const defaultState: EmployeeFormState = {
   canTakeOrders: false,
 };
 
-export function EmployeeForm({ employeeId }: { employeeId?: string }) {
+export function EmployeeForm({
+  employeeId,
+  embedded = false,
+  onSaved,
+  onCancel,
+}: {
+  employeeId?: string;
+  embedded?: boolean;
+  onSaved?: () => void;
+  onCancel?: () => void;
+}) {
   const session = useCurrentSession();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -127,6 +137,10 @@ export function EmployeeForm({ employeeId }: { employeeId?: string }) {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['employees'] });
+      if (embedded) {
+        onSaved?.();
+        return;
+      }
       router.push('/employees');
     },
     onError: (error) => {
@@ -156,17 +170,21 @@ export function EmployeeForm({ employeeId }: { employeeId?: string }) {
   }
 
   return (
-    <div className="space-y-6">
-      <ModuleHeader
-        title={employeeId ? 'Editar empleado' : 'Nuevo empleado'}
-        description={`Controla accesos operativos de ${brand.name} sin mezclar usuarios de otras empresas.`}
-      />
+    <div className={embedded ? '' : 'space-y-6'}>
+      {!embedded ? (
+        <ModuleHeader
+          title={employeeId ? 'Editar empleado' : 'Nuevo empleado'}
+          description={`Controla accesos operativos de ${brand.name} sin mezclar usuarios de otras empresas.`}
+        />
+      ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Perfil y permisos</CardTitle>
-          <CardDescription>Los permisos se aplican al tenant actual.</CardDescription>
-        </CardHeader>
+      <Card className={embedded ? 'border-0 shadow-none' : undefined}>
+        {!embedded ? (
+          <CardHeader>
+            <CardTitle>Perfil y permisos</CardTitle>
+            <CardDescription>Los permisos se aplican al tenant actual.</CardDescription>
+          </CardHeader>
+        ) : null}
         <CardContent>
           <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
             <Field label="Nombre">
@@ -208,6 +226,7 @@ export function EmployeeForm({ employeeId }: { employeeId?: string }) {
                 <option value="ACCOUNTANT">Contador</option>
                 <option value="CASHIER">Cajero</option>
                 <option value="ORDER_TAKER">Ordenanza</option>
+                <option value="WAREHOUSE_KEEPER">Almacenista</option>
               </select>
             </Field>
             <Field label="Estado">
@@ -263,20 +282,34 @@ export function EmployeeForm({ employeeId }: { employeeId?: string }) {
                 <div className="rounded-md border border-primary/20 bg-primary/5 p-3 sm:col-span-2 lg:col-span-3">
                   <p className="text-sm font-semibold">Acceso contable incluido por el rol</p>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Consulta facturas de venta, productos, clientes, inventario, suplidores,
-                    cuentas por cobrar, cuentas por pagar y caja. También puede preparar órdenes de
-                    compra y registrar facturas de suplidores, pagos, recepciones y abonos. Las
-                    aprobaciones, cancelaciones y reversiones quedan reservadas al administrador.
+                    Consulta facturas de venta, productos, clientes, inventario, suplidores, cuentas
+                    por cobrar, cuentas por pagar y caja. También puede preparar órdenes de compra y
+                    registrar facturas de suplidores, pagos, recepciones y abonos. Las aprobaciones,
+                    cancelaciones y reversiones quedan reservadas al administrador.
+                  </p>
+                </div>
+              ) : null}
+              {form.role === 'WAREHOUSE_KEEPER' ? (
+                <div className="rounded-md border border-primary/20 bg-primary/5 p-3 sm:col-span-2 lg:col-span-3">
+                  <p className="text-sm font-semibold">Acceso de almacén incluido por el rol</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Puede consultar existencias y movimientos, agregar productos al almacén y
+                    registrar despachos. No tiene acceso a caja, ventas ni a otros módulos.
                   </p>
                 </div>
               ) : null}
             </div>
 
-            <div className="md:col-span-2">
+            <div className="flex flex-col-reverse gap-2 md:col-span-2 sm:flex-row sm:justify-end">
               {message ? <p className="mb-3 text-sm text-muted-foreground">{message}</p> : null}
+              {embedded ? (
+                <Button type="button" variant="outline" onClick={onCancel}>
+                  Cancelar
+                </Button>
+              ) : null}
               <Button type="submit" disabled={saveMutation.isPending}>
                 <Save className="h-4 w-4" />
-                Guardar empleado
+                {saveMutation.isPending ? 'Guardando...' : 'Guardar empleado'}
               </Button>
             </div>
           </form>
@@ -339,6 +372,10 @@ function getDefaultPermissionsForRole(
     };
   }
 
+  if (role === 'WAREHOUSE_KEEPER') {
+    return permissions;
+  }
+
   return {
     ...permissions,
     canUsePos: true,
@@ -354,6 +391,10 @@ function isPermissionLocked(role: string, key: (typeof permissionFields)[number]
   }
 
   if (role === 'ACCOUNTANT') {
+    return true;
+  }
+
+  if (role === 'WAREHOUSE_KEEPER') {
     return true;
   }
 
@@ -376,6 +417,10 @@ function getForcedPermissionsForRole(
   }
 
   if (role === 'ACCOUNTANT') {
+    return getDefaultPermissionsForRole(role);
+  }
+
+  if (role === 'WAREHOUSE_KEEPER') {
     return getDefaultPermissionsForRole(role);
   }
 
