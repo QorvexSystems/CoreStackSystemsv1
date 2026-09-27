@@ -1,6 +1,6 @@
 'use client';
 
-import { Delete, ReceiptText, RotateCcw } from 'lucide-react';
+import { Delete, ReceiptText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,10 +9,8 @@ import { formatCurrency } from '@/lib/utils';
 import {
   appendCurrencyInput,
   backspaceCurrencyInput,
-  clearCurrencyInput,
   formatCurrencyInput,
   formatCurrencyInputFromNumber,
-  parseCurrencyInput,
   sanitizeCurrencyInput,
 } from './currency-input';
 import type { PosTotals } from './types';
@@ -87,12 +85,6 @@ export function PosPaymentPanel({
 
   function appendAmount(value: string) {
     onAmountReceivedChange(appendCurrencyInput(amountReceived, value));
-  }
-
-  function addAmount(value: number) {
-    onAmountReceivedChange(
-      formatCurrencyInputFromNumber(parseCurrencyInput(amountReceived) + value),
-    );
   }
 
   const numberKeys = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0'];
@@ -266,44 +258,6 @@ export function PosPaymentPanel({
                 RD$
               </span>
             </div>
-          </div>
-
-          <div className="grid grid-cols-6 gap-1.5">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!cashPayment}
-              onClick={() =>
-                onAmountReceivedChange(formatCurrencyInputFromNumber(totals.requiredPayment))
-              }
-            >
-              Exacto
-            </Button>
-            {[50, 100, 500, 1000].map((amount) => (
-              <Button
-                key={amount}
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!cashPayment}
-                onClick={() => addAmount(amount)}
-              >
-                +{amount}
-              </Button>
-            ))}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="text-danger hover:text-danger"
-              disabled={!cashPayment}
-              onClick={() => onAmountReceivedChange(clearCurrencyInput())}
-              aria-label="Limpiar monto recibido"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="sr-only">Limpiar</span>
-            </Button>
           </div>
 
           <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs">
