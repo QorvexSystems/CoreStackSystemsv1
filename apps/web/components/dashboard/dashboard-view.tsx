@@ -139,8 +139,8 @@ export function DashboardView() {
         />
         <KpiCard
           title="Almacén B2B"
-          value={formatCompactQuantity(summary.warehouse.unitCount)}
-          detail={`unidades almacenadas • ${summary.warehouse.productCount} producto${summary.warehouse.productCount === 1 ? '' : 's'}`}
+          value={String(summary.warehouse.productCount)}
+          detail={`${summary.warehouse.productCount === 1 ? 'tipo de producto' : 'tipos de producto'} • ${formatCompactQuantity(summary.warehouse.unitCount)} unidades`}
           icon={dashboardIcons.warehouse}
           tone="green"
           href="/warehouse"
