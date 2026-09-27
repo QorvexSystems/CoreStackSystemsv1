@@ -111,7 +111,7 @@ export function PosView() {
   const [brandFilter, setBrandFilter] = useState('ALL');
   const [selectedRegisterId, setSelectedRegisterId] = useState('');
   const [openingAmount, setOpeningAmount] = useState(clearCurrencyInput());
-  const [closingAmount, setClosingAmount] = useState(clearCurrencyInput());
+  const [closingAmount, setClosingAmount] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loadedOrder, setLoadedOrder] = useState<SalesOrder | null>(null);
@@ -392,6 +392,9 @@ export function PosView() {
       if (!session || !currentCashSession) {
         throw new Error('Sesion requerida.');
       }
+      if (!closingAmount.trim()) {
+        throw new Error('Indica el efectivo contado antes de cerrar la caja.');
+      }
 
       return closeCashSession(session.tenantId, session.accessToken, currentCashSession.id, {
         closingAmount: parseCurrencyInput(closingAmount),
@@ -401,7 +404,7 @@ export function PosView() {
     onSuccess: async () => {
       setMessage('Caja cerrada correctamente.');
       toast.success('Caja cerrada correctamente.');
-      setClosingAmount(clearCurrencyInput());
+      setClosingAmount('');
       setClosingDialogOpen(false);
       setCart([]);
       setAmountReceived(clearCurrencyInput());
@@ -754,8 +757,7 @@ export function PosView() {
       return;
     }
 
-    const summary = getCashCloseSummary(latestSession);
-    setClosingAmount(formatCurrencyInputFromNumber(summary.expected));
+    setClosingAmount('');
     setClosingDialogOpen(true);
   }
 
@@ -1276,7 +1278,10 @@ export function PosView() {
         cartHasItems={cart.length > 0}
         isPending={closeSessionMutation.isPending}
         onClosingAmountChange={setClosingAmount}
-        onClose={() => setClosingDialogOpen(false)}
+        onClose={() => {
+          setClosingDialogOpen(false);
+          setClosingAmount('');
+        }}
         onConfirm={() => closeSessionMutation.mutate()}
       />
     </div>
@@ -1849,6 +1854,7 @@ function CashCloseDialog({
   onConfirm: () => void;
 }) {
   const { expected, inflows, outflows, invoiceCount } = getCashCloseSummary(cashSession);
+  const hasCountedAmount = closingAmount.trim().length > 0;
   const counted = parseCurrencyInput(closingAmount);
   const difference = counted - expected;
 
@@ -1862,7 +1868,7 @@ function CashCloseDialog({
       confirmLabel="Confirmar cierre"
       cancelLabel="Volver a caja"
       isPending={isPending}
-      confirmDisabled={!cashSession || cartHasItems}
+      confirmDisabled={!cashSession || cartHasItems || !hasCountedAmount}
       onClose={onClose}
       onConfirm={onConfirm}
       summary={
@@ -1904,25 +1910,35 @@ function CashCloseDialog({
             data-dialog-autofocus
             inputMode="decimal"
             value={closingAmount}
-            onChange={(event) => onClosingAmountChange(sanitizeCurrencyInput(event.target.value))}
-            onBlur={(event) => onClosingAmountChange(formatCurrencyInput(event.target.value))}
+            onChange={(event) => {
+              const value = event.target.value;
+              onClosingAmountChange(value.trim() ? sanitizeCurrencyInput(value) : '');
+            }}
+            onBlur={(event) => {
+              const value = event.target.value.trim();
+              onClosingAmountChange(value ? formatCurrencyInput(value) : '');
+            }}
             onFocus={(event) => event.currentTarget.select()}
+            placeholder="0.00"
+            required
             className="h-12 pl-12 text-lg font-semibold"
           />
         </div>
         <div
           className={cn(
             'mt-3 flex items-center justify-between rounded-md px-3 py-2 text-sm',
-            Math.abs(difference) < 0.005
+            !hasCountedAmount
+              ? 'bg-zinc-100 text-zinc-600'
+              : Math.abs(difference) < 0.005
               ? 'bg-emerald-50 text-emerald-800'
               : 'bg-amber-50 text-amber-900',
           )}
         >
           <span>Diferencia</span>
-          <strong>{formatCurrency(difference)}</strong>
+          <strong>{hasCountedAmount ? formatCurrency(difference) : '—'}</strong>
         </div>
       </div>
-      {counted === 0 ? (
+      {hasCountedAmount && counted === 0 ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           El monto contado está en RD$0.00. Confirma solamente si la caja física realmente no tiene
           efectivo.
