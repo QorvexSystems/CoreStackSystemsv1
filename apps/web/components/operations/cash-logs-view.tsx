@@ -15,7 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { getCashMovements } from '@/lib/api';
-import { translateCashMovementType } from '@/lib/display-labels';
+import { translateCashMovementType, translatePaymentMethod } from '@/lib/display-labels';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -36,7 +36,7 @@ export function CashLogsView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Movimientos de caja"
-        description="Entradas, salidas, cobros y devoluciones que afectan el efectivo de las cajas."
+        description="Auditoria de entradas, salidas, cobros y devoluciones, identificada por empleado y caja."
       />
 
       <Card>
@@ -68,7 +68,9 @@ export function CashLogsView() {
                   <TableRow>
                     <TableHead>Fecha</TableHead>
                     <TableHead>Tipo</TableHead>
-                    <TableHead>Cajero</TableHead>
+                    <TableHead>Realizado por</TableHead>
+                    <TableHead>Caja</TableHead>
+                    <TableHead>Metodo</TableHead>
                     <TableHead>Referencia</TableHead>
                     <TableHead className="text-right">Monto</TableHead>
                   </TableRow>
@@ -81,10 +83,18 @@ export function CashLogsView() {
                       <TableRow key={movement.id}>
                         <TableCell>{formatDateTime(movement.createdAt)}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{translateCashMovementType(movement.type)}</Badge>
+                          <Badge variant="outline">
+                            {translateCashMovementType(movement.type)}
+                          </Badge>
                         </TableCell>
                         <TableCell>
                           {movement.user?.name ?? movement.cashierName ?? 'Empleado'}
+                        </TableCell>
+                        <TableCell>
+                          {movement.cashSession?.cashRegister.name ?? movement.registerName ?? '-'}
+                        </TableCell>
+                        <TableCell>
+                          {movement.method ? translatePaymentMethod(movement.method) : '-'}
                         </TableCell>
                         <TableCell>{movement.reference ?? movement.invoiceNumber ?? '-'}</TableCell>
                         <TableCell

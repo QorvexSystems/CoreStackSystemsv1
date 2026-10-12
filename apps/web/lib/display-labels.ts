@@ -137,6 +137,7 @@ const paymentMethodLabels: Record<string, string> = {
   CARD: 'Tarjeta',
   TRANSFER: 'Transferencia',
   CHECK: 'Cheque',
+  CREDIT: 'Crédito',
   OTHER: 'Otro',
 };
 
@@ -229,7 +230,7 @@ const entityLabels: Record<string, string> = {
   Membership: 'Membresia',
   Customer: 'Cliente',
   Product: 'Producto',
-  ProductCategory: 'Categoria de producto',
+  ProductCategory: 'Departamento de producto',
   ProductBarcodeLabel: 'Etiqueta de producto',
   InventoryMovement: 'Movimiento de inventario',
   Invoice: 'Factura',
@@ -249,7 +250,7 @@ const entityLabels: Record<string, string> = {
 
 const importTypeLabels: Record<string, string> = {
   PRODUCTS: 'Productos',
-  CATEGORIES: 'Categorias',
+  CATEGORIES: 'Departamentos',
   CUSTOMERS: 'Clientes',
   INITIAL_INVENTORY: 'Inventario inicial',
   FISCAL_SEQUENCES: 'Secuencias fiscales',

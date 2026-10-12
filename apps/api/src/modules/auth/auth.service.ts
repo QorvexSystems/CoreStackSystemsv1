@@ -70,6 +70,7 @@ export class AuthService {
         tenantId: membership.tenantId,
         tenantName: membership.tenant.name,
         tenantSlug: membership.tenant.slug,
+        salePricesIncludeTax: membership.tenant.salePricesIncludeTax,
         role: membership.role,
         permissions: {
           canUsePos: membership.canUsePos,

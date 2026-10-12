@@ -60,8 +60,12 @@ export default function LoginPage() {
       const response = await login(values.email, values.password);
       const session = saveSession(response);
       router.push(canAccessPath(session, nextPath) ? nextPath : getDefaultPathForSession(session));
-    } catch {
-      setLoginError('No pudimos iniciar sesion con esas credenciales.');
+    } catch (error) {
+      setLoginError(
+        error instanceof Error
+          ? error.message
+          : 'No pudimos iniciar sesion. Intenta nuevamente.',
+      );
     }
   }
 
@@ -103,7 +107,7 @@ export default function LoginPage() {
               Acceso privado para la operación, facturación e inventario.
             </h1>
             <p className="animate-enter animate-enter-delay-4 mt-4 max-w-xl text-sm leading-6 text-zinc-300">
-              {brand.descriptor}. {brand.tagline}.
+              {brand.tagline}
             </p>
           </div>
 

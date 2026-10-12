@@ -265,7 +265,7 @@ export class PayablesSummaryQueryDto {
 }
 
 export class RegisterSupplierPaymentDto {
-  @IsIn([PaymentMethod.CASH, PaymentMethod.TRANSFER, PaymentMethod.CHECK])
+  @IsIn([PaymentMethod.CASH, PaymentMethod.TRANSFER])
   method: PaymentMethod;
 
   @Type(() => Number)
@@ -276,7 +276,7 @@ export class RegisterSupplierPaymentDto {
   /**
    * Efectivo entregado por el pagador. Para pagos en efectivo puede ser
    * mayor que el saldo: el servidor aplica solamente el saldo y registra el
-   * cambio. Para transferencia y cheque, si se incluye, debe coincidir con
+   * cambio. Para transferencia, si se incluye, debe coincidir con
    * `amount`.
    */
   @IsOptional()

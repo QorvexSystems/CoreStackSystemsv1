@@ -35,6 +35,7 @@ const approvalInclude = {
   salesOrder: {
     include: {
       createdBy: { select: { id: true, name: true, email: true } },
+      discountApproval: true,
       items: {
         include: { product: true },
         orderBy: { description: 'asc' as const },
@@ -123,6 +124,12 @@ export class CreditApprovalsService {
               'Expired credit approval could not cancel its pending sales order.',
             );
           }
+          await this.cancelPendingDiscountApproval(
+            tx,
+            approval.salesOrderId,
+            user.id,
+            'Orden cancelada por vencimiento de la solicitud de crédito',
+          );
           await tx.auditLog.create({
             data: {
               tenantId,
@@ -167,44 +174,51 @@ export class CreditApprovalsService {
           );
         }
 
-        const sentToCashier = await tx.salesOrder.updateMany({
-          where: {
-            id: approval.salesOrderId,
-            tenantId,
-            status: SalesOrderStatus.CREATED,
-            paymentMode: SalePaymentMode.CREDIT,
-          },
-          data: {
-            status: SalesOrderStatus.SENT_TO_CASHIER,
-            sentToCashierAt: now,
-          },
-        });
-        if (sentToCashier.count !== 1) {
-          throw new ConflictException('Credit sales order changed concurrently.');
-        }
-
-        const orderedItems = [...approval.salesOrder.items].sort((left, right) =>
-          (left.productId ?? '').localeCompare(right.productId ?? ''),
-        );
-        for (const item of orderedItems) {
-          if (!item.productId || !item.product?.trackInventory) {
-            continue;
-          }
-          const quantity = Number(item.quantity);
-          const changed = await tx.$executeRaw`
-            UPDATE "Product"
-            SET "reservedStock" = "reservedStock" + ${quantity}
-            WHERE "id" = ${item.productId}
-              AND "tenantId" = ${tenantId}
-              AND ("stock" - "reservedStock") >= ${quantity}
-          `;
-          if (changed !== 1) {
-            throw new BadRequestException(`Insufficient available stock for ${item.description}.`);
-          }
-          await tx.salesOrderItem.update({
-            where: { id: item.id },
-            data: { reservedQuantity: quantity },
+        const waitsForDiscountApproval =
+          approval.salesOrder.discountApproval?.status === CreditApprovalStatus.PENDING;
+        const requiresManualSendForDiscount = Boolean(approval.salesOrder.discountApproval);
+        if (!requiresManualSendForDiscount) {
+          const sentToCashier = await tx.salesOrder.updateMany({
+            where: {
+              id: approval.salesOrderId,
+              tenantId,
+              status: SalesOrderStatus.CREATED,
+              paymentMode: SalePaymentMode.CREDIT,
+            },
+            data: {
+              status: SalesOrderStatus.SENT_TO_CASHIER,
+              sentToCashierAt: now,
+            },
           });
+          if (sentToCashier.count !== 1) {
+            throw new ConflictException('Credit sales order changed concurrently.');
+          }
+
+          const orderedItems = [...approval.salesOrder.items].sort((left, right) =>
+            (left.productId ?? '').localeCompare(right.productId ?? ''),
+          );
+          for (const item of orderedItems) {
+            if (!item.productId || !item.product?.trackInventory) {
+              continue;
+            }
+            const quantity = Number(item.quantity);
+            const changed = await tx.$executeRaw`
+              UPDATE "Product"
+              SET "reservedStock" = "reservedStock" + ${quantity}
+              WHERE "id" = ${item.productId}
+                AND "tenantId" = ${tenantId}
+                AND ("stock" - "reservedStock") >= ${quantity}
+            `;
+            if (changed !== 1) {
+              throw new BadRequestException(
+                `Insufficient available stock for ${item.description}.`,
+              );
+            }
+            await tx.salesOrderItem.update({
+              where: { id: item.id },
+              data: { reservedQuantity: quantity },
+            });
+          }
         }
 
         const approved = await tx.creditSaleApproval.updateMany({
@@ -244,6 +258,8 @@ export class CreditApprovalsService {
               customerId: approvedResult.customerId,
               financedAmount: approvedResult.financedAmount.toString(),
               exceedsCreditLimit: approvedResult.exceedsCreditLimit,
+              waitsForDiscountApproval,
+              requiresManualSendForDiscount,
             },
           },
         });
@@ -319,6 +335,12 @@ export class CreditApprovalsService {
               'Expired credit approval could not cancel its pending sales order.',
             );
           }
+          await this.cancelPendingDiscountApproval(
+            tx,
+            approval.salesOrderId,
+            user.id,
+            'Orden cancelada por vencimiento de la solicitud de crédito',
+          );
           await tx.auditLog.create({
             data: {
               tenantId,
@@ -368,6 +390,12 @@ export class CreditApprovalsService {
         if (cancelledOrder.count !== 1) {
           throw new ConflictException('Credit sales order changed concurrently.');
         }
+        await this.cancelPendingDiscountApproval(
+          tx,
+          approval.salesOrderId,
+          user.id,
+          'Orden cancelada por rechazo de la solicitud de crédito',
+        );
         const rejectedResult = await tx.creditSaleApproval.findUniqueOrThrow({
           where: { id },
           include: approvalInclude,
@@ -418,6 +446,23 @@ export class CreditApprovalsService {
     if (rows.length !== 1) {
       throw new ConflictException('Credit sales order changed concurrently.');
     }
+  }
+
+  private async cancelPendingDiscountApproval(
+    tx: Prisma.TransactionClient,
+    salesOrderId: string,
+    userId: string,
+    decisionNote: string,
+  ) {
+    await tx.discountApproval.updateMany({
+      where: { salesOrderId, status: CreditApprovalStatus.PENDING },
+      data: {
+        status: CreditApprovalStatus.CANCELLED,
+        decidedById: userId,
+        decidedAt: new Date(),
+        decisionNote,
+      },
+    });
   }
 
   private ensureApprovalIntegrity(approval: CreditApprovalDetail) {

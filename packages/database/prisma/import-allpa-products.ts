@@ -6,20 +6,21 @@ import {
   ImportRowStatus,
   ImportStatus,
   ImportType,
-  InventoryMovementType,
   Prisma,
   PrismaClient,
   ProductInventoryDestination,
   ProductStatus,
   ProductUnit,
-  TaxCategory,
 } from '../generated/client';
 
 const prisma = new PrismaClient();
 
 const TENANT_SLUG = 'allpa';
-const EXPECTED_PRODUCT_COUNT = 724;
-const SOURCE_COLUMNS = 6;
+const EXPECTED_SOURCE_PRODUCT_COUNT = 724;
+const EXPECTED_IMPORTED_PRODUCT_COUNT = 715;
+const SOURCE_COLUMNS = 7;
+const EXCLUDED_DEPARTMENT_PREFIXES = ['MERCANCIA FAMILIA'];
+const ALLPA_ITBIS_RATE = new Prisma.Decimal('0.18');
 const execute = process.argv.includes('--execute');
 const sourceArgument = getArgumentValue('--source');
 const confirmation = getArgumentValue('--confirm');
@@ -29,6 +30,7 @@ type SourceProduct = {
   rowNumber: number;
   sku: string;
   name: string;
+  department: string;
   cost: number;
   price: number;
   stock: number;
@@ -85,9 +87,10 @@ function parseSource(buffer: Buffer): SourceProduct[] {
       );
     }
 
-    const [rawSku, rawName, rawCost, rawPrice, rawStock, rawMinStock] = columns;
+    const [rawSku, rawName, rawDepartment, rawCost, rawPrice, rawStock, rawMinStock] = columns;
     const sku = rawSku.toUpperCase();
     const name = rawName.replace(/\s+/g, ' ').trim();
+    const department = rawDepartment.replace(/\s+/g, ' ').trim();
     const cost = parseNonNegativeNumber(rawCost, 'costo', rowNumber);
     const price = parseNonNegativeNumber(rawPrice, 'precio', rowNumber);
     const stock = parseNonNegativeNumber(rawStock, 'stock', rowNumber);
@@ -95,23 +98,28 @@ function parseSource(buffer: Buffer): SourceProduct[] {
 
     if (!sku) throw new Error(`Fila ${rowNumber}: el codigo/SKU es obligatorio.`);
     if (!name) throw new Error(`Fila ${rowNumber}: el nombre es obligatorio.`);
+    if (!department) throw new Error(`Fila ${rowNumber}: el departamento es obligatorio.`);
     if (sku.length > 64) throw new Error(`Fila ${rowNumber}: el SKU supera 64 caracteres.`);
     if (price <= 0) throw new Error(`Fila ${rowNumber}: el precio debe ser mayor que cero.`);
     if (!Number.isInteger(stock) || !Number.isInteger(minStock)) {
       throw new Error(`Fila ${rowNumber}: UNIT requiere existencias enteras.`);
     }
-    if (/\p{Cc}|\uFFFD/u.test(sku) || /\p{Cc}|\uFFFD/u.test(name)) {
+    if (
+      /\p{Cc}|\uFFFD/u.test(sku) ||
+      /\p{Cc}|\uFFFD/u.test(name) ||
+      /\p{Cc}|\uFFFD/u.test(department)
+    ) {
       throw new Error(`Fila ${rowNumber}: contiene caracteres de control o codificacion invalida.`);
     }
 
-    return { rowNumber, sku, name, cost, price, stock, minStock };
+    return { rowNumber, sku, name, department, cost, price, stock, minStock };
   });
 }
 
-function validateProducts(products: SourceProduct[]) {
-  if (products.length !== EXPECTED_PRODUCT_COUNT) {
+function validateProducts(products: SourceProduct[], expectedCount: number) {
+  if (products.length !== expectedCount) {
     throw new Error(
-      `Se esperaban ${EXPECTED_PRODUCT_COUNT} productos y se encontraron ${products.length}.`,
+      `Se esperaban ${expectedCount} productos y se encontraron ${products.length}.`,
     );
   }
 
@@ -130,6 +138,7 @@ function validateProducts(products: SourceProduct[]) {
 
   return {
     duplicateNames: [...nameCounts].filter(([, count]) => count > 1).length,
+    departments: new Set(products.map((product) => product.department)).size,
     zeroCosts: products.filter((product) => product.cost === 0).length,
     belowCost: products.filter((product) => product.cost > product.price).length,
     zeroStock: products.filter((product) => product.stock === 0).length,
@@ -138,6 +147,11 @@ function validateProducts(products: SourceProduct[]) {
     totalCost: products.reduce((total, product) => total + product.cost, 0),
     totalPrice: products.reduce((total, product) => total + product.price, 0),
   };
+}
+
+function isExcludedDepartment(department: string) {
+  const normalized = department.toLocaleUpperCase('es');
+  return EXCLUDED_DEPARTMENT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 function marginFor(product: SourceProduct) {
@@ -198,47 +212,55 @@ async function migrateProducts(
       // Inventory rows tied to the demo catalog cascade with the products.
       await tx.product.deleteMany({ where: { tenantId } });
 
-      const createdProducts = await tx.product.createManyAndReturn({
-        data: products.map((product) => ({
+      await tx.productCategory.deleteMany({ where: { tenantId } });
+      const departmentNames = [...new Set(products.map((product) => product.department))].sort(
+        (left, right) => left.localeCompare(right, 'es'),
+      );
+      const createdDepartments = await tx.productCategory.createManyAndReturn({
+        data: departmentNames.map((name) => ({
           tenantId,
-          name: product.name,
-          sku: product.sku,
-          barcode: product.sku,
-          barcodeType: BarcodeType.CODE128,
-          generatedBarcode: false,
-          unit: ProductUnit.UNIT,
-          price: new Prisma.Decimal(product.price),
-          salePrice: new Prisma.Decimal(product.price),
-          cost: new Prisma.Decimal(product.cost),
-          margin: marginFor(product),
-          taxCategory: TaxCategory.EXEMPT,
-          taxRate: new Prisma.Decimal(0),
-          trackInventory: true,
-          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
-          stock: product.stock,
-          reservedStock: 0,
-          minStock: product.minStock,
+          name,
           status: ProductStatus.ACTIVE,
         })),
+        select: { id: true, name: true },
+      });
+      const departmentIdByName = new Map(
+        createdDepartments.map((department) => [department.name, department.id]),
+      );
+
+      const createdProducts = await tx.product.createManyAndReturn({
+        data: products.map((product) => {
+          const categoryId = departmentIdByName.get(product.department);
+          if (!categoryId) throw new Error(`No se creo el departamento ${product.department}.`);
+          const salePriceWithTax = new Prisma.Decimal(product.price)
+            .mul(ALLPA_ITBIS_RATE.add(1))
+            .toDecimalPlaces(2);
+
+          return {
+            tenantId,
+            categoryId,
+            name: product.name,
+            sku: product.sku,
+            barcode: product.sku,
+            barcodeType: BarcodeType.CODE128,
+            generatedBarcode: false,
+            unit: ProductUnit.UNIT,
+            price: salePriceWithTax,
+            salePrice: salePriceWithTax,
+            cost: new Prisma.Decimal(product.cost),
+            margin: marginFor(product),
+            trackInventory: true,
+            inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
+            stock: 0,
+            reservedStock: 0,
+            minStock: product.minStock,
+            status: ProductStatus.ACTIVE,
+          };
+        }),
         select: { id: true, sku: true, name: true, stock: true, cost: true },
       });
 
       const createdBySku = new Map(createdProducts.map((product) => [product.sku, product]));
-      const stockMovements = createdProducts
-        .filter((product) => product.stock > 0)
-        .map((product) => ({
-          tenantId,
-          productId: product.id,
-          type: InventoryMovementType.INITIAL_STOCK,
-          quantity: product.stock,
-          previousStock: 0,
-          newStock: product.stock,
-          unitCost: product.cost,
-          reason: 'Migracion inicial desde AbarrotesPDV',
-          reference: `ALLPA-LEGACY-${sourceHash.slice(0, 12)}`,
-          createdById: actorId,
-        }));
-      if (stockMovements.length) await tx.inventoryMovement.createMany({ data: stockMovements });
 
       await tx.importBatchRow.createMany({
         data: products.map((product) => {
@@ -253,9 +275,12 @@ async function migrateProducts(
             rawData: {
               codigo: product.sku,
               descripcion: product.name,
+              departamento: product.department,
               costo: product.cost,
               precio: product.price,
-              stock: product.stock,
+              precioConItbis: salePriceWithTax.toNumber(),
+              stockFuente: product.stock,
+              stockMigrado: 0,
               stockMinimo: product.minStock,
             },
           };
@@ -283,7 +308,11 @@ async function migrateProducts(
             sourceFilename,
             sourceSha256: sourceHash,
             importedProducts: products.length,
-            omittedLegacyFields: ['DEPT', 'PROVID', 'UMEDIDA', 'MAYOREO', 'IMPUESTOS'],
+            importedDepartments: departmentNames.length,
+            excludedProducts: EXPECTED_SOURCE_PRODUCT_COUNT - products.length,
+            excludedDepartmentPrefixes: EXCLUDED_DEPARTMENT_PREFIXES,
+            stockPolicy: 'ZERO_FOR_PHYSICAL_COUNT',
+            ignoredLegacyFields: ['PROVID', 'UMEDIDA', 'MAYOREO', 'IMPUESTOS'],
           },
         },
       });
@@ -302,8 +331,19 @@ async function main() {
   const sourcePath = resolve(sourceArgument);
   const sourceBuffer = readFileSync(sourcePath);
   const sourceHash = createHash('sha256').update(sourceBuffer).digest('hex').toUpperCase();
-  const products = parseSource(sourceBuffer);
-  const validation = validateProducts(products);
+  const sourceProducts = parseSource(sourceBuffer);
+  validateProducts(sourceProducts, EXPECTED_SOURCE_PRODUCT_COUNT);
+  const excludedProducts = sourceProducts.filter((product) =>
+    isExcludedDepartment(product.department),
+  );
+  const products = sourceProducts.filter((product) => !isExcludedDepartment(product.department));
+  const validation = validateProducts(products, EXPECTED_IMPORTED_PRODUCT_COUNT);
+
+  if (excludedProducts.length !== EXPECTED_SOURCE_PRODUCT_COUNT - EXPECTED_IMPORTED_PRODUCT_COUNT) {
+    throw new Error(
+      `Se esperaban 9 productos excluidos y se encontraron ${excludedProducts.length}.`,
+    );
+  }
 
   const tenant = await prisma.tenant.findUnique({
     where: { slug: TENANT_SLUG },
@@ -322,19 +362,23 @@ async function main() {
   console.log(`Modo: ${execute ? 'EJECUTAR' : 'DRY-RUN'}`);
   console.log(`Fuente: ${sourcePath}`);
   console.log(`SHA-256 fuente: ${sourceHash}`);
-  console.log(`Productos validados: ${products.length}`);
+  console.log(`Productos validados en la fuente: ${sourceProducts.length}`);
+  console.log(`Productos excluidos por departamento eliminado: ${excludedProducts.length}`);
+  console.log(`Productos que seran migrados: ${products.length}`);
   console.log(`Productos existentes que seran reemplazados: ${existing.count}`);
   console.log(`Relaciones actuales del catalogo: ${JSON.stringify(existing.relations)}`);
-  console.log(`Stock total: ${validation.totalStock}`);
-  console.log(`Productos con stock positivo: ${validation.positiveStock}`);
-  console.log(`Productos con stock cero: ${validation.zeroStock}`);
+  console.log(`Departamentos que seran creados: ${validation.departments}`);
+  console.log(`Stock total en la fuente (solo informativo): ${validation.totalStock}`);
+  console.log(`Productos con stock positivo en la fuente: ${validation.positiveStock}`);
+  console.log(`Productos con stock cero en la fuente: ${validation.zeroStock}`);
+  console.log('Stock que sera migrado: 0');
   console.log(`Costos en cero preservados: ${validation.zeroCosts}`);
   console.log(`Costos mayores al precio preservados: ${validation.belowCost}`);
   console.log(`Descripciones duplicadas permitidas: ${validation.duplicateNames}`);
   console.log(`Suma de costos unitarios: ${validation.totalCost.toFixed(2)}`);
   console.log(`Suma de precios unitarios: ${validation.totalPrice.toFixed(2)}`);
   console.log(
-    'Transformacion: sin categorias, UNIT, impuesto EXEMPT, SKU y barcode iguales al codigo legado.',
+    'Transformacion: DEPT a Departamento, UNIT, stock cero, SKU y barcode iguales al codigo legado; MAYOREO e IMPUESTOS ignorados.',
   );
 
   if (!execute) {
@@ -362,7 +406,7 @@ async function main() {
     }),
   ]);
 
-  if (productCount !== products.length || stock._sum.stock !== validation.totalStock) {
+  if (productCount !== products.length || stock._sum.stock !== 0) {
     throw new Error('La conciliacion posterior no coincide con la fuente.');
   }
 

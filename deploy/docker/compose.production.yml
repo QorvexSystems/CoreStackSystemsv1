@@ -1,0 +1,97 @@
+name: allpa
+
+services:
+  allpa-api:
+    image: corestack/allpa-api:${ALLPA_IMAGE_TAG:?ALLPA_IMAGE_TAG is required}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: api
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+    container_name: allpa-api
+    init: true
+    restart: unless-stopped
+    cpus: ${ALLPA_API_CPUS:-0.65}
+    mem_limit: ${ALLPA_API_MEMORY_LIMIT:-512m}
+    memswap_limit: ${ALLPA_API_MEMORY_SWAP_LIMIT:-512m}
+    mem_reservation: ${ALLPA_API_MEMORY_RESERVATION:-192m}
+    pids_limit: ${ALLPA_API_PIDS_LIMIT:-128}
+    env_file:
+      - path: /opt/corestack/apps/allpa/secrets/api.env
+        required: true
+    ports:
+      - "10.0.0.3:4002:4000"
+    networks:
+      - allpa-network
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: local
+      options:
+        max-size: ${ALLPA_LOG_MAX_SIZE:-10m}
+        max-file: "${ALLPA_LOG_MAX_FILES:-3}"
+    security_opt:
+      - no-new-privileges:true
+
+  allpa-web:
+    image: corestack/allpa-web:${ALLPA_IMAGE_TAG:?ALLPA_IMAGE_TAG is required}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+    container_name: allpa-web
+    init: true
+    restart: unless-stopped
+    cpus: ${ALLPA_WEB_CPUS:-0.35}
+    mem_limit: ${ALLPA_WEB_MEMORY_LIMIT:-512m}
+    memswap_limit: ${ALLPA_WEB_MEMORY_SWAP_LIMIT:-512m}
+    mem_reservation: ${ALLPA_WEB_MEMORY_RESERVATION:-128m}
+    pids_limit: ${ALLPA_WEB_PIDS_LIMIT:-128}
+    environment:
+      NODE_ENV: production
+      INTERNAL_ALLOWED_IPS: ${INTERNAL_ALLOWED_IPS:-}
+    ports:
+      - "10.0.0.3:3002:3000"
+    networks:
+      - allpa-network
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/login').then((response) => { if (response.status >= 500) process.exit(1); }).catch(() => process.exit(1));"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: local
+      options:
+        max-size: ${ALLPA_LOG_MAX_SIZE:-10m}
+        max-file: "${ALLPA_LOG_MAX_FILES:-3}"
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  allpa-network:
+    external: true
+    name: allpa-network

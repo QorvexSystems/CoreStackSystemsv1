@@ -105,7 +105,7 @@ export function PosProductGrid({
             <div className="mt-auto flex items-end justify-between gap-3 pt-3">
               <div className="min-w-0">
                 <p className="truncate text-xs text-muted-foreground">
-                  {product.category?.name ?? 'Sin tipo'} · {product.brand ?? 'Sin proveedor'}
+                  {product.category?.name ?? 'Sin departamento'}
                 </p>
                 <p className="mt-0.5 text-lg font-bold tracking-tight text-zinc-950">
                   {formatCurrency(getProductPrice(product))}

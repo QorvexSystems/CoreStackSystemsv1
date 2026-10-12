@@ -1,11 +1,10 @@
-import { DocumentType, InvoiceDocumentType } from '@qorvex/database';
+import { InvoiceDocumentType } from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
   IsIn,
   IsInt,
-  IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
@@ -47,13 +46,4 @@ export class CreateFiscalSequenceDto {
   @IsOptional()
   @IsDateString()
   validUntil?: string;
-
-  @IsEnum(DocumentType)
-  @IsIn([DocumentType.RNC, DocumentType.CEDULA])
-  issuerDocumentType: DocumentType;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(20)
-  issuerDocumentNumber: string;
 }

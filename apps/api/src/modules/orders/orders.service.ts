@@ -32,6 +32,7 @@ import {
   validateDominicanRnc,
 } from '../../common/utils/dominican-documents';
 import { getBarcodeLookupCandidates } from '../../common/utils/barcode';
+import { computeSaleAmounts } from '../../common/utils/sale-pricing';
 import {
   addBusinessDays,
   businessDateKey,
@@ -54,7 +55,13 @@ const openOrderStatuses: SalesOrderStatus[] = [
 const claimTtlMs = 30 * 60 * 1000;
 
 type ComputedOrderItem = {
-  product: Awaited<ReturnType<PrismaService['product']['findMany']>>[number];
+  product: Awaited<ReturnType<PrismaService['product']['findMany']>>[number] | null;
+  productId: string | null;
+  sku: string | null;
+  barcode: string | null;
+  description: string;
+  unitSnapshot: ProductUnit;
+  taxRate: Prisma.Decimal;
   quantity: Prisma.Decimal;
   reservedQuantity: number;
   unitPrice: Prisma.Decimal;
@@ -114,6 +121,7 @@ export class OrdersService {
     if (
       !adminRoles.includes(membership.role) &&
       membership.role !== Role.CASHIER &&
+      membership.role !== Role.ORDER_TAKER &&
       !membership.canUsePos &&
       order.createdById !== user.id
     ) {
@@ -150,7 +158,6 @@ export class OrdersService {
       },
       include: { category: true },
       orderBy: [{ stock: 'asc' }, { name: 'asc' }],
-      take: 30,
     });
   }
 
@@ -194,8 +201,11 @@ export class OrdersService {
     const clientName = dto.clientName?.trim() || undefined;
     const destination = dto.destination ?? SalesOrderDestination.CASH_SALE;
     const inventorySource = dto.inventorySource ?? ProductInventoryDestination.SALES_INVENTORY;
-    const priceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
-    const discountRate = this.getDiscountRate(priceLevel);
+    const requestedPriceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
+    const customDiscount = this.resolveCustomDiscount(membership.role, dto);
+    const priceLevel = customDiscount ? SalesOrderPriceLevel.REGULAR : requestedPriceLevel;
+    const discountRate = customDiscount?.rate ?? this.getDiscountRate(priceLevel);
+    const waitsForDiscountApproval = customDiscount?.requiresApproval ?? false;
     const paymentMode = dto.paymentMode ?? SalePaymentMode.CASH;
     const electronicInvoiceRequested =
       destination === SalesOrderDestination.CASH_SALE && dto.electronicInvoiceRequested === true;
@@ -210,12 +220,6 @@ export class OrdersService {
       const ecfRecipientEmail = electronicInvoiceRequested
         ? dto.ecfRecipientEmail?.trim().toLowerCase() || null
         : null;
-
-      if (electronicInvoiceRequested && !ecfRecipientEmail) {
-        throw new BadRequestException(
-          'Indica el correo del cliente para enviar la copia de la factura electrónica.',
-        );
-      }
 
       const customer = dto.customerId
         ? await tx.customer.findFirst({
@@ -240,24 +244,32 @@ export class OrdersService {
         tx,
         priceLevel,
         inventorySource,
+        discountRate,
       );
       const isQuotation = destination === SalesOrderDestination.QUOTATION;
       const isCredit = paymentMode === SalePaymentMode.CREDIT;
       const initialPaymentOption = isCredit ? dto.initialPaymentOption : undefined;
-      const initialPaymentRate = isCredit
-        ? this.getInitialPaymentRate(initialPaymentOption!)
-        : new Prisma.Decimal(0);
-      const initialPaymentAmount = computed.total.mul(initialPaymentRate).toDecimalPlaces(2);
+      const initialPayment = isCredit
+        ? this.resolveInitialPayment(
+            computed.total,
+            initialPaymentOption!,
+            dto.customInitialPaymentAmount,
+          )
+        : { rate: new Prisma.Decimal(0), amount: new Prisma.Decimal(0) };
+      const initialPaymentRate = initialPayment.rate;
+      const initialPaymentAmount = initialPayment.amount;
       const creditTermOption = isCredit ? dto.creditTermOption : undefined;
       const creditTerms =
         isCredit && customer
           ? this.resolveCreditTerms(customer.creditTermDays, creditTermOption!, dto.customDueDate)
           : null;
       const waitsForCreditApproval = isCredit && !isQuotation;
+      const waitsForApproval = waitsForCreditApproval || waitsForDiscountApproval;
 
       if (
         !isQuotation &&
         !isCredit &&
+        !waitsForDiscountApproval &&
         inventorySource === ProductInventoryDestination.SALES_INVENTORY
       ) {
         await this.reserveStockForOrder(tenantId, computed.items, tx);
@@ -284,10 +296,10 @@ export class OrdersService {
           electronicInvoiceRequested,
           ecfRecipientEmail,
           orderNumber: this.generateOrderNumber(isQuotation),
-          status: isQuotation
-            ? SalesOrderStatus.QUOTATION
-            : waitsForCreditApproval
-              ? SalesOrderStatus.CREATED
+          status: waitsForApproval
+            ? SalesOrderStatus.CREATED
+            : isQuotation
+              ? SalesOrderStatus.QUOTATION
               : SalesOrderStatus.SENT_TO_CASHIER,
           priceLevel,
           discountRate,
@@ -305,18 +317,18 @@ export class OrdersService {
           creditRequestNote: isCredit ? dto.creditRequestNote?.trim() || null : null,
           notes: dto.notes?.trim() || undefined,
           createdById: user.id,
-          sentToCashierAt: isQuotation || waitsForCreditApproval ? undefined : now,
+          sentToCashierAt: isQuotation || waitsForApproval ? undefined : now,
           items: {
             create: computed.items.map((item) => ({
-              productId: item.product.id,
-              sku: item.product.sku,
-              barcode: item.product.barcode,
-              description: item.product.name,
+              productId: item.productId,
+              sku: item.sku,
+              barcode: item.barcode,
+              description: item.description,
               quantity: item.quantity,
               reservedQuantity: isQuotation || isCredit ? 0 : item.reservedQuantity,
               unitPrice: item.unitPrice,
               discountTotal: item.discountTotal,
-              taxRate: item.product.taxRate,
+              taxRate: item.taxRate,
               taxTotal: item.taxTotal,
               subtotal: item.subtotal,
               total: item.total,
@@ -344,6 +356,18 @@ export class OrdersService {
                 },
               }
             : {}),
+          ...(waitsForDiscountApproval && customDiscount
+            ? {
+                discountApproval: {
+                  create: {
+                    tenantId,
+                    requestedRate: customDiscount.rate,
+                    requestNote: dto.notes?.trim() || undefined,
+                    requestedById: user.id,
+                  },
+                },
+              }
+            : {}),
         },
         include: this.orderInclude(),
       });
@@ -360,7 +384,7 @@ export class OrdersService {
         },
       ];
 
-      if (!isQuotation && !waitsForCreditApproval) {
+      if (!isQuotation && !waitsForApproval) {
         activityLogs.push({
           tenantId,
           userId: user.id,
@@ -381,7 +405,7 @@ export class OrdersService {
   async claim(tenantId: string, user: AuthenticatedUser, id: string, dto: ClaimSalesOrderDto) {
     const membership = await this.ensureCanUsePosForOrders(tenantId, user);
 
-    const cashSession = await this.findOpenCashSessionForUser(tenantId, user.id, dto.cashSessionId);
+    const cashSession = await this.findOpenCashSession(tenantId, dto.cashSessionId);
     const now = new Date();
     const claimExpiresAt = new Date(now.getTime() + claimTtlMs);
 
@@ -435,7 +459,7 @@ export class OrdersService {
         throw new BadRequestException('Sales order is already claimed by another cashier.');
       }
 
-      await this.lockOpenCashSessionForUser(tx, tenantId, user.id, cashSession.id);
+      await this.lockOpenCashSession(tx, tenantId, cashSession.id);
       const order = await tx.salesOrder.findUniqueOrThrow({
         where: { id },
         select: {
@@ -576,7 +600,9 @@ export class OrdersService {
             adminRoles.includes(membership.role))) ||
         (order.claimedById === user.id &&
           order.status === SalesOrderStatus.IN_CASHIER &&
-          (membership.role === Role.CASHIER || membership.canUsePos));
+          (membership.role === Role.CASHIER ||
+            membership.role === Role.ORDER_TAKER ||
+            membership.canUsePos));
 
       if (!canCancel) {
         throw new ForbiddenException(
@@ -632,6 +658,20 @@ export class OrdersService {
           },
         });
       }
+      if (
+        order.discountApproval &&
+        order.discountApproval.status === CreditApprovalStatus.PENDING
+      ) {
+        await tx.discountApproval.update({
+          where: { id: order.discountApproval.id },
+          data: {
+            status: CreditApprovalStatus.CANCELLED,
+            decidedById: user.id,
+            decidedAt: new Date(),
+            decisionNote: dto?.reason?.trim() || 'Orden cancelada',
+          },
+        });
+      }
 
       const cancelled = await tx.salesOrder.findUniqueOrThrow({
         where: { id },
@@ -662,7 +702,7 @@ export class OrdersService {
   }
 
   async accept(tenantId: string, user: AuthenticatedUser, id: string) {
-    await this.ensureCanTakeOrders(tenantId, user);
+    const membership = await this.ensureCanTakeOrders(tenantId, user);
 
     return this.prisma.$transaction(async (tx) => {
       await this.lockSalesOrder(tx, tenantId, id);
@@ -671,6 +711,7 @@ export class OrdersService {
         include: {
           customer: true,
           creditApproval: true,
+          discountApproval: true,
           items: {
             include: {
               product: true,
@@ -683,8 +724,88 @@ export class OrdersService {
         throw new NotFoundException('Sales order not found for tenant.');
       }
 
+      if (order.status === SalesOrderStatus.CREATED && order.discountApproval) {
+        if (
+          !adminRoles.includes(membership.role) &&
+          order.createdById !== user.id
+        ) {
+          throw new ForbiddenException(
+            'Only the order taker who requested the discount may send this order to cashier.',
+          );
+        }
+        if (order.destination !== SalesOrderDestination.CASH_SALE) {
+          throw new BadRequestException('Only cash-sale orders can be sent directly to cashier.');
+        }
+        if (order.discountApproval.status !== CreditApprovalStatus.APPROVED) {
+          throw new BadRequestException('The custom discount must be approved before sending.');
+        }
+        if (
+          order.paymentMode === SalePaymentMode.CREDIT &&
+          order.creditApproval?.status !== CreditApprovalStatus.APPROVED
+        ) {
+          throw new BadRequestException('The credit sale must be approved before sending.');
+        }
+
+        if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
+          for (const item of [...order.items].sort((left, right) =>
+            (left.productId ?? '').localeCompare(right.productId ?? ''),
+          )) {
+            if (!item.productId || !item.product?.trackInventory) continue;
+            const quantity = Number(item.quantity);
+            const changed = await tx.$executeRaw`
+              UPDATE "Product"
+              SET "reservedStock" = "reservedStock" + ${quantity}
+              WHERE "id" = ${item.productId}
+                AND "tenantId" = ${tenantId}
+                AND ("stock" - "reservedStock") >= ${quantity}
+            `;
+            if (changed !== 1) {
+              throw new BadRequestException(
+                `Insufficient available stock for ${item.description}.`,
+              );
+            }
+            await tx.salesOrderItem.update({
+              where: { id: item.id },
+              data: { reservedQuantity: quantity },
+            });
+          }
+        }
+
+        const now = new Date();
+        const updated = await tx.salesOrder.update({
+          where: { id },
+          data: {
+            status: SalesOrderStatus.SENT_TO_CASHIER,
+            sentToCashierAt: now,
+          },
+          include: this.orderInclude(),
+        });
+        await tx.employeeActivityLog.create({
+          data: {
+            tenantId,
+            userId: user.id,
+            action: EmployeeLogAction.SEND_SALES_ORDER_TO_CASHIER,
+            entity: 'SalesOrder',
+            entityId: id,
+            amount: updated.total,
+            metadata: {
+              orderNumber: updated.orderNumber,
+              sourceDestination: order.destination,
+              sourceStatus: order.status,
+              destination: updated.destination,
+              status: updated.status,
+              clientName: order.clientName,
+              customDiscountPercent: order.discountRate.mul(100).toString(),
+            },
+          },
+        });
+        return updated;
+      }
+
       if (order.status !== SalesOrderStatus.QUOTATION) {
-        throw new BadRequestException('Only quotations can be accepted.');
+        throw new BadRequestException(
+          'Only quotations or approved custom-discount orders can be sent to cashier.',
+        );
       }
 
       if (order.paymentMode === SalePaymentMode.CREDIT) {
@@ -705,7 +826,10 @@ export class OrdersService {
             : undefined,
         );
         const currentBalance = await this.getCustomerCreditBalance(tx, tenantId, order.customer.id);
-        const initialPaymentAmount = order.total.mul(order.initialPaymentRate).toDecimalPlaces(2);
+        const initialPaymentAmount =
+          order.initialPaymentOption === InitialPaymentOption.CUSTOM
+            ? order.initialPaymentAmount
+            : order.total.mul(order.initialPaymentRate).toDecimalPlaces(2);
         const financedAmount = order.total.sub(initialPaymentAmount).toDecimalPlaces(2);
         const now = new Date();
 
@@ -762,23 +886,18 @@ export class OrdersService {
       }
 
       // Convert order items to list format for stock reservation
-      const orderItems = order.items.map((item) => ({
-        productId: item.productId!,
-        quantity: Number(item.quantity),
-      }));
+      const orderItems = order.items.flatMap((item) =>
+        item.productId ? [{ productId: item.productId, quantity: Number(item.quantity) }] : [],
+      );
 
       // Compute order and validate stock
-      const computed = await this.computeOrder(
-        tenantId,
-        orderItems,
-        tx,
-        order.priceLevel,
-        order.inventorySource,
-      );
+      const computed = orderItems.length
+        ? await this.computeOrder(tenantId, orderItems, tx, order.priceLevel, order.inventorySource)
+        : null;
 
       // Reserve stock for the order
       if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
-        await this.reserveStockForOrder(tenantId, computed.items, tx);
+        await this.reserveStockForOrder(tenantId, computed?.items ?? [], tx);
       }
 
       // Update the reservedQuantity of each item
@@ -788,6 +907,7 @@ export class OrdersService {
           where: { id: item.id },
           data: {
             reservedQuantity:
+              item.productId &&
               order.inventorySource === ProductInventoryDestination.SALES_INVENTORY
                 ? reservedQuantity
                 : 0,
@@ -858,6 +978,23 @@ export class OrdersService {
           'Credit initial payment option cannot be changed after creation.',
         );
       }
+      if (
+        order.initialPaymentOption === InitialPaymentOption.CUSTOM &&
+        dto.customInitialPaymentAmount !== undefined &&
+        !new Prisma.Decimal(dto.customInitialPaymentAmount).eq(order.initialPaymentAmount)
+      ) {
+        throw new BadRequestException(
+          'Custom initial payment amount cannot be changed after creation.',
+        );
+      }
+      if (
+        order.initialPaymentOption !== InitialPaymentOption.CUSTOM &&
+        dto.customInitialPaymentAmount !== undefined
+      ) {
+        throw new BadRequestException(
+          'Custom initial payment amount is only valid for the custom option.',
+        );
+      }
       if (dto.creditTermOption && dto.creditTermOption !== order.creditTermOption) {
         throw new BadRequestException('Credit term cannot be changed after creation.');
       }
@@ -883,8 +1020,32 @@ export class OrdersService {
         where: { salesOrderId: id },
       });
 
-      const priceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
-      const discountRate = this.getDiscountRate(priceLevel);
+      const requestedPriceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
+      let priceLevel = requestedPriceLevel;
+      let discountRate = this.getDiscountRate(priceLevel);
+      if (dto.customDiscountPercent !== undefined) {
+        const requestedRate = new Prisma.Decimal(dto.customDiscountPercent)
+          .div(100)
+          .toDecimalPlaces(4);
+        const preservesExistingCustomDiscount =
+          order.priceLevel === SalesOrderPriceLevel.REGULAR &&
+          order.discountRate.gt(0) &&
+          order.discountRate.eq(requestedRate);
+        if (!adminRoles.includes(membership.role) && !preservesExistingCustomDiscount) {
+          throw new ForbiddenException(
+            'Only an administrator may change a custom discount on a quotation.',
+          );
+        }
+        if (dto.requestCustomDiscount) {
+          throw new BadRequestException(
+            'A saved quotation cannot create a new custom discount request.',
+          );
+        }
+        priceLevel = SalesOrderPriceLevel.REGULAR;
+        discountRate = requestedRate;
+      } else if (dto.requestCustomDiscount) {
+        throw new BadRequestException('A custom discount percentage is required.');
+      }
       const inventorySource = dto.inventorySource ?? order.inventorySource;
       if (inventorySource !== order.inventorySource) {
         throw new BadRequestException(
@@ -897,13 +1058,24 @@ export class OrdersService {
         tx,
         priceLevel,
         inventorySource,
+        discountRate,
       );
+      const updatedInitialPayment =
+        order.paymentMode === SalePaymentMode.CREDIT && order.initialPaymentOption
+          ? this.resolveInitialPayment(
+              computed.total,
+              order.initialPaymentOption,
+              order.initialPaymentOption === InitialPaymentOption.CUSTOM
+                ? Number(order.initialPaymentAmount)
+                : undefined,
+            )
+          : null;
 
       // Update order fields
       const updated = await tx.salesOrder.update({
         where: { id },
         data: {
-          clientName: dto.clientName?.trim() || undefined,
+          clientName: dto.clientName?.trim() || null,
           customerId: dto.customerId || null,
           priceLevel,
           discountRate,
@@ -917,8 +1089,10 @@ export class OrdersService {
           total: computed.total,
           initialPaymentAmount:
             order.paymentMode === SalePaymentMode.CREDIT
-              ? computed.total.mul(order.initialPaymentRate).toDecimalPlaces(2)
+              ? updatedInitialPayment?.amount
               : undefined,
+          initialPaymentRate:
+            order.paymentMode === SalePaymentMode.CREDIT ? updatedInitialPayment?.rate : undefined,
           creditRequestNote:
             order.paymentMode === SalePaymentMode.CREDIT
               ? dto.creditRequestNote?.trim() || null
@@ -926,15 +1100,15 @@ export class OrdersService {
           notes: dto.notes?.trim() || null,
           items: {
             create: computed.items.map((item) => ({
-              productId: item.product.id,
-              sku: item.product.sku,
-              barcode: item.product.barcode,
-              description: item.product.name,
+              productId: item.productId,
+              sku: item.sku,
+              barcode: item.barcode,
+              description: item.description,
               quantity: item.quantity,
               reservedQuantity: 0,
               unitPrice: item.unitPrice,
               discountTotal: item.discountTotal,
-              taxRate: item.product.taxRate,
+              taxRate: item.taxRate,
               taxTotal: item.taxTotal,
               subtotal: item.subtotal,
               total: item.total,
@@ -973,58 +1147,116 @@ export class OrdersService {
     client: PrismaService | Prisma.TransactionClient = this.prisma,
     priceLevel: SalesOrderPriceLevel = SalesOrderPriceLevel.REGULAR,
     inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+    discountRateOverride?: Prisma.Decimal,
   ) {
     if (!items.length) {
       throw new BadRequestException('Sales order must include at least one item.');
     }
 
+    const productItems = items.filter((item): item is SalesOrderItemDto & { productId: string } =>
+      Boolean(item.productId?.trim()),
+    );
+    const commonItems = items.filter((item) => !item.productId?.trim());
     const quantitiesByProduct = new Map<string, number>();
-    for (const item of items) {
+    for (const item of productItems) {
       quantitiesByProduct.set(
         item.productId,
         (quantitiesByProduct.get(item.productId) ?? 0) + item.quantity,
       );
     }
 
-    const products = await client.product.findMany({
+    for (const item of commonItems) {
+      if (!item.description?.trim() || !item.unit || item.unitPrice === undefined) {
+        throw new BadRequestException(
+          'Common products require a name, unit, quantity, and unit price.',
+        );
+      }
+    }
+
+    const [tenant, products] = await Promise.all([
+      client.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+      client.product.findMany({
       where: {
         tenantId,
         inventoryDestination: inventorySource,
         id: { in: Array.from(quantitiesByProduct.keys()) },
         status: ProductStatus.ACTIVE,
       },
-    });
+      }),
+    ]);
 
     if (products.length !== quantitiesByProduct.size) {
       throw new NotFoundException('One or more order products do not belong to tenant.');
     }
 
-    const discountRate = this.getDiscountRate(priceLevel);
-    const computedItems: ComputedOrderItem[] = products.map((product) => {
+    const discountRate = discountRateOverride ?? this.getDiscountRate(priceLevel);
+    const computedProductItems: ComputedOrderItem[] = products.map((product) => {
       const quantity = new Prisma.Decimal(quantitiesByProduct.get(product.id) ?? 0);
       const regularUnitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
-      const unitPrice = regularUnitPrice
-        .mul(new Prisma.Decimal(1).sub(discountRate))
-        .toDecimalPlaces(2);
-      const regularSubtotal = quantity.mul(regularUnitPrice).toDecimalPlaces(2);
-      const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
-      const discountTotal = regularSubtotal.sub(subtotal).toDecimalPlaces(2);
-      const taxTotal = subtotal.mul(product.taxRate).toDecimalPlaces(2);
+      const amounts = computeSaleAmounts({
+        advertisedUnitPrice: regularUnitPrice,
+        quantity,
+        taxRate: product.taxRate,
+        discountRate,
+        pricesIncludeTax: tenant.salePricesIncludeTax,
+      });
 
       return {
         product,
+        productId: product.id,
+        sku: product.sku,
+        barcode: product.barcode,
+        description: product.name,
+        unitSnapshot: product.unit,
+        taxRate: product.taxRate,
         quantity,
         reservedQuantity: product.trackInventory ? quantity.toNumber() : 0,
-        unitPrice,
-        discountTotal,
-        subtotal,
-        taxTotal,
-        total: subtotal.add(taxTotal).toDecimalPlaces(2),
+        unitPrice: amounts.unitPrice,
+        discountTotal: amounts.discountTotal,
+        subtotal: amounts.subtotal,
+        taxTotal: amounts.taxTotal,
+        total: amounts.total,
       };
     });
 
+    const commonTaxRate = new Prisma.Decimal('0.18');
+    const computedCommonItems: ComputedOrderItem[] = commonItems.map((item) => {
+      const quantity = new Prisma.Decimal(item.quantity);
+      const regularUnitPrice = new Prisma.Decimal(item.unitPrice!);
+      const amounts = computeSaleAmounts({
+        advertisedUnitPrice: regularUnitPrice,
+        quantity,
+        taxRate: commonTaxRate,
+        discountRate,
+        pricesIncludeTax: false,
+      });
+
+      return {
+        product: null,
+        productId: null,
+        sku: `__COMMON__:${item.unit!}`,
+        barcode: null,
+        description: item.description!.trim(),
+        unitSnapshot: item.unit!,
+        taxRate: commonTaxRate,
+        quantity,
+        reservedQuantity: 0,
+        unitPrice: amounts.unitPrice,
+        discountTotal: amounts.discountTotal,
+        subtotal: amounts.subtotal,
+        taxTotal: amounts.taxTotal,
+        total: amounts.total,
+      };
+    });
+
+    const computedItems = [...computedProductItems, ...computedCommonItems];
+
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
+      if (!item.product) continue;
       const availableStock = item.product.stock - item.product.reservedStock;
 
       if (
@@ -1071,6 +1303,35 @@ export class OrdersService {
     return new Prisma.Decimal(0);
   }
 
+  private resolveCustomDiscount(
+    role: Role,
+    dto: Pick<CreateSalesOrderDto, 'customDiscountPercent' | 'requestCustomDiscount'>,
+  ) {
+    if (dto.customDiscountPercent === undefined) {
+      if (dto.requestCustomDiscount) {
+        throw new BadRequestException('A custom discount percentage is required.');
+      }
+      return null;
+    }
+
+    const rate = new Prisma.Decimal(dto.customDiscountPercent).div(100).toDecimalPlaces(4);
+
+    if (adminRoles.includes(role)) {
+      if (dto.requestCustomDiscount) {
+        throw new BadRequestException('Administrators apply custom discounts directly.');
+      }
+      return { rate, requiresApproval: false };
+    }
+
+    if (role !== Role.ORDER_TAKER || !dto.requestCustomDiscount) {
+      throw new ForbiddenException(
+        'Only an order taker may request a custom discount from an administrator.',
+      );
+    }
+
+    return { rate, requiresApproval: true };
+  }
+
   private validateCreditCustomer(
     customer: {
       status: CustomerStatus;
@@ -1097,6 +1358,7 @@ export class OrdersService {
     if (paymentMode === SalePaymentMode.CASH) {
       if (
         dto.initialPaymentOption !== undefined ||
+        dto.customInitialPaymentAmount !== undefined ||
         dto.creditTermOption !== undefined ||
         dto.customDueDate !== undefined ||
         dto.creditRequestNote !== undefined
@@ -1114,6 +1376,22 @@ export class OrdersService {
     }
     if (
       requireCreditFields &&
+      dto.initialPaymentOption === InitialPaymentOption.CUSTOM &&
+      dto.customInitialPaymentAmount === undefined
+    ) {
+      throw new BadRequestException('Custom initial payment requires an amount.');
+    }
+    if (
+      dto.initialPaymentOption !== undefined &&
+      dto.initialPaymentOption !== InitialPaymentOption.CUSTOM &&
+      dto.customInitialPaymentAmount !== undefined
+    ) {
+      throw new BadRequestException(
+        'Custom initial payment amount is only valid for the custom option.',
+      );
+    }
+    if (
+      requireCreditFields &&
       dto.creditTermOption === CreditTermOption.CUSTOM_DATE &&
       !dto.customDueDate
     ) {
@@ -1128,14 +1406,38 @@ export class OrdersService {
     }
   }
 
-  private getInitialPaymentRate(option: InitialPaymentOption) {
-    const rates: Record<InitialPaymentOption, string> = {
+  private resolveInitialPayment(
+    total: Prisma.Decimal,
+    option: InitialPaymentOption,
+    customAmount?: number,
+  ) {
+    if (option === InitialPaymentOption.CUSTOM) {
+      if (customAmount === undefined) {
+        throw new BadRequestException('Custom initial payment requires an amount.');
+      }
+      const amount = new Prisma.Decimal(customAmount).toDecimalPlaces(2);
+      if (amount.lte(0) || amount.gt(total)) {
+        throw new BadRequestException(
+          'Custom initial payment must be greater than zero and cannot exceed the order total.',
+        );
+      }
+      return {
+        rate: amount.div(total).toDecimalPlaces(4),
+        amount,
+      };
+    }
+
+    const rates: Partial<Record<InitialPaymentOption, string>> = {
       [InitialPaymentOption.NONE]: '0',
       [InitialPaymentOption.PERCENT_30]: '0.30',
       [InitialPaymentOption.PERCENT_50]: '0.50',
       [InitialPaymentOption.PERCENT_70]: '0.70',
     };
-    return new Prisma.Decimal(rates[option]);
+    const rate = new Prisma.Decimal(rates[option] ?? 0);
+    return {
+      rate,
+      amount: total.mul(rate).toDecimalPlaces(2),
+    };
   }
 
   private resolveCreditTerms(
@@ -1198,8 +1500,10 @@ export class OrdersService {
     items: ComputedOrderItem[],
     tx: Prisma.TransactionClient,
   ) {
-    for (const item of [...items].sort((a, b) => a.product.id.localeCompare(b.product.id))) {
-      if (!item.product.trackInventory || item.reservedQuantity <= 0) {
+    for (const item of [...items].sort((a, b) =>
+      (a.productId ?? '').localeCompare(b.productId ?? ''),
+    )) {
+      if (!item.product || !item.product.trackInventory || item.reservedQuantity <= 0) {
         continue;
       }
 
@@ -1236,10 +1540,9 @@ export class OrdersService {
     }
   }
 
-  private async lockOpenCashSessionForUser(
+  private async lockOpenCashSession(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    userId: string,
     cashSessionId: string,
   ) {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
@@ -1247,12 +1550,11 @@ export class OrdersService {
       FROM "CashSession"
       WHERE "id" = ${cashSessionId}
         AND "tenantId" = ${tenantId}
-        AND "openedById" = ${userId}
         AND "status" = 'OPEN'::"CashSessionStatus"
       FOR UPDATE
     `;
     if (rows.length !== 1) {
-      throw new BadRequestException('Selected cash session is no longer open for this cashier.');
+      throw new BadRequestException('Selected cash session is no longer open.');
     }
   }
 
@@ -1344,7 +1646,8 @@ export class OrdersService {
     if (
       !adminRoles.includes(membership.role) &&
       !membership.canUsePos &&
-      membership.role !== Role.CASHIER
+      membership.role !== Role.CASHIER &&
+      membership.role !== Role.ORDER_TAKER
     ) {
       throw new ForbiddenException('Employee does not have POS access.');
     }
@@ -1371,15 +1674,10 @@ export class OrdersService {
     }
   }
 
-  private async findOpenCashSessionForUser(
-    tenantId: string,
-    userId: string,
-    cashSessionId?: string,
-  ) {
+  private async findOpenCashSession(tenantId: string, cashSessionId?: string) {
     const session = await this.prisma.cashSession.findFirst({
       where: {
         tenantId,
-        openedById: userId,
         status: CashSessionStatus.OPEN,
         ...(cashSessionId ? { id: cashSessionId } : {}),
       },
@@ -1391,9 +1689,7 @@ export class OrdersService {
     });
 
     if (!session) {
-      throw new BadRequestException(
-        'An open cash session for this cashier is required to claim sales orders.',
-      );
+      throw new BadRequestException('An open cash session is required to claim sales orders.');
     }
 
     return session;
@@ -1434,6 +1730,18 @@ export class OrdersService {
 
   private orderInclude() {
     return {
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+          commercialName: true,
+          legalName: true,
+          rnc: true,
+          email: true,
+          phone: true,
+          address: true,
+        },
+      },
       customer: true,
       createdBy: { select: { id: true, name: true, email: true } },
       completedBy: { select: { id: true, name: true, email: true } },
@@ -1449,6 +1757,12 @@ export class OrdersService {
           requestedBy: { select: { id: true, name: true, email: true } },
           approvedBy: { select: { id: true, name: true, email: true } },
           rejectedBy: { select: { id: true, name: true, email: true } },
+        },
+      },
+      discountApproval: {
+        include: {
+          requestedBy: { select: { id: true, name: true, email: true } },
+          decidedBy: { select: { id: true, name: true, email: true } },
         },
       },
       items: {
@@ -1473,10 +1787,6 @@ export class OrdersService {
   }
 
   private validateQuotationDetails(dto: CreateSalesOrderDto) {
-    if (!dto.clientName?.trim()) {
-      throw new BadRequestException('Quotation requires client name.');
-    }
-
     this.validateQuotationDocument(dto);
   }
 
@@ -1542,10 +1852,12 @@ export class OrdersService {
       itemCount: items.length,
       quantityTotal: items.reduce((total, item) => total + item.quantity.toNumber(), 0),
       items: items.map((item) => ({
-        productId: item.product.id,
-        sku: item.product.sku,
-        barcode: item.product.barcode,
-        name: item.product.name,
+        productId: item.productId,
+        sku: item.sku,
+        barcode: item.barcode,
+        name: item.description,
+        unit: item.unitSnapshot,
+        commonProduct: item.productId === null,
         quantity: item.quantity.toNumber(),
         total: item.total.toNumber(),
       })),

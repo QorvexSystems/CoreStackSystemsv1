@@ -1,17 +1,17 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Barcode, CheckCircle2, Minus, PackageCheck, Plus, Search, X } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, Minus, PackageCheck, Plus, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { confirmWarehouseOrderDispatch, type WarehousePendingDispatch } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import { trapModalFocus } from './modal-focus';
+import { BarcodeInput } from './pos/barcode-input';
 import { formatQuantity } from './pos/pos-utils';
 import { useCurrentSession } from './session-required';
 
@@ -31,10 +31,13 @@ export function WarehouseOrderDispatchDialog({
   const queryClient = useQueryClient();
   const dialogRef = useRef<HTMLDivElement>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const onCloseRef = useRef(onClose);
   const [mounted, setMounted] = useState(false);
   const [note, setNote] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [scannerEnabled, setScannerEnabled] = useState(false);
+  const [scannerMessage, setScannerMessage] = useState<string | null>(null);
   const [verified, setVerified] = useState<Record<string, number>>({});
 
   useEffect(() => setMounted(true), []);
@@ -45,6 +48,8 @@ export function WarehouseOrderDispatchDialog({
     if (!order) return;
     setNote('');
     setBarcode('');
+    setScannerEnabled(false);
+    setScannerMessage(null);
     setVerified({});
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -61,15 +66,19 @@ export function WarehouseOrderDispatchDialog({
     };
   }, [order]);
 
+  const inventoryItems = useMemo(
+    () => order?.items.filter((item) => item.productId) ?? [],
+    [order],
+  );
   const verificationComplete = useMemo(
     () =>
       Boolean(
         order?.items.length &&
-        order.items.every(
+        inventoryItems.every(
           (item) => Math.abs((verified[item.id] ?? 0) - Number(item.quantity)) < 0.0005,
         ),
       ),
-    [order, verified],
+    [inventoryItems, order, verified],
   );
 
   const mutation = useMutation({
@@ -82,7 +91,7 @@ export function WarehouseOrderDispatchDialog({
         session.tenantId,
         session.accessToken,
         order.id,
-        order.items.map((item) => ({
+        inventoryItems.map((item) => ({
           orderItemId: item.id,
           quantity: verified[item.id] ?? 0,
         })),
@@ -104,17 +113,12 @@ export function WarehouseOrderDispatchDialog({
 
   if (!mounted || !order) return null;
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    mutation.mutate();
-  }
-
   function scanProduct(value: string) {
     if (!order) return;
     const code = normalizeCode(value);
     if (!code) return;
 
-    const matchingItem = order.items.find((item) => {
+    const matchingItem = inventoryItems.find((item) => {
       const required = Number(item.quantity);
       const current = verified[item.id] ?? 0;
       return (
@@ -124,10 +128,15 @@ export function WarehouseOrderDispatchDialog({
     });
 
     if (!matchingItem) {
-      const belongsToCompletedLine = order.items.some((item) =>
+      const belongsToCompletedLine = inventoryItems.some((item) =>
         [item.barcode, item.sku].some((candidate) => normalizeCode(candidate ?? '') === code),
       );
       toast.error(
+        belongsToCompletedLine
+          ? 'La cantidad requerida de este producto ya está completa.'
+          : 'Este código no pertenece a la orden.',
+      );
+      setScannerMessage(
         belongsToCompletedLine
           ? 'La cantidad requerida de este producto ya está completa.'
           : 'Este código no pertenece a la orden.',
@@ -137,6 +146,7 @@ export function WarehouseOrderDispatchDialog({
     }
 
     changeVerifiedQuantity(matchingItem.id, 1);
+    setScannerMessage(`${matchingItem.description} agregado a la preparación.`);
     toast.success('Producto verificado', {
       id: `warehouse-scan-${order.id}`,
       description: matchingItem.description,
@@ -186,10 +196,7 @@ export function WarehouseOrderDispatchDialog({
             <X className="h-5 w-5" />
           </Button>
         </header>
-        <form
-          className="surface-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-5"
-          onSubmit={submit}
-        >
+        <div className="surface-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           <div className="rounded-lg border bg-muted/30 p-3 text-sm">
             <div className="flex justify-between gap-4">
               <span className="text-muted-foreground">Cliente</span>
@@ -212,39 +219,34 @@ export function WarehouseOrderDispatchDialog({
                 Usa la pistola, escribe el código o abre la cámara. Cada lectura suma una unidad.
               </p>
             </div>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Barcode className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  ref={barcodeInputRef}
-                  value={barcode}
-                  onChange={(event) => setBarcode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      scanProduct(barcode);
-                    }
-                  }}
-                  placeholder="Escanea código de barras o SKU"
-                  className="h-11 pl-9"
-                  autoComplete="off"
-                />
-              </div>
-              <Button
-                type="button"
-                size="icon"
-                className="h-11 w-11"
-                onClick={() => scanProduct(barcode)}
-                aria-label="Verificar código"
-              >
-                <Search className="h-4 w-4" />
-              </Button>
-            </div>
+            <BarcodeInput
+              barcode={barcode}
+              scannerEnabled={scannerEnabled}
+              cameraActive={false}
+              scannerMessage={scannerMessage}
+              barcodeInputRef={barcodeInputRef}
+              videoRef={videoRef}
+              isPending={mutation.isPending}
+              keepFocus
+              showCamera={false}
+              onBarcodeChange={setBarcode}
+              onSubmit={scanProduct}
+              onEnableScanner={() => {
+                setScannerEnabled(true);
+                setScannerMessage('Lector activo. Escanea los productos de forma continua.');
+                window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
+              }}
+              onDisableScanner={() => {
+                setScannerEnabled(false);
+                setScannerMessage('Lector desactivado.');
+              }}
+              onStartCamera={() => undefined}
+            />
             <BarcodeCameraScanner onDetected={scanProduct} label="Usar cámara" />
           </div>
 
           <div className="divide-y rounded-lg border">
-            {order.items.map((item) => (
+            {inventoryItems.map((item) => (
               <div
                 key={item.id}
                 className="flex flex-col gap-3 px-3 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
@@ -286,6 +288,11 @@ export function WarehouseOrderDispatchDialog({
                 </div>
               </div>
             ))}
+            {order.items.length > inventoryItems.length ? (
+              <div className="bg-blue-50 px-3 py-3 text-xs text-blue-800">
+                Los productos comunes de esta venta no requieren despacho ni afectan el almacén.
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-2">
@@ -309,12 +316,16 @@ export function WarehouseOrderDispatchDialog({
             <Button type="button" variant="outline" onClick={onClose} disabled={mutation.isPending}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={mutation.isPending || !verificationComplete}>
+            <Button
+              type="button"
+              disabled={mutation.isPending || !verificationComplete}
+              onClick={() => mutation.mutate()}
+            >
               <CheckCircle2 className="h-4 w-4" />
               {mutation.isPending ? 'Confirmando...' : 'Confirmar despacho'}
             </Button>
           </div>
-        </form>
+        </div>
       </div>
     </div>,
     document.body,

@@ -21,6 +21,7 @@ import {
   InvoiceDocumentType,
   InvoiceFiscalStatus,
   InvoiceStatus,
+  InitialPaymentOption,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -32,12 +33,14 @@ import {
   SalePaymentMode,
   SalesOrderDestination,
   SalesOrderStatus,
+  TaxCategory,
   WarehouseMovementType,
 } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
 import { getBarcodeLookupCandidates } from '../../common/utils/barcode';
 import { businessDateKey } from '../../common/utils/business-date';
+import { computeSaleAmounts } from '../../common/utils/sale-pricing';
 import {
   normalizeDominicanDocument,
   validateDominicanDocument,
@@ -50,11 +53,12 @@ const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMI
 const claimTtlMs = 30 * 60 * 1000;
 
 type ComputedSaleLine = {
-  product: Product;
-  productId: string;
+  product: Product | null;
+  productId: string | null;
   sku: string | null;
   barcode: string | null;
   description: string;
+  unitSnapshot: ProductUnit;
   quantity: Prisma.Decimal;
   reservedQuantity: number;
   unitPrice: Prisma.Decimal;
@@ -63,6 +67,11 @@ type ComputedSaleLine = {
   taxTotal: Prisma.Decimal;
   subtotal: Prisma.Decimal;
   total: Prisma.Decimal;
+};
+
+type StoreCreditAllocation = {
+  id: string;
+  amount: Prisma.Decimal;
 };
 
 @Injectable()
@@ -125,6 +134,54 @@ export class PosService {
     return product;
   }
 
+  async lookupStoreCredit(tenantId: string, user: AuthenticatedUser, q: string) {
+    await this.ensureCanUsePos(tenantId, user);
+    const query = q.trim();
+    if (!query) {
+      throw new BadRequestException('Invoice number is required for store credit lookup.');
+    }
+
+    const sourceInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        tenantId,
+        OR: [{ id: query }, { invoiceNumber: { equals: query, mode: 'insensitive' } }],
+      },
+      select: { id: true, invoiceNumber: true },
+    });
+    if (!sourceInvoice) {
+      throw new NotFoundException('Invoice not found for store credit lookup.');
+    }
+
+    const credits = await this.prisma.storeCredit.findMany({
+      where: { tenantId, sourceInvoiceId: sourceInvoice.id },
+      orderBy: [{ expiresAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!credits.length) {
+      throw new NotFoundException('This invoice has no store credit.');
+    }
+
+    const now = new Date();
+    const activeCredits = credits.filter(
+      (credit) => credit.remainingAmount.gt(0) && credit.expiresAt.getTime() >= now.getTime(),
+    );
+    if (!activeCredits.length) {
+      if (credits.some((credit) => credit.remainingAmount.gt(0))) {
+        throw new BadRequestException('Store credit expired after 30 days.');
+      }
+      throw new BadRequestException('Store credit has already been exhausted.');
+    }
+
+    return {
+      sourceInvoiceId: sourceInvoice.id,
+      invoiceNumber: sourceInvoice.invoiceNumber,
+      availableAmount: activeCredits
+        .reduce((sum, credit) => sum.add(credit.remainingAmount), new Prisma.Decimal(0))
+        .toDecimalPlaces(2)
+        .toNumber(),
+      expiresAt: activeCredits[0].expiresAt,
+    };
+  }
+
   async previewSale(tenantId: string, user: AuthenticatedUser, dto: CompleteSaleDto) {
     await this.ensureCanCreateDirectSale(tenantId, user);
     const computed = await this.computeSale(tenantId, dto.items ?? []);
@@ -137,10 +194,10 @@ export class PosService {
       taxTotal: computed.taxTotal.toNumber(),
       total: computed.total.toNumber(),
       items: computed.items.map((item) => ({
-        productId: item.product.id,
-        name: item.product.name,
-        sku: item.product.sku,
-        barcode: item.product.barcode,
+        productId: item.productId,
+        name: item.description,
+        sku: item.sku,
+        barcode: item.barcode,
         quantity: item.quantity.toNumber(),
         unitPrice: item.unitPrice.toNumber(),
         discountTotal: item.discountTotal.toNumber(),
@@ -160,12 +217,7 @@ export class PosService {
     this.ensureSupportedPaymentMethod(dto.paymentMethod);
 
     const completedSale = await this.runSerializable(async (tx) => {
-      const cashSession = await this.findCashSessionForSale(
-        tx,
-        tenantId,
-        user.id,
-        dto.cashSessionId,
-      );
+      const cashSession = await this.findCashSessionForSale(tx, tenantId, dto.cashSessionId);
       const order = dto.orderId
         ? await this.claimOrderForSale(tx, tenantId, user.id, cashSession.id, dto.orderId)
         : null;
@@ -269,6 +321,14 @@ export class PosService {
       }
 
       const isCreditSale = order?.paymentMode === SalePaymentMode.CREDIT;
+      if (
+        order?.discountApproval &&
+        order.discountApproval.status !== CreditApprovalStatus.APPROVED
+      ) {
+        throw new BadRequestException(
+          'Custom discount requires administrator approval before checkout.',
+        );
+      }
       if (isCreditSale && customerId) {
         await this.lockCustomer(tx, tenantId, customerId);
       }
@@ -302,9 +362,10 @@ export class PosService {
         ) {
           throw new BadRequestException('Credit approval is inconsistent with the sales order.');
         }
-        const expectedInitialPayment = computed.total
-          .mul(order.initialPaymentRate)
-          .toDecimalPlaces(2);
+        const expectedInitialPayment =
+          order.initialPaymentOption === InitialPaymentOption.CUSTOM
+            ? order.initialPaymentAmount
+            : computed.total.mul(order.initialPaymentRate).toDecimalPlaces(2);
         const expectedFinancedAmount = computed.total
           .sub(expectedInitialPayment)
           .toDecimalPlaces(2);
@@ -347,16 +408,26 @@ export class PosService {
         }
       }
 
-      await this.lockOpenCashSessionForUser(tx, tenantId, user.id, cashSession.id);
+      await this.lockOpenCashSession(tx, tenantId, cashSession.id);
       const sequence = await this.reserveFiscalSequence(tx, tenantId, documentType);
       const requiredPayment = isCreditSale ? order.initialPaymentAmount : computed.total;
+      const storeCredit = dto.storeCreditInvoiceNumber?.trim()
+        ? await this.resolveStoreCreditForCheckout(
+            tx,
+            tenantId,
+            dto.storeCreditInvoiceNumber,
+            requiredPayment,
+          )
+        : null;
+      const storeCreditApplied = storeCredit?.appliedAmount ?? new Prisma.Decimal(0);
+      const amountToCollect = requiredPayment.sub(storeCreditApplied).toDecimalPlaces(2);
       const payment = this.getPaymentAmounts(
         dto.amountReceived,
         computed.total,
         dto.paymentMethod,
-        requiredPayment,
+        amountToCollect,
       );
-      const paidAmount = payment.paidAmount;
+      const paidAmount = payment.paidAmount.add(storeCreditApplied).toDecimalPlaces(2);
       const balance = computed.total.sub(paidAmount).toDecimalPlaces(2);
       const status = this.getInvoiceStatus(paidAmount, computed.total);
       const issuedAt = new Date();
@@ -369,6 +440,10 @@ export class PosService {
       const tenant = isElectronicDocument
         ? await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })
         : null;
+      const invoicePaymentMethod =
+        storeCreditApplied.gt(0) && payment.paidAmount.isZero()
+          ? PaymentMethod.CREDIT
+          : dto.paymentMethod;
 
       const invoice = await tx.invoice.create({
         data: {
@@ -391,7 +466,7 @@ export class PosService {
           changeAmount: payment.changeAmount,
           balance,
           paymentMode: isCreditSale ? SalePaymentMode.CREDIT : SalePaymentMode.CASH,
-          paymentMethod: dto.paymentMethod,
+          paymentMethod: invoicePaymentMethod,
           issuedById: user.id,
           cashSessionId: cashSession.id,
           issuedAt,
@@ -421,7 +496,7 @@ export class PosService {
       });
 
       for (const item of [...computed.items].sort((a, b) =>
-        a.productId.localeCompare(b.productId),
+        (a.productId ?? '').localeCompare(b.productId ?? ''),
       )) {
         await this.applyInventoryForSale(tx, {
           tenantId,
@@ -434,13 +509,13 @@ export class PosService {
         });
       }
 
-      if (paidAmount.gt(0)) {
+      if (payment.paidAmount.gt(0)) {
         await tx.payment.create({
           data: {
             tenantId,
             invoiceId: invoice.id,
             method: dto.paymentMethod,
-            amount: paidAmount,
+            amount: payment.paidAmount,
             status: PaymentStatus.COMPLETED,
             userId: user.id,
             cashSessionId: cashSession.id,
@@ -454,11 +529,54 @@ export class PosService {
             cashSessionId: cashSession.id,
             userId: user.id,
             type: CashMovementType.SALE_PAYMENT,
-            amount: paidAmount,
+            amount: payment.paidAmount,
             method: dto.paymentMethod,
             reason: 'Pago de venta POS',
             reference: invoice.invoiceNumber,
             invoiceId: invoice.id,
+          },
+        });
+      }
+
+      if (storeCredit && storeCreditApplied.gt(0)) {
+        for (const allocation of storeCredit.allocations) {
+          const updated = await tx.storeCredit.updateMany({
+            where: {
+              id: allocation.id,
+              tenantId,
+              remainingAmount: { gte: allocation.amount },
+              expiresAt: { gte: issuedAt },
+            },
+            data: { remainingAmount: { decrement: allocation.amount } },
+          });
+          if (updated.count !== 1) {
+            throw new BadRequestException(
+              'Store credit changed during checkout. Search the invoice again.',
+            );
+          }
+          await tx.storeCreditRedemption.create({
+            data: {
+              tenantId,
+              storeCreditId: allocation.id,
+              invoiceId: invoice.id,
+              redeemedById: user.id,
+              cashSessionId: cashSession.id,
+              amount: allocation.amount,
+            },
+          });
+        }
+
+        await tx.payment.create({
+          data: {
+            tenantId,
+            invoiceId: invoice.id,
+            method: PaymentMethod.CREDIT,
+            amount: storeCreditApplied,
+            status: PaymentStatus.COMPLETED,
+            receiptNumber: `CRED-${storeCredit.invoiceNumber}-${invoiceNumber}`,
+            userId: user.id,
+            cashSessionId: cashSession.id,
+            paidAt: issuedAt,
           },
         });
       }
@@ -477,7 +595,9 @@ export class PosService {
             metadata: {
               invoiceNumber,
               eNcf,
-              paymentMethod: dto.paymentMethod,
+              paymentMethod: invoicePaymentMethod,
+              storeCreditInvoiceNumber: storeCredit?.invoiceNumber,
+              storeCreditApplied: storeCreditApplied.toString(),
               amountReceived: payment.amountReceived.toString(),
               changeAmount: payment.changeAmount.toString(),
               orderNumber: order?.orderNumber,
@@ -498,6 +618,9 @@ export class PosService {
             metadata: {
               invoiceNumber,
               documentType,
+              paymentMethod: invoicePaymentMethod,
+              storeCreditInvoiceNumber: storeCredit?.invoiceNumber,
+              storeCreditApplied: storeCreditApplied.toString(),
               amountReceived: payment.amountReceived.toString(),
               changeAmount: payment.changeAmount.toString(),
               orderNumber: order?.orderNumber,
@@ -582,15 +705,16 @@ export class PosService {
                 : null,
               recipientEmail: order?.ecfRecipientEmail ?? customer?.email ?? tenant.email,
               cashRegisterName: cashSession.cashRegister.name,
-              paymentMethod: dto.paymentMethod,
+              paymentMethod: invoicePaymentMethod,
               paymentMode: isCreditSale ? 'CREDIT' : 'CASH',
               subtotal: computed.subtotal,
               taxTotal: computed.taxTotal,
               total: computed.total,
               items: computed.items.map((item) => ({
                 ...item,
-                isService: item.product.unit === ProductUnit.SERVICE,
-                taxCategory: item.product.taxCategory,
+                sku: item.productId ? item.sku : null,
+                isService: item.unitSnapshot === ProductUnit.SERVICE,
+                taxCategory: item.product?.taxCategory ?? TaxCategory.ITBIS_18,
               })),
             })
           : null;
@@ -755,6 +879,7 @@ export class PosService {
       include: {
         customer: true,
         creditApproval: true,
+        discountApproval: true,
         items: {
           include: {
             product: true,
@@ -781,7 +906,12 @@ export class PosService {
       );
     }
 
-    const products = await client.product.findMany({
+    const [tenant, products] = await Promise.all([
+      client.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+      client.product.findMany({
       where: {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
@@ -790,7 +920,8 @@ export class PosService {
         },
         status: ProductStatus.ACTIVE,
       },
-    });
+      }),
+    ]);
 
     if (products.length !== quantitiesByProduct.size) {
       throw new NotFoundException('One or more POS products do not belong to tenant.');
@@ -798,10 +929,13 @@ export class PosService {
 
     const computedItems: ComputedSaleLine[] = products.map((product) => {
       const quantity = new Prisma.Decimal(quantitiesByProduct.get(product.id) ?? 0);
-      const unitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
-      const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
-      const discountTotal = new Prisma.Decimal(0);
-      const taxTotal = subtotal.mul(product.taxRate).toDecimalPlaces(2);
+      const advertisedUnitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
+      const amounts = computeSaleAmounts({
+        advertisedUnitPrice,
+        quantity,
+        taxRate: product.taxRate,
+        pricesIncludeTax: tenant.salePricesIncludeTax,
+      });
 
       return {
         product,
@@ -809,33 +943,36 @@ export class PosService {
         sku: product.sku,
         barcode: product.barcode,
         description: product.name,
+        unitSnapshot: product.unit,
         quantity,
         reservedQuantity: 0,
-        unitPrice,
-        discountTotal,
+        unitPrice: amounts.unitPrice,
+        discountTotal: amounts.discountTotal,
         taxRate: product.taxRate,
-        subtotal,
-        taxTotal,
-        total: subtotal.add(taxTotal).toDecimalPlaces(2),
+        subtotal: amounts.subtotal,
+        taxTotal: amounts.taxTotal,
+        total: amounts.total,
       };
     });
 
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
-      const availableStock = item.product.stock - item.product.reservedStock;
+      const product = item.product;
+      if (!product) {
+        throw new BadRequestException('Direct POS sales require an inventory product.');
+      }
+      const availableStock = product.stock - product.reservedStock;
 
       if (
-        item.product.trackInventory &&
-        requiresWholeQuantity(item.product.unit) &&
+        product.trackInventory &&
+        requiresWholeQuantity(product.unit) &&
         !Number.isInteger(quantity)
       ) {
-        throw new BadRequestException(
-          `Tracked product ${item.product.name} requires whole quantities.`,
-        );
+        throw new BadRequestException(`Tracked product ${product.name} requires whole quantities.`);
       }
 
-      if (item.product.trackInventory && availableStock < quantity) {
-        throw new BadRequestException(`Insufficient available stock for ${item.product.name}.`);
+      if (product.trackInventory && availableStock < quantity) {
+        throw new BadRequestException(`Insufficient available stock for ${product.name}.`);
       }
     }
 
@@ -875,16 +1012,13 @@ export class PosService {
     }>;
   }) {
     const computedItems: ComputedSaleLine[] = order.items.map((item) => {
-      if (!item.productId || !item.product) {
-        throw new BadRequestException('Sales order contains an unavailable product.');
-      }
-
       return {
         product: item.product,
         productId: item.productId,
         sku: item.sku,
         barcode: item.barcode,
         description: item.description,
+        unitSnapshot: item.product?.unit ?? this.getCommonProductUnit(item.sku),
         quantity: item.quantity,
         reservedQuantity: item.reservedQuantity,
         unitPrice: item.unitPrice,
@@ -898,6 +1032,8 @@ export class PosService {
 
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
+
+      if (!item.product) continue;
 
       if (
         item.product.trackInventory &&
@@ -937,6 +1073,13 @@ export class PosService {
     };
   }
 
+  private getCommonProductUnit(sku: string | null) {
+    const value = sku?.startsWith('__COMMON__:') ? sku.slice('__COMMON__:'.length) : '';
+    return Object.values(ProductUnit).includes(value as ProductUnit)
+      ? (value as ProductUnit)
+      : ProductUnit.UNIT;
+  }
+
   private async applyInventoryForSale(
     tx: Prisma.TransactionClient,
     args: {
@@ -950,6 +1093,10 @@ export class PosService {
     },
   ) {
     const { tenantId, item, invoiceId, invoiceNumber, userId, fromOrder, inventorySource } = args;
+
+    if (!item.product || !item.productId) {
+      return;
+    }
 
     const quantity = item.quantity.toNumber();
     if (inventorySource === ProductInventoryDestination.WAREHOUSE) {
@@ -1170,16 +1317,86 @@ export class PosService {
     return `${prefix}${String(number).padStart(width, '0')}`;
   }
 
+  private async resolveStoreCreditForCheckout(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    invoiceReference: string,
+    requiredPayment: Prisma.Decimal,
+  ) {
+    if (requiredPayment.lte(0)) {
+      throw new BadRequestException('There is no amount due to apply store credit to.');
+    }
+
+    const sourceInvoice = await tx.invoice.findFirst({
+      where: {
+        tenantId,
+        OR: [
+          { id: invoiceReference },
+          { invoiceNumber: { equals: invoiceReference, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, invoiceNumber: true },
+    });
+    if (!sourceInvoice) {
+      throw new NotFoundException('Invoice not found for store credit lookup.');
+    }
+
+    const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "StoreCredit"
+      WHERE "tenantId" = ${tenantId}
+        AND "sourceInvoiceId" = ${sourceInvoice.id}
+      ORDER BY "expiresAt" ASC, "createdAt" ASC
+      FOR UPDATE
+    `;
+    if (!lockedRows.length) {
+      throw new NotFoundException('This invoice has no store credit.');
+    }
+
+    const credits = await tx.storeCredit.findMany({
+      where: { id: { in: lockedRows.map((row) => row.id) }, tenantId },
+      orderBy: [{ expiresAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    const now = new Date();
+    const activeCredits = credits.filter(
+      (credit) => credit.remainingAmount.gt(0) && credit.expiresAt.getTime() >= now.getTime(),
+    );
+    if (!activeCredits.length) {
+      if (credits.some((credit) => credit.remainingAmount.gt(0))) {
+        throw new BadRequestException('Store credit expired after 30 days.');
+      }
+      throw new BadRequestException('Store credit has already been exhausted.');
+    }
+
+    const availableAmount = activeCredits
+      .reduce((sum, credit) => sum.add(credit.remainingAmount), new Prisma.Decimal(0))
+      .toDecimalPlaces(2);
+    let pendingAmount = Prisma.Decimal.min(availableAmount, requiredPayment).toDecimalPlaces(2);
+    const allocations: StoreCreditAllocation[] = [];
+    for (const credit of activeCredits) {
+      if (pendingAmount.lte(0)) break;
+      const amount = Prisma.Decimal.min(credit.remainingAmount, pendingAmount).toDecimalPlaces(2);
+      allocations.push({ id: credit.id, amount });
+      pendingAmount = pendingAmount.sub(amount).toDecimalPlaces(2);
+    }
+
+    return {
+      invoiceNumber: sourceInvoice.invoiceNumber,
+      appliedAmount: allocations
+        .reduce((sum, allocation) => sum.add(allocation.amount), new Prisma.Decimal(0))
+        .toDecimalPlaces(2),
+      allocations,
+    };
+  }
+
   private async findCashSessionForSale(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    userId: string,
     cashSessionId?: string,
   ) {
     const session = await tx.cashSession.findFirst({
       where: {
         tenantId,
-        openedById: userId,
         status: CashSessionStatus.OPEN,
         ...(cashSessionId ? { id: cashSessionId } : {}),
       },
@@ -1192,9 +1409,7 @@ export class PosService {
     });
 
     if (!session) {
-      throw new BadRequestException(
-        'An open cash session for this cashier is required to complete POS sales.',
-      );
+      throw new BadRequestException('An open cash session is required to complete POS sales.');
     }
 
     return session;
@@ -1214,10 +1429,9 @@ export class PosService {
     }
   }
 
-  private async lockOpenCashSessionForUser(
+  private async lockOpenCashSession(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    userId: string,
     cashSessionId: string,
   ) {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
@@ -1234,13 +1448,12 @@ export class PosService {
       where: {
         id: cashSessionId,
         tenantId,
-        openedById: userId,
         status: CashSessionStatus.OPEN,
       },
       select: { id: true },
     });
     if (!openSession) {
-      throw new BadRequestException('Selected cash session is no longer open for this cashier.');
+      throw new BadRequestException('Selected cash session is no longer open.');
     }
   }
 
@@ -1262,7 +1475,8 @@ export class PosService {
 
     if (
       !membership ||
-      (!membership.canUsePos && ![...adminRoles, Role.CASHIER].includes(membership.role))
+      (!membership.canUsePos &&
+        ![...adminRoles, Role.CASHIER, Role.ORDER_TAKER].includes(membership.role))
     ) {
       throw new ForbiddenException('Employee does not have POS access.');
     }

@@ -334,7 +334,9 @@ export function CashSessionsView() {
                 <tr className="border-b border-border text-left">
                   <th className="py-3 pr-4">Caja</th>
                   <th className="py-3 pr-4">Estado</th>
+                  <th className="py-3 pr-4">Abierta por</th>
                   <th className="py-3 pr-4">Apertura</th>
+                  <th className="py-3 pr-4">Cerrada por</th>
                   <th className="py-3 pr-4">Cierre</th>
                   <th className="py-3 pr-4 text-right">Esperado</th>
                   <th className="py-3 pr-4 text-right">Contado</th>
@@ -358,16 +360,17 @@ export function CashSessionsView() {
                       <tr key={cashSession.id} className="border-b border-border">
                         <td className="py-3 pr-4">
                           <div className="font-medium">{cashSession.cashRegister.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {cashSession.openedBy?.name ?? 'Empleado'}
-                          </div>
                         </td>
                         <td className="py-3 pr-4">
                           <Badge variant={getStatusVariant(cashSession.status)}>
                             {translateStatus(cashSession.status)}
                           </Badge>
                         </td>
+                        <td className="py-3 pr-4">{cashSession.openedBy?.name ?? 'Empleado'}</td>
                         <td className="py-3 pr-4">{formatDateTime(cashSession.openedAt)}</td>
+                        <td className="py-3 pr-4">
+                          {cashSession.closedBy?.name ?? (cashSession.closedAt ? 'Empleado' : '-')}
+                        </td>
                         <td className="py-3 pr-4">
                           {cashSession.closedAt ? formatDateTime(cashSession.closedAt) : '-'}
                         </td>
@@ -407,7 +410,7 @@ export function CashSessionsView() {
                           key={`${cashSession.id}-report`}
                           className="border-b border-border bg-zinc-50/70"
                         >
-                          <td colSpan={8} className="px-0 py-4">
+                          <td colSpan={10} className="px-0 py-4">
                             <CashSessionReport cashSession={cashSession} />
                           </td>
                         </tr>
@@ -452,6 +455,7 @@ function CashSessionReport({
   const directInvoices = invoices.filter((invoice) => !invoice.salesOrder);
   const paymentTotals = getInvoicePaymentTotals(invoices);
   const summary = getCashSessionSummary(cashSession);
+  const employeeActivity = getCashEmployeeActivity(cashSession);
 
   return (
     <div className="space-y-4 px-4">
@@ -546,6 +550,48 @@ function CashSessionReport({
         </div>
       </details>
 
+      <details className="rounded-md border border-border bg-white">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium marker:content-none">
+          <span>Actividad por empleado</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            {employeeActivity.length} participante(s)
+          </span>
+        </summary>
+        <div className="surface-scrollbar overflow-auto border-t border-border">
+          <table className="w-full min-w-[42rem] text-sm">
+            <thead className="bg-zinc-50 text-left">
+              <tr className="border-b border-border">
+                <th className="px-4 py-2">Empleado</th>
+                <th className="px-4 py-2 text-right">Ventas cobradas</th>
+                <th className="px-4 py-2 text-right">Total facturado</th>
+                <th className="px-4 py-2 text-right">Movimientos</th>
+                <th className="px-4 py-2">Participacion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employeeActivity.map((activity) => (
+                <tr key={activity.userId} className="border-b border-border last:border-b-0">
+                  <td className="px-4 py-2 font-medium">{activity.name}</td>
+                  <td className="px-4 py-2 text-right">{activity.invoiceCount}</td>
+                  <td className="px-4 py-2 text-right">{formatCurrency(activity.invoiceTotal)}</td>
+                  <td className="px-4 py-2 text-right">{activity.movementCount}</td>
+                  <td className="px-4 py-2 text-muted-foreground">
+                    {[
+                      activity.opened ? 'Apertura' : null,
+                      activity.closed ? 'Cierre' : null,
+                      activity.invoiceCount ? 'Cobros' : null,
+                      activity.movementCount ? 'Movimientos' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
       <div className="flex flex-col gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
         <p className="text-muted-foreground">
           El arqueo y los movimientos de efectivo permanecen aquí. Las acciones comerciales se
@@ -574,7 +620,7 @@ function CashSessionReport({
                   <th className="px-3 py-2">Origen</th>
                   <th className="px-3 py-2">Factura</th>
                   <th className="px-3 py-2">Cliente</th>
-                  <th className="px-3 py-2">Cajero</th>
+                  <th className="px-3 py-2">Cobrado por</th>
                   <th className="px-3 py-2">Método</th>
                   <th className="px-3 py-2 text-right">Pagado</th>
                   <th className="px-3 py-2 text-right">Total</th>
@@ -883,6 +929,64 @@ function getInvoicePaymentTotals(invoices: ReportInvoice[]) {
   }
 
   return totals;
+}
+
+function getCashEmployeeActivity(
+  cashSession: NonNullable<Awaited<ReturnType<typeof closeCashSession>>>,
+) {
+  const activityByUser = new Map<
+    string,
+    {
+      userId: string;
+      name: string;
+      invoiceCount: number;
+      invoiceTotal: number;
+      movementCount: number;
+      opened: boolean;
+      closed: boolean;
+    }
+  >();
+
+  const getActivity = (user: { id: string; name: string } | null | undefined) => {
+    if (!user) return null;
+    const existing = activityByUser.get(user.id);
+    if (existing) return existing;
+
+    const created = {
+      userId: user.id,
+      name: user.name,
+      invoiceCount: 0,
+      invoiceTotal: 0,
+      movementCount: 0,
+      opened: false,
+      closed: false,
+    };
+    activityByUser.set(user.id, created);
+    return created;
+  };
+
+  const opener = getActivity(cashSession.openedBy);
+  if (opener) opener.opened = true;
+
+  const closer = getActivity(cashSession.closedBy);
+  if (closer) closer.closed = true;
+
+  for (const invoice of cashSession.invoices ?? []) {
+    const activity = getActivity(invoice.issuedBy);
+    if (!activity) continue;
+    activity.invoiceCount += 1;
+    activity.invoiceTotal += Number(invoice.total);
+  }
+
+  for (const movement of cashSession.movements ?? []) {
+    const activity = getActivity(movement.user);
+    if (activity) activity.movementCount += 1;
+  }
+
+  return Array.from(activityByUser.values()).sort(
+    (left, right) =>
+      right.invoiceTotal - left.invoiceTotal || left.name.localeCompare(right.name, 'es'),
+  );
 }
 
 function getCashSessionSummary(

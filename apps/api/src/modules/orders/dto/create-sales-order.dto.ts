@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -17,14 +18,31 @@ import {
   DocumentType,
   InitialPaymentOption,
   ProductInventoryDestination,
+  ProductUnit,
   SalePaymentMode,
   SalesOrderDestination,
   SalesOrderPriceLevel,
 } from '@qorvex/database';
 
 export class SalesOrderItemDto {
+  @IsOptional()
   @IsString()
-  productId: string;
+  productId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  description?: string;
+
+  @IsOptional()
+  @IsEnum(ProductUnit)
+  unit?: ProductUnit;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  unitPrice?: number;
 
   @Type(() => Number)
   @IsNumber()
@@ -63,12 +81,29 @@ export class CreateSalesOrderDto {
   priceLevel?: SalesOrderPriceLevel;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(100)
+  customDiscountPercent?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  requestCustomDiscount?: boolean;
+
+  @IsOptional()
   @IsEnum(SalePaymentMode)
   paymentMode?: SalePaymentMode;
 
   @IsOptional()
   @IsEnum(InitialPaymentOption)
   initialPaymentOption?: InitialPaymentOption;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  customInitialPaymentAmount?: number;
 
   @IsOptional()
   @IsEnum(CreditTermOption)

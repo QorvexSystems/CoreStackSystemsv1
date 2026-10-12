@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/table';
 import { createFiscalSequence, getFiscalSequences } from '@/lib/api';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
-import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
 import { formatDate } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -63,8 +62,6 @@ type SequenceForm = {
   nextNumber: string;
   authorizationNumber: string;
   validUntil: string;
-  issuerDocumentType: 'RNC' | 'CEDULA';
-  issuerDocumentNumber: string;
 };
 
 export function FiscalSequencesView() {
@@ -82,8 +79,6 @@ export function FiscalSequencesView() {
     nextNumber: '1',
     authorizationNumber: '',
     validUntil: '',
-    issuerDocumentType: 'RNC',
-    issuerDocumentNumber: '',
   });
 
   const sequences = sequencesQuery.data ?? [];
@@ -109,8 +104,6 @@ export function FiscalSequencesView() {
       nextNumber: number;
       authorizationNumber?: string;
       validUntil?: string;
-      issuerDocumentType: 'RNC' | 'CEDULA';
-      issuerDocumentNumber: string;
     }) => {
       if (!session) throw new Error('Sesión requerida.');
       return createFiscalSequence(session.tenantId, session.accessToken, input);
@@ -141,16 +134,14 @@ export function FiscalSequencesView() {
       ? Math.max(...priorBlocks.map((sequence) => sequence.endNumber)) + 1
       : 1;
 
-    setForm((current) => ({
+    setForm({
       documentType,
       startNumber: String(start),
       endNumber: String(start),
       nextNumber: String(start),
       authorizationNumber: '',
       validUntil: '',
-      issuerDocumentType: current.issuerDocumentType,
-      issuerDocumentNumber: current.issuerDocumentNumber,
-    }));
+    });
   }
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -158,15 +149,6 @@ export function FiscalSequencesView() {
     const startNumber = Number(form.startNumber);
     const endNumber = Number(form.endNumber);
     const nextNumber = Number(form.nextNumber);
-
-    if (!validateDominicanDocument(form.issuerDocumentType, form.issuerDocumentNumber)) {
-      toast.error(
-        form.issuerDocumentType === 'RNC'
-          ? 'El RNC del emisor no es válido.'
-          : 'La cédula del emisor no es válida.',
-      );
-      return;
-    }
 
     if (!Number.isInteger(startNumber) || !Number.isInteger(endNumber) || !Number.isInteger(nextNumber)) {
       toast.error('Los números del bloque deben ser enteros válidos.');
@@ -180,8 +162,6 @@ export function FiscalSequencesView() {
       nextNumber,
       authorizationNumber: form.authorizationNumber.trim(),
       ...(form.validUntil ? { validUntil: form.validUntil } : {}),
-      issuerDocumentType: form.issuerDocumentType,
-      issuerDocumentNumber: normalizeDominicanDocument(form.issuerDocumentNumber),
     });
   }
 
@@ -256,61 +236,6 @@ export function FiscalSequencesView() {
                   hint="Déjalo igual al inicio salvo que ya hayas usado números fuera del sistema."
                 />
                 <div className="space-y-2">
-                  <Label htmlFor="fiscal-issuer-document-type">Documento del emisor</Label>
-                  <select
-                    id="fiscal-issuer-document-type"
-                    value={form.issuerDocumentType}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        issuerDocumentType: event.target.value as 'RNC' | 'CEDULA',
-                        issuerDocumentNumber: '',
-                      }))
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="RNC">RNC</option>
-                    <option value="CEDULA">Cédula</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-issuer-document-number">
-                    {form.issuerDocumentType === 'RNC' ? 'RNC del emisor' : 'Cédula del emisor'}
-                  </Label>
-                  <Input
-                    id="fiscal-issuer-document-number"
-                    inputMode="numeric"
-                    value={form.issuerDocumentNumber}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        issuerDocumentNumber: event.target.value,
-                      }))
-                    }
-                    placeholder={form.issuerDocumentType === 'RNC' ? '1-01-00000-1' : '001-0000000-1'}
-                    required
-                  />
-                  {form.issuerDocumentNumber ? (
-                    <p
-                      className={
-                        validateDominicanDocument(
-                          form.issuerDocumentType,
-                          form.issuerDocumentNumber,
-                        )
-                          ? 'text-xs text-success'
-                          : 'text-xs text-danger'
-                      }
-                    >
-                      {validateDominicanDocument(
-                        form.issuerDocumentType,
-                        form.issuerDocumentNumber,
-                      )
-                        ? 'Documento válido.'
-                        : 'Verifica el dígito verificador dominicano.'}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="space-y-2">
                   <Label htmlFor="fiscal-authorization">
                     No. autorización DGII {selectedType.requiresRnc ? '' : '(si DGII la indica)'}
                   </Label>
@@ -377,7 +302,6 @@ export function FiscalSequencesView() {
                 <TableHead>Final</TableHead>
                 <TableHead>Restantes</TableHead>
                 <TableHead className="min-w-32">Progreso</TableHead>
-                <TableHead>RNC/Cédula emisor</TableHead>
                 <TableHead>Autorización</TableHead>
                 <TableHead>Vigencia</TableHead>
                 <TableHead>Estado</TableHead>
@@ -411,11 +335,6 @@ export function FiscalSequencesView() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      {sequence.issuerDocumentNumber
-                        ? `${sequence.issuerDocumentType ?? 'RNC'} ${sequence.issuerDocumentNumber}`
-                        : '-'}
-                    </TableCell>
                     <TableCell>{sequence.authorizationNumber ?? '-'}</TableCell>
                     <TableCell>{sequence.validUntil ? formatDate(sequence.validUntil) : '-'}</TableCell>
                     <TableCell>
@@ -428,7 +347,7 @@ export function FiscalSequencesView() {
               })}
               {!sequences.length ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                     Aún no hay bloques fiscales registrados.
                   </TableCell>
                 </TableRow>

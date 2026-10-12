@@ -1,13 +1,18 @@
 'use client';
 
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Link2, LoaderCircle, PackagePlus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { addSupplierProduct, createProduct, type Product } from '@/lib/api';
+import {
+  addSupplierProduct,
+  createProduct,
+  getProductDepartments,
+  type Product,
+} from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
 import { selectClassName } from './procurement-ui';
 import { SupplierInvoiceDialog } from './supplier-invoice-dialog';
@@ -46,6 +51,7 @@ type ProductForm = {
   name: string;
   sku: string;
   barcode: string;
+  categoryId: string;
   supplierSku: string;
   unit: string;
   cost: string;
@@ -115,10 +121,15 @@ export function QuickProductCreateDialog({
   );
   const hasDuplicate = duplicateMatches.length > 0;
   const canCreate = hasSessionCredentials(tenantId, accessToken);
+  const departmentsQuery = useQuery({
+    queryKey: ['product-departments', tenantId],
+    queryFn: () => getProductDepartments(tenantId, accessToken),
+    enabled: Boolean(open && canCreate),
+  });
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const validationError = validateForm(form);
+      const validationError = validateForm(form, (departmentsQuery.data?.length ?? 0) > 0);
       if (validationError) throw new Error(validationError);
       if (!tenantId || !accessToken) throw new Error('La sesión activa es requerida para crear el producto.');
 
@@ -128,6 +139,7 @@ export function QuickProductCreateDialog({
         name: form.name.trim(),
         sku: optional(form.sku),
         barcode: optional(form.barcode),
+        categoryId: optional(form.categoryId),
         unit: form.unit,
         price: Number(form.salePrice),
         cost,
@@ -310,6 +322,27 @@ export function QuickProductCreateDialog({
                 maxLength={80}
               />
             </Field>
+            <Field label="Departamento" required={(departmentsQuery.data?.length ?? 0) > 0}>
+              <select
+                value={form.categoryId}
+                onChange={(event) => updateField('categoryId', event.target.value)}
+                className={selectClassName}
+                disabled={departmentsQuery.isLoading}
+              >
+                <option value="">
+                  {departmentsQuery.isLoading
+                    ? 'Cargando departamentos...'
+                    : departmentsQuery.data?.length
+                      ? 'Selecciona un departamento'
+                      : 'No hay departamentos registrados'}
+                </option>
+                {(departmentsQuery.data ?? []).map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Unidad" required>
               <select
                 value={form.unit}
@@ -349,7 +382,7 @@ export function QuickProductCreateDialog({
               />
             </Field>
             <Field
-              label="Precio de venta (RD$)"
+              label="Precio de venta con ITBIS (RD$)"
               required
               hint="Se solicita por separado para no asumir un margen de venta sin autorización."
             >
@@ -455,6 +488,7 @@ function createInitialForm(
     name: prefill?.name?.trim() ?? '',
     sku: '',
     barcode: '',
+    categoryId: '',
     supplierSku: prefill?.supplierSku?.trim() ?? '',
     unit: 'UNIT',
     cost: toDecimalInput(prefill?.costNet),
@@ -481,9 +515,10 @@ function findDuplicateMatches(products: Product[], form: Pick<ProductForm, 'name
   return [...matches.values()];
 }
 
-function validateForm(form: ProductForm) {
+function validateForm(form: ProductForm, departmentRequired: boolean) {
   if (!form.name.trim()) return 'Indica la descripción del producto.';
   if (form.name.trim().length > 160) return 'La descripción no puede exceder 160 caracteres.';
+  if (departmentRequired && !form.categoryId) return 'Selecciona el departamento del producto.';
   const cost = Number(form.cost);
   if (!Number.isFinite(cost) || cost < 0) return 'Indica un costo unitario válido.';
   const salePrice = Number(form.salePrice);

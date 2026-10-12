@@ -68,11 +68,12 @@ export class CashService {
     });
   }
 
-  findCurrentSession(tenantId: string, user: AuthenticatedUser) {
+  async findCurrentSession(tenantId: string, user: AuthenticatedUser) {
+    this.requirePosAccess(tenantId, user);
+
     return this.prisma.cashSession.findFirst({
       where: {
         tenantId,
-        openedById: user.id,
         status: CashSessionStatus.OPEN,
       },
       include: {
@@ -87,6 +88,7 @@ export class CashService {
             reason: true,
             reference: true,
             createdAt: true,
+            user: { select: { id: true, name: true, email: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -212,18 +214,68 @@ export class CashService {
         throw new NotFoundException('Open cash session not found for tenant.');
       }
 
-      const claimedOrders = await tx.salesOrder.count({
+      const claimedOrders = await tx.salesOrder.findMany({
         where: {
           tenantId,
           claimedCashSessionId: cashSessionId,
           status: SalesOrderStatus.IN_CASHIER,
         },
+        select: {
+          id: true,
+          orderNumber: true,
+          total: true,
+          claimedById: true,
+        },
       });
 
-      if (claimedOrders > 0) {
+      const ordersClaimedByOtherEmployees = claimedOrders.filter(
+        (order) => order.claimedById !== user.id,
+      );
+
+      if (ordersClaimedByOtherEmployees.length > 0) {
         throw new BadRequestException(
           'Close pending claimed sales orders before closing cash session.',
         );
+      }
+
+      if (claimedOrders.length > 0) {
+        const releasedAt = new Date();
+        const claimedOrderIds = claimedOrders.map((order) => order.id);
+
+        await tx.salesOrder.updateMany({
+          where: {
+            id: { in: claimedOrderIds },
+            tenantId,
+            claimedCashSessionId: cashSessionId,
+            claimedById: user.id,
+            status: SalesOrderStatus.IN_CASHIER,
+          },
+          data: {
+            status: SalesOrderStatus.SENT_TO_CASHIER,
+            claimedById: null,
+            claimedCashSessionId: null,
+            claimedAt: null,
+            claimExpiresAt: null,
+            releasedAt,
+          },
+        });
+
+        await tx.employeeActivityLog.createMany({
+          data: claimedOrders.map((order) => ({
+            tenantId,
+            userId: user.id,
+            cashSessionId,
+            action: EmployeeLogAction.RELEASE_SALES_ORDER,
+            entity: 'SalesOrder',
+            entityId: order.id,
+            amount: order.total,
+            metadata: {
+              orderNumber: order.orderNumber,
+              reason: 'CASH_SESSION_CLOSE',
+              automaticallyReleased: true,
+            },
+          })),
+        });
       }
 
       const movements = await tx.cashMovement.findMany({
@@ -373,10 +425,14 @@ export class CashService {
     permission: 'canOpenCashSession' | 'canCloseCashSession' | 'canViewCashLogs',
   ) {
     const membership = user.memberships.find((candidate) => candidate.tenantId === tenantId);
+    const orderTakerCashPermission =
+      membership?.role === Role.ORDER_TAKER &&
+      (permission === 'canOpenCashSession' || permission === 'canCloseCashSession');
 
     if (
       !membership ||
       (!membership[permission] &&
+        !orderTakerCashPermission &&
         !([Role.ADMIN, Role.SUPER_ADMIN] as Role[]).includes(membership.role))
     ) {
       throw new ForbiddenException('Employee does not have permission for this cash operation.');
@@ -387,7 +443,12 @@ export class CashService {
     const membership = user.memberships.find((candidate) => candidate.tenantId === tenantId);
     const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 
-    if (!membership || (!membership.canOpenCashSession && !adminRoles.includes(membership.role))) {
+    if (
+      !membership ||
+      (!membership.canOpenCashSession &&
+        membership.role !== Role.ORDER_TAKER &&
+        !adminRoles.includes(membership.role))
+    ) {
       throw new ForbiddenException('Employee does not have permission to open cash sessions.');
     }
   }
@@ -412,6 +473,21 @@ export class CashService {
         !(membership.canViewCashLogs && membership.role !== Role.CASHIER))
     ) {
       throw new ForbiddenException('Employee does not have permission to view cash logs.');
+    }
+  }
+
+  private requirePosAccess(tenantId: string, user: AuthenticatedUser) {
+    const membership = user.memberships.find((candidate) => candidate.tenantId === tenantId);
+    const allowedRoles: Role[] = [
+      Role.ADMIN,
+      Role.SUPER_ADMIN,
+      Role.QORVEX_SUPER_ADMIN,
+      Role.CASHIER,
+      Role.ORDER_TAKER,
+    ];
+
+    if (!membership || (!membership.canUsePos && !allowedRoles.includes(membership.role))) {
+      throw new ForbiddenException('Employee does not have POS access.');
     }
   }
 

@@ -1,0 +1,3 @@
+ALLPA_IMAGE_TAG=initial
+NEXT_PUBLIC_API_URL=https://allpa-api.corestack-systems.com
+NEXT_PUBLIC_APP_URL=https://allpa.corestack-systems.com

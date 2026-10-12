@@ -91,6 +91,7 @@ enum PaymentMethod {
   CARD
   TRANSFER
   CHECK
+  CREDIT
   OTHER
 }
 
@@ -361,6 +362,7 @@ enum InitialPaymentOption {
   PERCENT_30
   PERCENT_50
   PERCENT_70
+  CUSTOM
 }
 
 enum CreditTermOption {
@@ -424,6 +426,7 @@ model Tenant {
   email                      String?
   phone                      String?
   address                    String?
+  salePricesIncludeTax       Boolean                     @default(false)
   status                     TenantStatus                @default(ACTIVE)
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
@@ -446,6 +449,8 @@ model Tenant {
   employeeActivityLogs       EmployeeActivityLog[]
   salesOrders                SalesOrder[]
   returnRequests             ReturnRequest[]
+  storeCredits               StoreCredit[]
+  storeCreditRedemptions     StoreCreditRedemption[]
   fiscalSequences            FiscalSequence[]
   importBatches              ImportBatch[]
   suppliers                  Supplier[]
@@ -460,6 +465,7 @@ model Tenant {
   goodsReceipts              GoodsReceipt[]
   goodsReceiptItems          GoodsReceiptItem[]
   creditSaleApprovals        CreditSaleApproval[]
+  discountApprovals          DiscountApproval[]
   mobileOcrCaptureSessions   MobileOcrCaptureSession[]
 
   @@index([status])
@@ -506,6 +512,8 @@ model User {
   returnRequestsRequested             ReturnRequest[]             @relation("ReturnRequestRequestedBy")
   returnRequestsApproved              ReturnRequest[]             @relation("ReturnRequestApprovedBy")
   returnRequestsRejected              ReturnRequest[]             @relation("ReturnRequestRejectedBy")
+  storeCreditsIssued                  StoreCredit[]                @relation("StoreCreditIssuedBy")
+  storeCreditRedemptions              StoreCreditRedemption[]      @relation("StoreCreditRedeemedBy")
   customersCreditEnabled              Customer[]                  @relation("CustomerCreditEnabledBy")
   suppliersCreated                    Supplier[]                  @relation("SupplierCreatedBy")
   suppliersUpdated                    Supplier[]                  @relation("SupplierUpdatedBy")
@@ -535,6 +543,8 @@ model User {
   creditSaleApprovalsApproved         CreditSaleApproval[]        @relation("CreditSaleApprovalApprovedBy")
   creditSaleApprovalsRejected         CreditSaleApproval[]        @relation("CreditSaleApprovalRejectedBy")
   creditSaleApprovalsCancelled        CreditSaleApproval[]        @relation("CreditSaleApprovalCancelledBy")
+  discountApprovalsRequested          DiscountApproval[]          @relation("DiscountApprovalRequestedBy")
+  discountApprovalsDecided            DiscountApproval[]          @relation("DiscountApprovalDecidedBy")
   paymentsCancelled                   Payment[]                   @relation("PaymentCancelledBy")
   mobileOcrCaptureSessionsCreated     MobileOcrCaptureSession[]   @relation("MobileOcrCaptureCreatedBy")
 
@@ -792,6 +802,8 @@ model Invoice {
   employeeActivityLogs EmployeeActivityLog[]
   salesOrder           SalesOrder?
   returnRequests       ReturnRequest[]
+  storeCreditsIssued   StoreCredit[]           @relation("StoreCreditSourceInvoice")
+  creditRedemptions    StoreCreditRedemption[] @relation("StoreCreditRedemptionInvoice")
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId])
@@ -875,6 +887,7 @@ model SalesOrder {
   invoice                    Invoice?                    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   items                      SalesOrderItem[]
   creditApproval             CreditSaleApproval?
+  discountApproval           DiscountApproval?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId])
@@ -1416,6 +1429,32 @@ model CreditSaleApproval {
   @@index([cancelledById])
 }
 
+model DiscountApproval {
+  id                String               @id @default(cuid())
+  tenantId          String
+  salesOrderId      String               @unique
+  requestedRate     Decimal              @db.Decimal(5, 4)
+  status            CreditApprovalStatus @default(PENDING)
+  requestNote       String?
+  decisionNote      String?
+  requestedById     String
+  decidedById       String?
+  requestedAt       DateTime             @default(now())
+  decidedAt         DateTime?
+  dismissedAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesOrder        SalesOrder           @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  requestedBy       User                 @relation("DiscountApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy         User?                @relation("DiscountApprovalDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, dismissedAt])
+  @@index([requestedById])
+  @@index([decidedById])
+}
+
 model ReturnRequest {
   id                  String              @id @default(cuid())
   tenantId            String
@@ -1448,6 +1487,7 @@ model ReturnRequest {
   rejectedBy          User?               @relation("ReturnRequestRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
   cashSession         CashSession?        @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
   items               ReturnRequestItem[]
+  storeCredit         StoreCredit?
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -1480,6 +1520,51 @@ model ReturnRequestItem {
   @@index([returnRequestId])
   @@index([invoiceItemId])
   @@index([productId])
+}
+
+model StoreCredit {
+  id                String                  @id @default(cuid())
+  tenantId          String
+  sourceInvoiceId   String
+  returnRequestId   String                  @unique
+  issuedById        String
+  originalAmount    Decimal                 @db.Decimal(12, 2)
+  remainingAmount   Decimal                 @db.Decimal(12, 2)
+  expiresAt         DateTime
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  tenant            Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceInvoice     Invoice                 @relation("StoreCreditSourceInvoice", fields: [sourceInvoiceId], references: [id], onDelete: Restrict)
+  returnRequest     ReturnRequest           @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+  issuedBy          User                    @relation("StoreCreditIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  redemptions       StoreCreditRedemption[]
+
+  @@index([tenantId])
+  @@index([tenantId, sourceInvoiceId])
+  @@index([tenantId, expiresAt])
+}
+
+model StoreCreditRedemption {
+  id             String       @id @default(cuid())
+  tenantId       String
+  storeCreditId  String
+  invoiceId      String
+  redeemedById   String
+  cashSessionId  String
+  amount         Decimal      @db.Decimal(12, 2)
+  createdAt      DateTime     @default(now())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  storeCredit    StoreCredit  @relation(fields: [storeCreditId], references: [id], onDelete: Restrict)
+  invoice        Invoice      @relation("StoreCreditRedemptionInvoice", fields: [invoiceId], references: [id], onDelete: Restrict)
+  redeemedBy     User         @relation("StoreCreditRedeemedBy", fields: [redeemedById], references: [id], onDelete: Restrict)
+  cashSession    CashSession  @relation(fields: [cashSessionId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([storeCreditId])
+  @@unique([storeCreditId, invoiceId])
+  @@index([redeemedById])
+  @@index([cashSessionId])
+  @@index([createdAt])
 }
 
 model Payment {
@@ -1599,6 +1684,7 @@ model CashSession {
   employeeActivityLogs EmployeeActivityLog[]
   claimedSalesOrders   SalesOrder[]          @relation("SalesOrderClaimedCashSession")
   returnRequests       ReturnRequest[]
+  storeCreditRedemptions StoreCreditRedemption[]
   supplierPayments     SupplierPayment[]
 
   @@index([tenantId])

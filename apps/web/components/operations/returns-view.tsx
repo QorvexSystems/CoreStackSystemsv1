@@ -91,7 +91,7 @@ export function ReturnsView() {
       setSelectedInvoice(invoice);
       setSelections(createDefaultSelections(invoice));
       setReason('');
-      setRefundMethod(invoice.paymentMethod ?? 'CASH');
+      setRefundMethod(invoice.paymentMethod === 'CHECK' ? 'CREDIT' : (invoice.paymentMethod ?? 'CASH'));
 
       if (!invoice.items.some((item) => item.canReturn)) {
         toast.warning('Esta factura no tiene productos disponibles para devolver.');
@@ -250,7 +250,9 @@ export function ReturnsView() {
     setDecisionTarget(target);
     setDecisionMode(mode);
     setAdminNote('');
-    setDecisionRefundMethod(target.refundMethod ?? 'CASH');
+    setDecisionRefundMethod(
+      target.refundMethod === 'CHECK' ? 'CREDIT' : (target.refundMethod ?? 'CASH'),
+    );
     setDecisionCashSessionId(defaultCashSession);
   }
 
@@ -277,7 +279,11 @@ export function ReturnsView() {
       return;
     }
 
-    if (openCashSessions.length > 1 && !decisionCashSessionId) {
+    if (
+      decisionRefundMethod !== 'CREDIT' &&
+      openCashSessions.length > 1 &&
+      !decisionCashSessionId
+    ) {
       toast.error('Selecciona la caja abierta que entregara el reembolso.');
       return;
     }
@@ -366,7 +372,7 @@ export function ReturnsView() {
                     const selection = selections[item.id] ?? {
                       selected: false,
                       quantity: item.remainingQuantity,
-                      restock: true,
+                      restock: Boolean(item.productId),
                     };
                     const remaining = Number(item.remainingQuantity);
                     const step = item.product ? getQuantityStep(item.product) : 0.01;
@@ -459,7 +465,7 @@ export function ReturnsView() {
                     <option value="CASH">Efectivo</option>
                     <option value="CARD">Tarjeta</option>
                     <option value="TRANSFER">Transferencia</option>
-                    <option value="CHECK">Cheque</option>
+                    <option value="CREDIT">Crédito</option>
                     <option value="OTHER">Otro</option>
                   </select>
                 </div>
@@ -613,7 +619,11 @@ function ReturnRequestCard({
               <p className="truncate text-sm font-medium">{item.description}</p>
               <p className="text-xs text-muted-foreground">
                 Cantidad {formatQuantity(item.quantity)} ·{' '}
-                {item.restock ? 'regresa al almacen' : 'no regresa al almacen'}
+                {item.restock ? (
+                  'Regresa al almacén'
+                ) : (
+                  <span className="font-semibold text-red-600">No regresa al almacén</span>
+                )}
               </p>
             </div>
             <span className="shrink-0 text-sm font-semibold">{formatCurrency(Number(item.total))}</span>
@@ -630,7 +640,18 @@ function ReturnRequestCard({
       </div>
 
       <div className="mt-4 flex flex-col gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>Metodo: {translatePaymentMethod(request.refundMethod)}</span>
+        <span>
+          Método:{' '}
+          {request.refundMethod === 'CREDIT'
+            ? 'Crédito'
+            : translatePaymentMethod(request.refundMethod)}
+        </span>
+        {request.storeCredit ? (
+          <span>
+            Saldo: {formatCurrency(Number(request.storeCredit.remainingAmount))} · vence{' '}
+            {formatDate(request.storeCredit.expiresAt)}
+          </span>
+        ) : null}
         {request.cashSession?.cashRegister ? (
           <span>Caja: {request.cashSession.cashRegister.name}</span>
         ) : null}
@@ -728,12 +749,16 @@ function DecisionModal({
                   <option value="CASH">Efectivo</option>
                   <option value="CARD">Tarjeta</option>
                   <option value="TRANSFER">Transferencia</option>
-                  <option value="CHECK">Cheque</option>
+                  <option value="CREDIT">Crédito</option>
                   <option value="OTHER">Otro</option>
                 </select>
               </div>
 
-              {openCashSessions.length > 1 ? (
+              {refundMethod === 'CREDIT' ? (
+                <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950">
+                  Se emitirá un crédito ligado a la factura por 30 días. No genera salida de caja.
+                </div>
+              ) : openCashSessions.length > 1 ? (
                 <div>
                   <Label htmlFor="decisionCashSession">Caja que entrega el reembolso</Label>
                   <select
@@ -792,7 +817,10 @@ function DecisionModal({
             type="button"
             className={approving ? '' : 'bg-danger text-white hover:bg-danger/90'}
             onClick={onConfirm}
-            disabled={isPending || (approving && openCashSessions.length === 0)}
+            disabled={
+              isPending ||
+              (approving && refundMethod !== 'CREDIT' && openCashSessions.length === 0)
+            }
           >
             {isPending ? 'Procesando...' : approving ? 'Aprobar y completar' : 'Rechazar'}
           </Button>
@@ -809,7 +837,7 @@ function createDefaultSelections(invoice: ReturnInvoiceLookup): SelectionState {
       {
         selected: false,
         quantity: item.remainingQuantity,
-        restock: true,
+        restock: Boolean(item.productId),
       },
     ]),
   );

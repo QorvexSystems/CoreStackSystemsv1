@@ -56,6 +56,10 @@ export class CompleteSaleDto {
   orderId?: string;
 
   @IsOptional()
+  @IsString()
+  storeCreditInvoiceNumber?: string;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PosSaleItemDto)

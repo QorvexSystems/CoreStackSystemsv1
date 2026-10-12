@@ -8,10 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getInvoice } from '@/lib/api';
 import { brand, platform } from '@/lib/brand';
-import { translatePaymentMethod, translateStatus } from '@/lib/display-labels';
+import { formatBusinessRnc } from '@/lib/dominican-documents';
+import { translatePaymentMethod, translateProductUnit, translateStatus } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
-import { formatQuantity } from './pos/pos-utils';
+import { formatQuantity, getCommonProductUnit } from './pos/pos-utils';
 import { SessionRequired, useCurrentSession } from './session-required';
 
 export function InvoiceDetail({
@@ -56,17 +57,33 @@ export function InvoiceDetail({
 
   if (printMode) {
     return (
-      <main className="mx-auto w-[80mm] max-w-full bg-white p-3 text-zinc-950 print:w-[80mm] print:p-0">
-        <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" />
-        <div className="my-4 border-t-2 border-dashed border-zinc-500" />
-        <Receipt invoice={invoice} copyLabel="COPIA: VENDEDOR" />
-        <div className="mt-4 print:hidden">
-          <Button className="w-full" onClick={() => window.print()}>
-            <Printer className="h-4 w-4" />
-            Reimprimir factura
-          </Button>
-        </div>
-      </main>
+      <>
+        <style jsx global>{`
+          @page {
+            size: 80mm auto;
+            margin: 0;
+          }
+
+          @media print {
+            html,
+            body {
+              width: 80mm;
+              margin: 0;
+              padding: 0;
+              background: white;
+            }
+          }
+        `}</style>
+        <main className="mx-auto w-[80mm] max-w-full bg-white p-3 text-zinc-950 print:w-[80mm] print:p-0">
+          <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" />
+          <div className="mt-4 print:hidden">
+            <Button className="w-full" onClick={() => window.print()}>
+              <Printer className="h-4 w-4" />
+              Reimprimir factura
+            </Button>
+          </div>
+        </main>
+      </>
     );
   }
 
@@ -98,16 +115,41 @@ function Receipt({
   invoice: NonNullable<Awaited<ReturnType<typeof getInvoice>>>;
   copyLabel: string;
 }) {
+  const storeCreditApplied = (invoice.payments ?? [])
+    .filter((payment) => payment.method === 'CREDIT' && payment.status === 'COMPLETED')
+    .reduce((sum, payment) => sum + Number(payment.amount), 0);
   const amountReceived =
-    Number(invoice.amountReceived) > 0
+    storeCreditApplied > 0
       ? Number(invoice.amountReceived)
-      : Number(invoice.paidAmount);
+      : Number(invoice.amountReceived) > 0
+        ? Number(invoice.amountReceived)
+        : Number(invoice.paidAmount);
+  const paymentMethods = Array.from(
+    new Set(
+      (invoice.payments ?? [])
+        .filter((payment) => payment.status === 'COMPLETED')
+        .map((payment) => translatePaymentMethod(payment.method)),
+    ),
+  );
+  const paymentMethodLabel = paymentMethods.length
+    ? paymentMethods.join(' + ')
+    : translatePaymentMethod(invoice.paymentMethod);
   const changeAmount = Number(invoice.changeAmount ?? 0);
-  const subtotalBase = Number(invoice.subtotal);
+  const paidAmount = Number(invoice.paidAmount);
+  const balance = Number(invoice.balance);
+  const subtotalAfterDiscount = Number(invoice.subtotal);
+  const discountTotal = Number(invoice.discountTotal ?? 0);
+  const hasDiscount = discountTotal > 0.005;
+  const grossSubtotal = subtotalAfterDiscount + discountTotal;
   const fiscalNumber = invoice.ncf ?? invoice.eNcf ?? '-';
   const issuePoint = invoice.cashSession?.cashRegister;
   const companyName = brand.name;
   const legalName = invoice.tenant?.legalName ?? invoice.tenant?.name ?? companyName;
+  const normalizedLegalName = normalizeCompanyName(legalName);
+  const normalizedCompanyName = normalizeCompanyName(companyName);
+  const showCompanyName =
+    normalizedLegalName !== normalizedCompanyName &&
+    !normalizedLegalName.includes(normalizedCompanyName);
   const documentTitle = getInvoiceDocumentTitle(invoice.documentType);
   const businessContact = [invoice.tenant?.phone, invoice.tenant?.email]
     .filter((value): value is string => Boolean(value))
@@ -134,8 +176,11 @@ function Receipt({
           <Image src={brand.logoPath} alt={brand.name} fill className="object-contain" />
         </div>
         <p className="mt-1 font-semibold uppercase">{legalName}</p>
-        <p>{companyName}</p>
-        <p>RNC/Cédula {invoice.tenant?.rnc ?? 'No configurado'}</p>
+        {showCompanyName ? <p>{companyName}</p> : null}
+        <p>
+          RNC/Cédula{' '}
+          {invoice.tenant?.rnc ? formatBusinessRnc(invoice.tenant.rnc) : 'No configurado'}
+        </p>
         {invoice.tenant?.address ? <p>{invoice.tenant.address}</p> : null}
         {businessContact ? <p>{businessContact}</p> : null}
         <p className="mt-2 font-semibold">
@@ -170,29 +215,56 @@ function Receipt({
               <span className="font-medium">{item.description}</span>
               <span className="shrink-0 font-medium">{formatCurrency(Number(item.total))}</span>
             </div>
-            {item.sku || item.barcode ? (
+            {(item.sku && !item.sku.startsWith('__COMMON__:')) || item.barcode ? (
               <p className="text-[11px] text-zinc-600">
-                {[item.sku, item.barcode].filter(Boolean).join(' · ')}
+                {[
+                  item.sku?.startsWith('__COMMON__:') ? null : item.sku,
+                  item.barcode,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </p>
             ) : null}
             <p className="text-[11px] text-zinc-600">
-              {formatQuantity(item.quantity)} {Number(item.quantity) === 1 ? 'Unidad' : 'Unidades'}{' '}
-              × {formatCurrency(Number(item.unitPrice))} · Base{' '}
-              {formatCurrency(Number(item.subtotal))} · ITBIS{' '}
-              {formatCurrency(Number(item.taxTotal))}
+              {formatQuantity(item.quantity)} {translateProductUnit(getCommonProductUnit(item.sku))}
+              {' × '}
+              {formatCurrency(
+                Number(item.quantity) > 0
+                  ? Number(item.total) / Number(item.quantity)
+                  : Number(item.total),
+              )}
+              {Number(item.taxTotal) > 0
+                ? ` · ITBIS incluido ${formatCurrency(Number(item.taxTotal))}`
+                : ''}
             </p>
+            {Number(item.discountTotal) > 0 ? (
+              <p className="text-[11px] font-medium text-emerald-700">
+                Descuento: {formatCurrency(Number(item.discountTotal))}
+              </p>
+            ) : null}
           </div>
         ))}
       </div>
 
       <div className="space-y-0.5 border-y border-dashed border-zinc-400 py-2">
-        <ReceiptRow label="Subtotal bruto" value={formatCurrency(subtotalBase)} />
-        <ReceiptRow label="Subtotal sin ITBIS" value={formatCurrency(subtotalBase)} />
-        {taxableBase > 0 ? (
-          <ReceiptRow label="Base gravada" value={formatCurrency(taxableBase)} />
+        <ReceiptRow
+          label={hasDiscount ? 'Subtotal bruto' : 'Subtotal'}
+          value={formatCurrency(grossSubtotal)}
+        />
+        {hasDiscount ? (
+          <>
+            <ReceiptRow label="Descuento" value={`-${formatCurrency(discountTotal)}`} />
+            <ReceiptRow
+              label="Subtotal después de descuento"
+              value={formatCurrency(subtotalAfterDiscount)}
+            />
+          </>
         ) : null}
-        {exemptBase > 0 ? (
-          <ReceiptRow label="Monto exento" value={formatCurrency(exemptBase)} />
+        {taxableBase > 0 && exemptBase > 0 ? (
+          <>
+            <ReceiptRow label="Base gravada" value={formatCurrency(taxableBase)} />
+            <ReceiptRow label="Monto exento" value={formatCurrency(exemptBase)} />
+          </>
         ) : null}
         {[...taxBuckets.entries()]
           .filter(([, bucket]) => bucket.tax > 0)
@@ -208,11 +280,20 @@ function Receipt({
       </div>
 
       <div className="space-y-0.5">
-        <ReceiptRow label="Pagado" value={formatCurrency(Number(invoice.paidAmount))} />
-        <ReceiptRow label="Método" value={translatePaymentMethod(invoice.paymentMethod)} />
-        <ReceiptRow label="Recibido" value={formatCurrency(amountReceived)} />
-        <ReceiptRow label="Devuelta" value={formatCurrency(changeAmount)} strong />
-        <ReceiptRow label="Balance" value={formatCurrency(Number(invoice.balance))} />
+        <ReceiptRow label="Método" value={paymentMethodLabel} />
+        <ReceiptRow label="Pagado" value={formatCurrency(paidAmount)} />
+        {storeCreditApplied > 0 ? (
+          <ReceiptRow label="Crédito aplicado" value={formatCurrency(storeCreditApplied)} />
+        ) : null}
+        {amountReceived > paidAmount + 0.005 || changeAmount > 0.005 ? (
+          <ReceiptRow label="Recibido" value={formatCurrency(amountReceived)} />
+        ) : null}
+        {changeAmount > 0.005 ? (
+          <ReceiptRow label="Devuelta" value={formatCurrency(changeAmount)} strong />
+        ) : null}
+        {balance > 0.005 ? (
+          <ReceiptRow label="Balance" value={formatCurrency(balance)} />
+        ) : null}
       </div>
 
       <footer className="pt-2 text-center">
@@ -221,6 +302,14 @@ function Receipt({
       </footer>
     </section>
   );
+}
+
+function normalizeCompanyName(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
 }
 
 function formatTaxRate(rate: number) {

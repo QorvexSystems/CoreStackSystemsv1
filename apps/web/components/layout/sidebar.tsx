@@ -657,7 +657,10 @@ export function getVisibleNavigation(session: AuthSession | null) {
 
   if (canTakeOrders(session) && canUsePosSession(session)) {
     return navigation.filter(
-      (item) => item.href === '/orders' || item.href === '/pos' || item.href === '/returns',
+      (item) =>
+        item.href === '/orders' ||
+        item.href === '/pos' ||
+        (session?.role !== 'ORDER_TAKER' && item.href === '/returns'),
     );
   }
 

@@ -7,6 +7,7 @@ import { CashModule } from './modules/cash/cash.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { CreditApprovalsModule } from './modules/credit-approvals/credit-approvals.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { DiscountApprovalsModule } from './modules/discount-approvals/discount-approvals.module';
 import { EmployeeLogsModule } from './modules/employee-logs/employee-logs.module';
 import { EmployeesModule } from './modules/employees/employees.module';
 import { FiscalSequencesModule } from './modules/fiscal-sequences/fiscal-sequences.module';
@@ -59,6 +60,7 @@ import { PrismaModule } from './prisma/prisma.module';
     ReturnsModule,
     SuppliersModule,
     DashboardModule,
+    DiscountApprovalsModule,
     AuditModule,
   ],
 })

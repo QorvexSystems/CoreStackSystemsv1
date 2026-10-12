@@ -1,7 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { Bell, Building2, LogOut } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bell, Building2, CheckCircle2, LogOut, Trash2, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -12,18 +12,27 @@ import { canAccessPath, getDefaultPathForSession } from '@/lib/authorization';
 import {
   getCurrentCashSession,
   getDashboardSummary,
+  getDiscountApprovalNotifications,
   getFiscalSequenceAlerts,
+  approveDiscountRequest,
+  dismissDiscountNotification,
+  rejectDiscountRequest,
+  type DiscountApproval,
   type FiscalSequenceAlert,
 } from '@/lib/api';
+import { isAdminSession } from '@/lib/authorization';
 import { brand } from '@/lib/brand';
 import { translateRole } from '@/lib/display-labels';
-import { cn, formatCurrency } from '@/lib/utils';
+import { cn, formatCurrency, formatDateTime } from '@/lib/utils';
 import { GlobalSearch } from './global-search';
 import { MobileNavigation, Sidebar } from './sidebar';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [selectedDiscountApproval, setSelectedDiscountApproval] = useState<DiscountApproval | null>(
+    null,
+  );
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
   const pathname = usePathname();
   const router = useRouter();
@@ -39,6 +48,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     queryFn: () => getFiscalSequenceAlerts(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
     refetchInterval: 60_000,
+  });
+  const discountApprovalsQuery = useQuery({
+    queryKey: ['discount-approval-notifications', session?.tenantId],
+    queryFn: () =>
+      getDiscountApprovalNotifications(session?.tenantId ?? '', session?.accessToken ?? ''),
+    enabled: Boolean(session && isAdminSession(session)),
+    refetchInterval: 30_000,
   });
   const currentCashSessionQuery = useQuery({
     queryKey: ['cash-session-current', session?.tenantId, 'logout-guard'],
@@ -92,7 +108,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         toast.warning('Debes cerrar la caja antes de salir.', {
           description: `${currentCashSession.cashRegister.name} sigue abierta con fondo inicial ${formatCurrency(Number(currentCashSession.openingAmount))}.`,
         });
-        router.push(canAccessPath(session, '/cash/sessions') ? '/cash/sessions' : getDefaultPathForSession(session));
+        router.push(
+          canAccessPath(session, '/cash/sessions')
+            ? '/cash/sessions'
+            : getDefaultPathForSession(session),
+        );
         return;
       }
     } catch (error) {
@@ -127,7 +147,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-zinc-100">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)} />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((current) => !current)}
+      />
 
       <div
         className={cn(
@@ -161,11 +184,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 onClick={() => setNotificationsOpen((current) => !current)}
               >
                 <Bell className="h-5 w-5" />
-                {fiscalSequenceAlertsQuery.data?.length ? (
+                {(fiscalSequenceAlertsQuery.data?.length ?? 0) +
+                  (discountApprovalsQuery.data?.length ?? 0) >
+                0 ? (
                   <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
-                    {fiscalSequenceAlertsQuery.data.length > 9
+                    {(fiscalSequenceAlertsQuery.data?.length ?? 0) +
+                      (discountApprovalsQuery.data?.length ?? 0) >
+                    9
                       ? '9+'
-                      : fiscalSequenceAlertsQuery.data.length}
+                      : (fiscalSequenceAlertsQuery.data?.length ?? 0) +
+                        (discountApprovalsQuery.data?.length ?? 0)}
                   </span>
                 ) : null}
               </Button>
@@ -175,8 +203,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   lowStockProducts={summaryQuery.data?.lowStockProducts ?? 0}
                   openCashSessions={summaryQuery.data?.openCashSessions ?? 0}
                   fiscalSequenceAlerts={fiscalSequenceAlertsQuery.data ?? []}
-                  loading={summaryQuery.isLoading || fiscalSequenceAlertsQuery.isLoading}
+                  discountApprovals={discountApprovalsQuery.data ?? []}
+                  loading={
+                    summaryQuery.isLoading ||
+                    fiscalSequenceAlertsQuery.isLoading ||
+                    discountApprovalsQuery.isLoading
+                  }
                   onClose={() => setNotificationsOpen(false)}
+                  onSelectDiscount={(approval) => {
+                    setNotificationsOpen(false);
+                    setSelectedDiscountApproval(approval);
+                  }}
                 />
               ) : null}
               <div className="flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-2 py-1.5 sm:px-3">
@@ -185,10 +222,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
                 <div className="hidden sm:block">
                   <p className="text-sm font-medium">{session?.user.name ?? brand.name}</p>
-                  <p className="text-xs text-muted-foreground">{translateRole(session?.role) ?? 'Operacion'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {translateRole(session?.role) ?? 'Operacion'}
+                  </p>
                 </div>
               </div>
-              <Button variant="outline" size="icon" aria-label="Cerrar sesion" onClick={handleLogout}>
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="Cerrar sesion"
+                onClick={handleLogout}
+              >
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>
@@ -200,6 +244,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <MobileNavigation />
+      <DiscountApprovalDialog
+        session={session}
+        approval={selectedDiscountApproval}
+        onClose={() => setSelectedDiscountApproval(null)}
+      />
     </div>
   );
 }
@@ -209,15 +258,19 @@ function NotificationsPanel({
   lowStockProducts,
   openCashSessions,
   fiscalSequenceAlerts,
+  discountApprovals,
   loading,
   onClose,
+  onSelectDiscount,
 }: {
   pendingInvoices: number;
   lowStockProducts: number;
   openCashSessions: number;
   fiscalSequenceAlerts: FiscalSequenceAlert[];
+  discountApprovals: DiscountApproval[];
   loading: boolean;
   onClose: () => void;
+  onSelectDiscount: (approval: DiscountApproval) => void;
 }) {
   const notifications = [
     {
@@ -247,7 +300,10 @@ function NotificationsPanel({
     ...fiscalSequenceAlerts.map((alert) => ({
       id: alert.id,
       label: getFiscalSequenceAlertLabel(alert),
-      value: alert.missing || alert.exhausted || alert.expired ? 'Revisar' : `${alert.remaining} restantes`,
+      value:
+        alert.missing || alert.exhausted || alert.expired
+          ? 'Revisar'
+          : `${alert.remaining} restantes`,
       href: '/settings/fiscal-sequences',
       detail:
         alert.missing || alert.exhausted || alert.expired
@@ -266,9 +322,46 @@ function NotificationsPanel({
         </button>
       </div>
       {loading ? (
-        <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">Cargando alertas...</p>
+        <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
+          Cargando alertas...
+        </p>
       ) : (
         <div className="space-y-2">
+          {discountApprovals.map((approval) => (
+            <button
+              key={approval.id}
+              type="button"
+              onClick={() => onSelectDiscount(approval)}
+              className="flex w-full items-center justify-between rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-left text-sm transition hover:border-sky-300"
+            >
+              <span className="min-w-0">
+                <span className="block truncate font-medium">
+                  Descuento personalizado · {approval.salesOrder.orderNumber}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {approval.requestedBy.name} solicita {Number(approval.requestedRate) * 100}%
+                </span>
+              </span>
+              <span
+                className={cn(
+                  'ml-3 shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold',
+                  approval.status === 'PENDING'
+                    ? 'bg-amber-100 text-amber-800'
+                    : approval.status === 'APPROVED'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-red-100 text-red-800',
+                )}
+              >
+                {approval.status === 'PENDING'
+                  ? 'Pendiente'
+                  : approval.status === 'APPROVED'
+                    ? 'Aprobado'
+                    : approval.status === 'REJECTED'
+                      ? 'Rechazado'
+                      : 'Cancelado'}
+              </span>
+            </button>
+          ))}
           {notifications.map((item) => (
             <Link
               key={item.id}
@@ -278,7 +371,9 @@ function NotificationsPanel({
             >
               <span className="min-w-0">
                 <span className="block truncate">{item.label}</span>
-                {item.detail ? <span className="block text-xs text-muted-foreground">{item.detail}</span> : null}
+                {item.detail ? (
+                  <span className="block text-xs text-muted-foreground">{item.detail}</span>
+                ) : null}
               </span>
               <span
                 className={cn(
@@ -305,4 +400,186 @@ function getFiscalSequenceAlertLabel(alert: FiscalSequenceAlert) {
   if (alert.expired) return `${alert.prefix}: vigencia fiscal vencida`;
   if (alert.exhausted) return `${alert.prefix}: bloque agotado`;
   return `${alert.prefix}: próximo a agotarse`;
+}
+
+function DiscountApprovalDialog({
+  session,
+  approval,
+  onClose,
+}: {
+  session: AuthSession;
+  approval: DiscountApproval | null;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [note, setNote] = useState('');
+
+  useEffect(() => setNote(approval?.decisionNote ?? ''), [approval]);
+
+  const decisionMutation = useMutation({
+    mutationFn: async (action: 'APPROVE' | 'REJECT') => {
+      if (!approval) throw new Error('Solicitud no disponible.');
+      return action === 'APPROVE'
+        ? approveDiscountRequest(
+            session.tenantId,
+            session.accessToken,
+            approval.id,
+            note.trim() || undefined,
+          )
+        : rejectDiscountRequest(
+            session.tenantId,
+            session.accessToken,
+            approval.id,
+            note.trim() || undefined,
+          );
+    },
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: ['discount-approval-notifications'] });
+      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      setNote(updated.decisionNote ?? '');
+      toast.success(updated.status === 'APPROVED' ? 'Descuento aprobado' : 'Descuento rechazado', {
+        description: updated.salesOrder.orderNumber,
+      });
+      onClose();
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudo resolver la solicitud.'),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async () => {
+      if (!approval) throw new Error('Solicitud no disponible.');
+      return dismissDiscountNotification(session.tenantId, session.accessToken, approval.id);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['discount-approval-notifications'] });
+      toast.success('Notificación eliminada');
+      onClose();
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudo eliminar la notificación.'),
+  });
+
+  if (!approval) return null;
+
+  const grossSubtotal =
+    Number(approval.salesOrder.subtotal) + Number(approval.salesOrder.discountTotal);
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/45 p-4 print:hidden">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-zinc-200 p-5">
+          <div>
+            <h2 className="text-lg font-bold">Solicitud de descuento personalizado</h2>
+            <p className="text-sm text-muted-foreground">
+              {approval.salesOrder.orderNumber} · solicitado por {approval.requestedBy.name}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar">
+            <XCircle className="h-5 w-5 text-muted-foreground" />
+          </button>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md bg-sky-50 p-3">
+              <p className="text-xs text-muted-foreground">Descuento solicitado</p>
+              <p className="text-2xl font-bold text-primary">
+                {Number(approval.requestedRate) * 100}%
+              </p>
+            </div>
+            <div className="rounded-md bg-zinc-50 p-3">
+              <p className="text-xs text-muted-foreground">Subtotal bruto</p>
+              <p className="font-bold">{formatCurrency(grossSubtotal)}</p>
+            </div>
+            <div className="rounded-md bg-zinc-50 p-3">
+              <p className="text-xs text-muted-foreground">Total con impuestos</p>
+              <p className="font-bold">{formatCurrency(Number(approval.salesOrder.total))}</p>
+            </div>
+          </div>
+          <div className="text-sm">
+            <p>
+              Cliente:{' '}
+              <strong>
+                {approval.salesOrder.customer?.name ??
+                  approval.salesOrder.clientName ??
+                  'Consumidor final'}
+              </strong>
+            </p>
+            <p>
+              Tipo:{' '}
+              <strong>
+                {approval.salesOrder.destination === 'QUOTATION' ? 'Cotización' : 'Venta de caja'}
+              </strong>
+            </p>
+            <p>
+              Solicitado: <strong>{formatDateTime(approval.requestedAt)}</strong>
+            </p>
+          </div>
+          <div className="rounded-md border border-zinc-200">
+            {approval.salesOrder.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start justify-between gap-3 border-b border-zinc-100 px-3 py-2 text-sm last:border-0"
+              >
+                <span>
+                  {item.description} · {Number(item.quantity)}
+                </span>
+                <strong>{formatCurrency(Number(item.total))}</strong>
+              </div>
+            ))}
+          </div>
+          {approval.status === 'PENDING' ? (
+            <div className="space-y-2">
+              <label htmlFor="discountDecisionNote" className="text-sm font-medium">
+                Nota de decisión (opcional)
+              </label>
+              <textarea
+                id="discountDecisionNote"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                maxLength={500}
+                className="min-h-20 w-full rounded-md border border-input px-3 py-2 text-sm"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  disabled={decisionMutation.isPending}
+                  onClick={() => decisionMutation.mutate('APPROVE')}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Aprobar
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-danger/30 text-danger hover:bg-danger/5 hover:text-danger"
+                  disabled={decisionMutation.isPending}
+                  onClick={() => decisionMutation.mutate('REJECT')}
+                >
+                  <XCircle className="h-4 w-4" />
+                  Rechazar
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 p-3">
+              <p className="text-sm">
+                <strong>{approval.status === 'APPROVED' ? 'Aprobado' : 'No aprobado'}</strong>
+                {approval.decisionNote ? ` · ${approval.decisionNote}` : ''}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={dismissMutation.isPending}
+                onClick={() => dismissMutation.mutate()}
+              >
+                <Trash2 className="h-4 w-4" />
+                Eliminar
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

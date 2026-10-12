@@ -135,6 +135,10 @@ export class ReturnsService {
         .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0))
         .toDecimalPlaces(2);
 
+      const requestedRefundMethod =
+        (dto.refundMethod ?? invoice.paymentMethod) === PaymentMethod.CHECK
+          ? PaymentMethod.CREDIT
+          : (dto.refundMethod ?? invoice.paymentMethod ?? PaymentMethod.CASH);
       const request = await tx.returnRequest.create({
         data: {
           tenantId,
@@ -142,7 +146,7 @@ export class ReturnsService {
           requestedById: user.id,
           status: ReturnRequestStatus.REQUESTED,
           reason,
-          refundMethod: dto.refundMethod ?? invoice.paymentMethod ?? PaymentMethod.CASH,
+          refundMethod: requestedRefundMethod,
           refundAmount,
           items: {
             create: computedItems.map((item) => ({
@@ -222,7 +226,12 @@ export class ReturnsService {
 
       await this.ensureRequestCanStillBeCompleted(tx, tenantId, request);
 
-      const refundMethod = dto.refundMethod ?? request.refundMethod ?? PaymentMethod.CASH;
+      const selectedRefundMethod = dto.refundMethod ?? request.refundMethod ?? PaymentMethod.CASH;
+      const refundMethod =
+        selectedRefundMethod === PaymentMethod.CHECK
+          ? PaymentMethod.CREDIT
+          : selectedRefundMethod;
+      const isStoreCreditRefund = refundMethod === PaymentMethod.CREDIT;
       const isCreditReturn = request.invoice.paymentMode === SalePaymentMode.CREDIT;
       if (isCreditReturn && request.invoice.customerId) {
         await this.lockCustomer(tx, tenantId, request.invoice.customerId);
@@ -230,7 +239,18 @@ export class ReturnsService {
       const creditAppliedAmount = isCreditReturn
         ? Prisma.Decimal.min(request.refundAmount, request.invoice.balance).toDecimalPlaces(2)
         : new Prisma.Decimal(0);
-      const cashRefundAmount = request.refundAmount.sub(creditAppliedAmount).toDecimalPlaces(2);
+      const refundableAmount = request.refundAmount.sub(creditAppliedAmount).toDecimalPlaces(2);
+      const storeCreditAmount = isStoreCreditRefund
+        ? refundableAmount
+        : new Prisma.Decimal(0);
+      const cashRefundAmount = isStoreCreditRefund
+        ? new Prisma.Decimal(0)
+        : refundableAmount;
+      if (isStoreCreditRefund && storeCreditAmount.lte(0)) {
+        throw new BadRequestException(
+          'This return only reduces the outstanding invoice balance and has no paid amount available for store credit.',
+        );
+      }
       const cashSession = cashRefundAmount.gt(0)
         ? await this.resolveCashSessionForRefund(tx, tenantId, dto.cashSessionId)
         : null;
@@ -350,6 +370,27 @@ export class ReturnsService {
         throw new BadRequestException('Return request could not be completed.');
       }
 
+      const storeCredit = storeCreditAmount.gt(0)
+        ? await tx.storeCredit.create({
+            data: {
+              tenantId,
+              sourceInvoiceId: request.invoiceId,
+              returnRequestId: request.id,
+              issuedById: user.id,
+              originalAmount: storeCreditAmount,
+              remainingAmount: storeCreditAmount,
+              expiresAt: new Date(completedAt.getTime() + 30 * 24 * 60 * 60 * 1000),
+            },
+          })
+        : null;
+
+      if (storeCredit) {
+        await tx.returnRequest.update({
+          where: { id: request.id },
+          data: { refundReference: request.invoice.invoiceNumber },
+        });
+      }
+
       if (isCreditReturn && request.invoice.customerId) {
         const nextBalance = request.invoice.balance.sub(creditAppliedAmount).toDecimalPlaces(2);
         const nextPaidAmount = request.invoice.paidAmount.sub(cashRefundAmount).toDecimalPlaces(2);
@@ -406,6 +447,8 @@ export class ReturnsService {
               refundMethod,
               creditAppliedAmount: creditAppliedAmount.toString(),
               cashRefundAmount: cashRefundAmount.toString(),
+              storeCreditAmount: storeCreditAmount.toString(),
+              storeCreditExpiresAt: storeCredit?.expiresAt.toISOString(),
               adminNote: dto.adminNote,
             },
           },
@@ -422,6 +465,7 @@ export class ReturnsService {
               invoiceNumber: request.invoice.invoiceNumber,
               creditAppliedAmount: creditAppliedAmount.toString(),
               cashRefundAmount: cashRefundAmount.toString(),
+              storeCreditAmount: storeCreditAmount.toString(),
               restockedItems: request.items.filter((item) => item.restock).length,
             },
           },
@@ -919,6 +963,16 @@ export class ReturnsService {
           product: true,
         },
         orderBy: { description: 'asc' as const },
+      },
+      storeCredit: {
+        include: {
+          redemptions: {
+            include: {
+              invoice: { select: { id: true, invoiceNumber: true } },
+            },
+            orderBy: { createdAt: 'desc' as const },
+          },
+        },
       },
     };
   }

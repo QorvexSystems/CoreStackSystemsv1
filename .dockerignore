@@ -1,0 +1,13 @@
+**/node_modules
+**/.next
+**/.next-dev
+**/dist
+**/generated
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.log
+.tmp
+.dev-logs

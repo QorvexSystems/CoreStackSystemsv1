@@ -37,12 +37,14 @@ import {
   getPosProductByBarcode,
   getSalesOrders,
   getSalesOrder,
+  lookupPosStoreCredit,
   openCashSession,
   releaseSalesOrder,
   searchPosProducts,
   type Product,
   type CashSession,
   type SalesOrder,
+  type StoreCreditLookup,
 } from '@/lib/api';
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils';
 import { canUsePosSession, isAdminSession } from '@/lib/authorization';
@@ -62,8 +64,10 @@ import { PosPaymentPanel } from './pos/pos-payment-panel';
 import { PosProductGrid } from './pos/pos-product-grid';
 import {
   canAddProduct,
+  calculateSaleAmounts,
   getAvailableStock,
   getDefaultQuantity,
+  getCommonProductUnit,
   getProductPrice,
   getQuantityStep,
   roundQuantity,
@@ -82,8 +86,37 @@ type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => Barc
 type WindowWithBarcodeDetector = Window &
   typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor };
 
+function buildCommonOrderProduct(item: SalesOrder['items'][number]): Product {
+  return {
+    id: `common:${item.id}`,
+    name: item.description,
+    sku: null,
+    barcode: null,
+    barcodeType: null,
+    generatedBarcode: false,
+    barcodeLabelPrintCount: 0,
+    description: 'Producto común agregado únicamente a esta venta',
+    imageUrl: null,
+    brand: null,
+    unit: getCommonProductUnit(item.sku),
+    price: item.unitPrice,
+    salePrice: item.unitPrice,
+    cost: null,
+    taxRate: item.taxRate,
+    trackInventory: false,
+    inventoryDestination: 'SALES_INVENTORY',
+    stock: 0,
+    reservedStock: 0,
+    minStock: 0,
+    status: 'ACTIVE',
+    category: null,
+  };
+}
+
 export function PosView() {
   const session = useCurrentSession();
+  const pricesIncludeTax =
+    session?.salePricesIncludeTax ?? (session?.tenantSlug ? session.tenantSlug === 'allpa' : true);
   const queryClient = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -118,6 +151,8 @@ export function PosView() {
   const [orderClaimPending, setOrderClaimPending] = useState(false);
   const [closingDialogOpen, setClosingDialogOpen] = useState(false);
   const [counterSaleOpen, setCounterSaleOpen] = useState(false);
+  const [storeCreditReference, setStoreCreditReference] = useState('');
+  const [storeCredit, setStoreCredit] = useState<StoreCreditLookup | null>(null);
 
   const customersQuery = useQuery({
     queryKey: ['pos-customers', session?.tenantId],
@@ -162,10 +197,12 @@ export function PosView() {
   const currentCashSession = currentSessionQuery.data;
   const canUsePos = canUsePosSession(session);
   const canOpenCashSession = Boolean(
-    session && (isAdmin || session.permissions.canOpenCashSession),
+    session &&
+      (isAdmin || session.role === 'ORDER_TAKER' || session.permissions.canOpenCashSession),
   );
   const canCloseCashSession = Boolean(
-    session && (isAdmin || session.permissions.canCloseCashSession),
+    session &&
+      (isAdmin || session.role === 'ORDER_TAKER' || session.permissions.canCloseCashSession),
   );
   const cartReadOnly = Boolean(loadedOrder);
   const readyOrders = (pendingOrdersQuery.data ?? []).filter((order) =>
@@ -227,44 +264,53 @@ export function PosView() {
   }, [scannerEnabled]);
 
   const totals = useMemo(() => {
+    const lineAmounts = cart.map((item) => {
+      if (item.subtotal !== undefined && item.taxTotal !== undefined && item.total !== undefined) {
+        return {
+          subtotal: item.subtotal,
+          taxTotal: item.taxTotal,
+          total: item.total,
+        };
+      }
+
+      return calculateSaleAmounts(
+        getProductPrice(item.product),
+        item.quantity,
+        Number(item.product.taxRate),
+        0,
+        pricesIncludeTax,
+      );
+    });
     const subtotal =
-      cart.reduce(
-        (sum, item) =>
-          sum + Math.round((item.subtotal ?? getProductPrice(item.product) * item.quantity) * 100),
-        0,
-      ) / 100;
+      lineAmounts.reduce((sum, item) => sum + Math.round(item.subtotal * 100), 0) / 100;
     const tax =
-      cart.reduce(
-        (sum, item) =>
-          sum +
-          Math.round(
-            (item.taxTotal ??
-              (Math.round(getProductPrice(item.product) * item.quantity * 100) / 100) *
-                Number(item.product.taxRate)) * 100,
-          ),
-        0,
-      ) / 100;
+      lineAmounts.reduce((sum, item) => sum + Math.round(item.taxTotal * 100), 0) / 100;
     const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
-    const total = Math.round((subtotal + tax) * 100) / 100;
+    const total =
+      lineAmounts.reduce((sum, item) => sum + Math.round(item.total * 100), 0) / 100;
     const received = parseCurrencyInput(amountReceived);
-    const requiredPayment =
+    const baseRequiredPayment =
       loadedOrder?.paymentMode === 'CREDIT' ? Number(loadedOrder.initialPaymentAmount ?? 0) : total;
+    const storeCreditApplied = Math.min(storeCredit?.availableAmount ?? 0, baseRequiredPayment);
+    const requiredPayment = Math.max(baseRequiredPayment - storeCreditApplied, 0);
 
     return {
       subtotal,
       discount,
       tax,
       total,
+      baseRequiredPayment,
+      storeCreditApplied,
       requiredPayment,
-      remainingBalance: Math.max(total - requiredPayment, 0),
+      remainingBalance: Math.max(total - baseRequiredPayment, 0),
       received,
       change:
         paymentMethod === 'CASH' && received > requiredPayment ? received - requiredPayment : 0,
     };
-  }, [amountReceived, cart, loadedOrder, paymentMethod]);
+  }, [amountReceived, cart, loadedOrder, paymentMethod, pricesIncludeTax, storeCredit]);
 
   useEffect(() => {
-    if (paymentMethod === 'CARD' && totals.requiredPayment >= 0) {
+    if (['CARD', 'TRANSFER'].includes(paymentMethod) && totals.requiredPayment >= 0) {
       setAmountReceived(formatCurrencyInputFromNumber(totals.requiredPayment));
     }
   }, [paymentMethod, totals.requiredPayment]);
@@ -310,9 +356,9 @@ export function PosView() {
     !requiresRecipientDocument ||
     Boolean(
       fiscalDocumentValid &&
-      fiscalCustomer &&
-      fiscalCustomerMatchesOrder &&
-      (!requiresRnc || fiscalDocumentType === 'RNC'),
+        fiscalCustomer &&
+        fiscalCustomerMatchesOrder &&
+        (!requiresRnc || fiscalDocumentType === 'RNC'),
     );
   const canCompleteSale =
     cart.length > 0 &&
@@ -444,6 +490,27 @@ export function PosView() {
     },
   });
 
+  const storeCreditLookupMutation = useMutation({
+    mutationFn: () => {
+      if (!session) throw new Error('Sesión requerida.');
+      const reference = storeCreditReference.trim();
+      if (!reference) throw new Error('Escribe el número de la factura con crédito.');
+      return lookupPosStoreCredit(session.tenantId, session.accessToken, reference);
+    },
+    onSuccess: (credit) => {
+      setStoreCredit(credit);
+      setStoreCreditReference(credit.invoiceNumber);
+      setAmountReceived(clearCurrencyInput());
+      toast.success('Crédito disponible', {
+        description: `${credit.invoiceNumber} · ${formatCurrency(credit.availableAmount)}`,
+      });
+    },
+    onError: (error) => {
+      setStoreCredit(null);
+      toast.error(error instanceof Error ? error.message : 'No se pudo consultar el crédito.');
+    },
+  });
+
   const completeSaleMutation = useMutation({
     mutationFn: () => {
       if (!session) {
@@ -459,6 +526,7 @@ export function PosView() {
         amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
         cashSessionId: currentCashSession?.id,
         orderId: loadedOrder?.id,
+        storeCreditInvoiceNumber: storeCredit?.invoiceNumber,
         items: loadedOrder
           ? undefined
           : cart.map((item) => ({
@@ -479,6 +547,8 @@ export function PosView() {
       setLoadedOrder(null);
       setFiscalDocumentNumber('');
       setAmountReceived(clearCurrencyInput());
+      setStoreCreditReference('');
+      setStoreCredit(null);
       await queryClient.invalidateQueries({ queryKey: ['invoices'] });
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
@@ -746,6 +816,8 @@ export function PosView() {
     setCart([]);
     setPaymentMethod('CASH');
     setAmountReceived(clearCurrencyInput());
+    setStoreCreditReference('');
+    setStoreCredit(null);
   }
 
   async function requestCloseCashSession() {
@@ -821,12 +893,19 @@ export function PosView() {
   function loadClaimedSalesOrder(order: SalesOrder) {
     const items: CartItem[] = [];
     for (const item of order.items) {
-      if (!item.product) {
-        continue;
-      }
+      const isCommonProduct = !item.productId;
+      const product = item.product ?? (isCommonProduct ? buildCommonOrderProduct(item) : null);
+      if (!product) continue;
 
       items.push({
-        product: item.product,
+        product,
+        commonProduct: isCommonProduct
+          ? {
+              description: item.description,
+              unit: getCommonProductUnit(item.sku),
+              regularUnitPrice: Number(item.unitPrice),
+            }
+          : undefined,
         quantity: Number(item.quantity),
         unitPrice: Number(item.unitPrice),
         discountTotal: Number(item.discountTotal ?? 0),
@@ -838,13 +917,15 @@ export function PosView() {
     }
 
     if (items.length !== order.items.length) {
-      toast.error('La orden tiene productos no disponibles. Revisa la orden antes de cobrar.');
+      toast.error('La orden tiene productos de inventario no disponibles. Revisa la orden.');
       return;
     }
 
     setLoadedOrder(order);
     setPaymentMethod('CASH');
     setAmountReceived(clearCurrencyInput());
+    setStoreCreditReference('');
+    setStoreCredit(null);
     setDocumentType(order.electronicInvoiceRequested ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02');
     setFiscalDocumentType('RNC');
     setCustomerId(order.customerId ?? '');
@@ -865,6 +946,8 @@ export function PosView() {
     setFiscalDocumentType('RNC');
     setFiscalDocumentNumber('');
     setAmountReceived(clearCurrencyInput());
+    setStoreCreditReference('');
+    setStoreCredit(null);
     setMessage(nextMessage);
   }
 
@@ -997,6 +1080,7 @@ export function PosView() {
         sessionName={session.user.name}
         isOpen={Boolean(currentCashSession)}
         registerName={currentCashSession?.cashRegister.name}
+        openedByName={currentCashSession?.openedBy?.name}
         openedAt={currentCashSession?.openedAt}
         openingAmount={currentCashSession?.openingAmount}
       />
@@ -1116,8 +1200,10 @@ export function PosView() {
               loadedOrderId={loadedOrder?.id}
               currentUserId={session.user.id}
               claimingId={claimOrderMutation.variables?.id}
+              releasingId={releaseOrderMutation.variables}
               canChargeOrders={canUsePos}
               onLoad={handleLoadOrder}
+              onRelease={(order) => releaseOrderMutation.mutate(order.id)}
             />
             {canCreateDirectSale && !loadedOrder && counterSaleOpen ? (
               <Card>
@@ -1245,6 +1331,12 @@ export function PosView() {
                     dueDate={loadedOrder?.dueDate}
                     customerLocked={Boolean(loadedOrder?.customerId)}
                     amountReceived={amountReceived}
+                    storeCreditReference={storeCreditReference}
+                    storeCredit={storeCredit}
+                    isStoreCreditLoading={storeCreditLookupMutation.isPending}
+                    discountPercent={
+                      loadedOrder ? Number(loadedOrder.discountRate) * 100 : undefined
+                    }
                     totals={totals}
                     message={message}
                     canCompleteSale={canCompleteSale}
@@ -1255,6 +1347,15 @@ export function PosView() {
                     onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
                     onPaymentMethodChange={changePaymentMethod}
                     onAmountReceivedChange={setAmountReceived}
+                    onStoreCreditReferenceChange={(value) => {
+                      setStoreCreditReference(value);
+                      setStoreCredit(null);
+                    }}
+                    onLookupStoreCredit={() => storeCreditLookupMutation.mutate()}
+                    onClearStoreCredit={() => {
+                      setStoreCreditReference('');
+                      setStoreCredit(null);
+                    }}
                     onCompleteSale={() => completeSaleMutation.mutate()}
                   />
                 ) : null}
@@ -1372,8 +1473,10 @@ function SalesOrdersQueuePanel({
   loadedOrderId,
   currentUserId,
   claimingId,
+  releasingId,
   canChargeOrders,
   onLoad,
+  onRelease,
 }: {
   orders: SalesOrder[];
   loading: boolean;
@@ -1382,8 +1485,10 @@ function SalesOrdersQueuePanel({
   loadedOrderId?: string;
   currentUserId: string;
   claimingId?: string;
+  releasingId?: string;
   canChargeOrders: boolean;
   onLoad: (order: SalesOrder) => void;
+  onRelease: (order: SalesOrder) => void;
 }) {
   const [queueSearch, setQueueSearch] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1582,30 +1687,53 @@ function SalesOrdersQueuePanel({
                     <span>{order.items.length} línea(s)</span>
                   </div>
                   {canChargeOrders ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onLoad(order);
-                      }}
-                      disabled={
-                        loadedOrderId === order.id ||
-                        claimingId === order.id ||
-                        (Boolean(loadedOrderId) && loadedOrderId !== order.id) ||
-                        order.status === 'CREATED' ||
-                        (order.status === 'IN_CASHIER' && order.claimedBy?.id !== currentUserId)
-                      }
-                    >
-                      <ClipboardCheck className="h-4 w-4" />
-                      {loadedOrderId === order.id
-                        ? 'Cargada'
-                        : order.status === 'CREATED'
-                          ? 'Esperando aprobación'
-                          : order.status === 'IN_CASHIER'
-                            ? 'Tomada'
-                            : 'Cobrar'}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {order.status === 'IN_CASHIER' &&
+                      order.claimedBy?.id === currentUserId &&
+                      loadedOrderId !== order.id ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRelease(order);
+                          }}
+                          disabled={Boolean(loadedOrderId) || releasingId === order.id}
+                        >
+                          {releasingId === order.id ? 'Liberando...' : 'Liberar'}
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onLoad(order);
+                        }}
+                        disabled={
+                          loadedOrderId === order.id ||
+                          claimingId === order.id ||
+                          releasingId === order.id ||
+                          (Boolean(loadedOrderId) && loadedOrderId !== order.id) ||
+                          order.status === 'CREATED' ||
+                          (order.status === 'IN_CASHIER' &&
+                            order.claimedBy?.id !== currentUserId)
+                        }
+                      >
+                        <ClipboardCheck className="h-4 w-4" />
+                        {loadedOrderId === order.id
+                          ? 'Cargada'
+                          : order.status === 'CREATED'
+                            ? 'Esperando aprobación'
+                            : order.status === 'IN_CASHIER' &&
+                                order.claimedBy?.id === currentUserId
+                              ? 'Continuar'
+                              : order.status === 'IN_CASHIER'
+                                ? 'Tomada'
+                                : 'Cobrar'}
+                      </Button>
+                    </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">Sin permiso de cobro</span>
                   )}
@@ -1636,17 +1764,19 @@ function CashStatusHeader({
   sessionName,
   isOpen,
   registerName,
+  openedByName,
   openedAt,
   openingAmount,
 }: {
   sessionName: string;
   isOpen: boolean;
   registerName?: string;
+  openedByName?: string;
   openedAt?: string;
   openingAmount?: string | number | null;
 }) {
   return (
-    <div className="grid shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm sm:grid-cols-2 md:grid-cols-4 md:divide-x md:divide-zinc-100">
+    <div className="grid shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm sm:grid-cols-2 xl:grid-cols-5 xl:divide-x xl:divide-zinc-100">
       <div className="flex items-center gap-3">
         <div className="ml-3 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
           <CircleCheckBig className="h-5 w-5" />
@@ -1661,8 +1791,17 @@ function CashStatusHeader({
           <ShieldCheck className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Cajero</p>
+          <p className="text-xs text-muted-foreground">Usuario actual</p>
           <p className="font-semibold">{sessionName}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 px-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+          <DoorOpen className="h-4 w-4" />
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Abierta por</p>
+          <p className="font-semibold">{openedByName ?? 'Pendiente'}</p>
         </div>
       </div>
       <div className="flex items-center gap-2 px-3">
@@ -1930,8 +2069,8 @@ function CashCloseDialog({
             !hasCountedAmount
               ? 'bg-zinc-100 text-zinc-600'
               : Math.abs(difference) < 0.005
-              ? 'bg-emerald-50 text-emerald-800'
-              : 'bg-amber-50 text-amber-900',
+                ? 'bg-emerald-50 text-emerald-800'
+                : 'bg-amber-50 text-amber-900',
           )}
         >
           <span>Diferencia</span>

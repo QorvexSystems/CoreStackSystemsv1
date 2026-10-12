@@ -18,6 +18,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getBarcodeLookupCandidates, normalizeBarcodeInput } from '../../common/utils/barcode';
+import { computeSaleAmounts } from '../../common/utils/sale-pricing';
 import { AuditService } from '../audit/audit.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -78,6 +79,20 @@ export class ProductsService {
     });
   }
 
+  findDepartments(tenantId: string) {
+    return this.prisma.productCategory.findMany({
+      where: {
+        tenantId,
+        status: ProductStatus.ACTIVE,
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findByBarcode(tenantId: string, barcode: string) {
     const lookupCandidates = getBarcodeLookupCandidates(barcode);
 
@@ -108,6 +123,11 @@ export class ProductsService {
   }
 
   async create(tenantId: string, userId: string, dto: CreateProductDto) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { salePricesIncludeTax: true },
+    });
+
     if (dto.categoryId) {
       await this.ensureCategory(tenantId, dto.categoryId);
     }
@@ -125,6 +145,13 @@ export class ProductsService {
     const stock = dto.stock;
     const price = new Prisma.Decimal(dto.price);
     const cost = dto.cost === undefined ? undefined : new Prisma.Decimal(dto.cost);
+    const taxRate = new Prisma.Decimal(dto.taxRate ?? 0.18);
+    const netSalePrice = computeSaleAmounts({
+      advertisedUnitPrice: price,
+      quantity: new Prisma.Decimal(1),
+      taxRate,
+      pricesIncludeTax: tenant.salePricesIncludeTax,
+    }).subtotal;
     const barcodeWasGenerated = !dto.barcode?.trim();
     const unit = dto.unit ?? ProductUnit.UNIT;
 
@@ -151,9 +178,12 @@ export class ProductsService {
           price,
           salePrice: price,
           cost,
-          margin: cost ? price.sub(cost).div(price).toDecimalPlaces(4) : undefined,
+          margin:
+            cost && !netSalePrice.isZero()
+              ? netSalePrice.sub(cost).div(netSalePrice).toDecimalPlaces(4)
+              : undefined,
           taxCategory: dto.taxCategory,
-          taxRate: dto.taxRate ?? 0.18,
+          taxRate,
           trackInventory: dto.trackInventory ?? true,
           inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
           stock,
@@ -232,7 +262,13 @@ export class ProductsService {
   }
 
   async update(tenantId: string, userId: string, id: string, dto: UpdateProductDto) {
-    const currentProduct = await this.findOne(tenantId, id);
+    const [currentProduct, tenant] = await Promise.all([
+      this.findOne(tenantId, id),
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+    ]);
 
     if (dto.categoryId) {
       await this.ensureCategory(tenantId, dto.categoryId);
@@ -253,6 +289,15 @@ export class ProductsService {
       dto.price === undefined ? undefined : new Prisma.Decimal(dto.price).toDecimalPlaces(2);
     const nextCost =
       dto.cost === undefined ? undefined : new Prisma.Decimal(dto.cost).toDecimalPlaces(2);
+    const effectivePrice = nextPrice ?? currentProduct.salePrice;
+    const effectiveCost = nextCost ?? currentProduct.cost;
+    const effectiveTaxRate = new Prisma.Decimal(dto.taxRate ?? currentProduct.taxRate);
+    const netSalePrice = computeSaleAmounts({
+      advertisedUnitPrice: effectivePrice,
+      quantity: new Prisma.Decimal(1),
+      taxRate: effectiveTaxRate,
+      pricesIncludeTax: tenant.salePricesIncludeTax,
+    }).subtotal;
     const nextUnit = dto.unit ?? currentProduct.unit;
     const nextStock = dto.stock ?? currentProduct.stock;
     const nextMinStock = dto.minStock ?? currentProduct.minStock;
@@ -280,8 +325,8 @@ export class ProductsService {
           salePrice: nextPrice,
           cost: nextCost,
           margin:
-            nextPrice && nextCost && !nextPrice.isZero()
-              ? nextPrice.sub(nextCost).div(nextPrice).toDecimalPlaces(4)
+            effectiveCost && !netSalePrice.isZero()
+              ? netSalePrice.sub(effectiveCost).div(netSalePrice).toDecimalPlaces(4)
               : undefined,
           taxCategory: dto.taxCategory,
           taxRate: dto.taxRate,
@@ -579,7 +624,7 @@ export class ProductsService {
       { name: { contains: query, mode: 'insensitive' } },
       { sku: { contains: query, mode: 'insensitive' } },
       { barcode: { contains: query, mode: 'insensitive' } },
-      { brand: { contains: query, mode: 'insensitive' } },
+      { category: { name: { contains: query, mode: 'insensitive' } } },
     ];
   }
 

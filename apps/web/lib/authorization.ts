@@ -53,7 +53,10 @@ export function canTakeOrders(session: AuthSession | null | undefined) {
 
 export function canUsePosSession(session: AuthSession | null | undefined) {
   return Boolean(
-    isAdminSession(session) || session?.role === 'CASHIER' || session?.permissions.canUsePos,
+    isAdminSession(session) ||
+    session?.role === 'CASHIER' ||
+    session?.role === 'ORDER_TAKER' ||
+    session?.permissions.canUsePos,
   );
 }
 
@@ -79,7 +82,11 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
   }
 
   if (pathname === '/returns' || pathname.startsWith('/returns/')) {
-    return canUsePosSession(session);
+    return (
+      isAdminSession(session) ||
+      session.role === 'CASHIER' ||
+      (session.role !== 'ORDER_TAKER' && Boolean(session.permissions.canUsePos))
+    );
   }
 
   if (isAdminSession(session)) {
@@ -95,7 +102,7 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
   }
 
   return Boolean(
-    session.permissions.canReprintReceipt &&
+    (session.role === 'ORDER_TAKER' || session.permissions.canReprintReceipt) &&
     pathname.startsWith('/invoices/') &&
     pathname.endsWith('/print'),
   );

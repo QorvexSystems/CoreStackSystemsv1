@@ -87,3 +87,13 @@ export function formatDominicanDocument(type: 'RNC' | 'CEDULA', value: string) {
 
   return digits;
 }
+
+export function formatBusinessRnc(value: string) {
+  const digits = normalizeDominicanDocument(value);
+
+  if (digits.length === 9) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 8)}-${digits.slice(8)}`;
+  }
+
+  return digits;
+}

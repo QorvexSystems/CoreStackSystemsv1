@@ -359,6 +359,10 @@ function getDefaultPermissionsForRole(
   if (role === 'ORDER_TAKER') {
     return {
       ...permissions,
+      canUsePos: true,
+      canOpenCashSession: true,
+      canCloseCashSession: true,
+      canReprintReceipt: true,
       canTakeOrders: true,
     };
   }

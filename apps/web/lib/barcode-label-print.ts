@@ -81,9 +81,7 @@ export function printBarcodeLabel(printWindow: Window, label: BarcodeLabel) {
 
   const barcodeSvg = createBarcodeSvg(barcode, label.barcodeType);
   const productName = label.name?.trim() || brand.name;
-  const details = [label.sku?.trim(), label.price == null ? null : formatCurrency(label.price)]
-    .filter(Boolean)
-    .join(' · ');
+  const price = label.price == null ? null : formatCurrency(label.price);
 
   printWindow.document.open();
   printWindow.document.write(`<!doctype html>
@@ -107,7 +105,7 @@ export function printBarcodeLabel(printWindow: Window, label: BarcodeLabel) {
             text-align: center;
           }
           .name { overflow: hidden; font-size: 10pt; font-weight: 700; line-height: 1.15; }
-          .details { font-size: 8pt; line-height: 1.15; }
+          .price { font-size: 11pt; font-weight: 700; line-height: 1.1; }
           .barcode { display: flex; justify-content: center; max-width: 100%; overflow: hidden; }
           .barcode svg { display: block; max-width: 100%; height: auto; }
           @media screen { .label { min-width: 58mm; min-height: 40mm; } }
@@ -117,7 +115,7 @@ export function printBarcodeLabel(printWindow: Window, label: BarcodeLabel) {
         <main class="label">
           <div class="name">${escapeHtml(productName)}</div>
           <div class="barcode">${barcodeSvg}</div>
-          ${details ? `<div class="details">${escapeHtml(details)}</div>` : ''}
+          ${price ? `<div class="price">${escapeHtml(price)}</div>` : ''}
         </main>
       </body>
     </html>`);

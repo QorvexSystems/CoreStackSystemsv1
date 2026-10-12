@@ -1,0 +1,1 @@
+ALTER TYPE "InitialPaymentOption" ADD VALUE IF NOT EXISTS 'CUSTOM';

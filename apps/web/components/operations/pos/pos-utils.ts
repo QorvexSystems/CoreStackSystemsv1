@@ -1,10 +1,52 @@
 import type { Product } from '@/lib/api';
 
 const fractionalUnits = new Set(['METER', 'FOOT', 'YARD', 'POUND']);
+const commonProductPrefix = '__COMMON__:';
+
+export function getCommonProductUnit(sku: string | null | undefined) {
+  return sku?.startsWith(commonProductPrefix) ? sku.slice(commonProductPrefix.length) : 'UNIT';
+}
 
 export function getProductPrice(product: Product) {
   const salePrice = Number(product.salePrice);
   return salePrice > 0 ? salePrice : Number(product.price);
+}
+
+export function calculateSaleAmounts(
+  advertisedUnitPrice: number,
+  quantity: number,
+  taxRate: number,
+  discountRate = 0,
+  pricesIncludeTax = false,
+) {
+  if (!pricesIncludeTax) {
+    const unitPrice = roundMoney(advertisedUnitPrice * (1 - discountRate));
+    const regularSubtotal = roundMoney(advertisedUnitPrice * quantity);
+    const subtotal = roundMoney(unitPrice * quantity);
+    const taxTotal = roundMoney(subtotal * taxRate);
+    return {
+      unitPrice,
+      regularSubtotal,
+      discountTotal: roundMoney(Math.max(regularSubtotal - subtotal, 0)),
+      subtotal,
+      taxTotal,
+      total: roundMoney(subtotal + taxTotal),
+    };
+  }
+
+  const regularTotal = roundMoney(advertisedUnitPrice * quantity);
+  const total = roundMoney(regularTotal * (1 - discountRate));
+  const regularSubtotal = taxRate > 0 ? roundMoney(regularTotal / (1 + taxRate)) : regularTotal;
+  const subtotal = taxRate > 0 ? roundMoney(total / (1 + taxRate)) : total;
+
+  return {
+    unitPrice: quantity > 0 ? roundMoney(subtotal / quantity) : 0,
+    regularSubtotal,
+    discountTotal: roundMoney(Math.max(regularSubtotal - subtotal, 0)),
+    subtotal,
+    taxTotal: roundMoney(total - subtotal),
+    total,
+  };
 }
 
 export function uniqueValues(values: string[]) {
@@ -35,6 +77,10 @@ export function getDefaultQuantity(product: Product) {
   }
 
   return 1;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 export function roundQuantity(value: number) {

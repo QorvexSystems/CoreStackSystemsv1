@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { translateProductUnit } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
 import { formatQuantity, getAvailableStock, getProductPrice, getQuantityStep } from './pos-utils';
 import type { CartItem } from './types';
@@ -51,8 +52,11 @@ export function PosCart({
       <div className="surface-scrollbar max-h-[min(38dvh,24rem)] space-y-2 overflow-y-auto p-3 xl:max-h-[20rem]">
         {items.length ? (
           items.map((item) => {
-            const unitPrice = item.unitPrice ?? getProductPrice(item.product);
-            const subtotal = item.subtotal ?? unitPrice * item.quantity;
+            const unitPrice =
+              item.total !== undefined && item.quantity > 0
+                ? item.total / item.quantity
+                : getProductPrice(item.product);
+            const lineTotal = item.total ?? unitPrice * item.quantity;
             const discountTotal = item.discountTotal ?? 0;
             const availableStock = getAvailableStock(item.product);
             const quantityStep = getQuantityStep(item.product);
@@ -69,6 +73,11 @@ export function PosCart({
                     <p className="truncate text-sm font-semibold text-zinc-950">
                       {item.product.name}
                     </p>
+                    {item.commonProduct ? (
+                      <p className="text-xs font-medium text-blue-700">
+                        Producto común · {translateProductUnit(item.commonProduct.unit)}
+                      </p>
+                    ) : null}
                     <p className="text-xs text-muted-foreground">
                       {formatCurrency(unitPrice)} x {formatQuantity(item.quantity)}
                     </p>
@@ -84,7 +93,7 @@ export function PosCart({
                     ) : null}
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-zinc-950">{formatCurrency(subtotal)}</p>
+                    <p className="text-sm font-bold text-zinc-950">{formatCurrency(lineTotal)}</p>
                     {!readOnly ? (
                       <Button
                         type="button"
@@ -151,7 +160,9 @@ export function PosCart({
                     </Button>
                   ) : null}
                   <span className="text-xs text-muted-foreground">
-                    {readOnly && item.reservedQuantity
+                    {item.commonProduct
+                      ? 'No afecta inventario'
+                      : readOnly && item.reservedQuantity
                       ? `Reservado: ${formatQuantity(item.reservedQuantity)}`
                       : `Disponible: ${
                           item.product.trackInventory ? formatQuantity(availableStock) : 'No aplica'

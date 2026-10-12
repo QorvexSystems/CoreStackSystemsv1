@@ -12,6 +12,7 @@ type OrderCartDrawerProps = {
   total: number;
   onClose: () => void;
   onClear: () => void;
+  clearDisabled?: boolean;
   children: ReactNode;
 };
 
@@ -21,6 +22,7 @@ export function OrderCartDrawer({
   total,
   onClose,
   onClear,
+  clearDisabled = false,
   children,
 }: OrderCartDrawerProps) {
   const [mounted, setMounted] = useState(false);
@@ -86,7 +88,7 @@ export function OrderCartDrawer({
               variant="ghost"
               size="sm"
               onClick={onClear}
-              disabled={!itemCount}
+              disabled={!itemCount || clearDisabled}
               className="text-danger hover:bg-danger/5 hover:text-danger"
             >
               Limpiar

@@ -5,6 +5,8 @@ export type AuthSession = {
   accessToken: string;
   tenantId: string;
   tenantName: string;
+  tenantSlug: string;
+  salePricesIncludeTax: boolean;
   role: string;
   permissions: Record<string, boolean>;
   user: LoginResponse['user'];
@@ -22,6 +24,8 @@ export function saveSession(login: LoginResponse) {
     accessToken: login.accessToken,
     tenantId: membership.tenantId,
     tenantName: membership.tenantName,
+    tenantSlug: membership.tenantSlug,
+    salePricesIncludeTax: membership.salePricesIncludeTax,
     role: membership.role,
     permissions: membership.permissions,
     user: login.user,

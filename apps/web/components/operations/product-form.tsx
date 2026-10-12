@@ -10,7 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { createProduct, getProduct, updateProduct, uploadProductImage } from '@/lib/api';
+import {
+  createProduct,
+  getProduct,
+  getProductDepartments,
+  updateProduct,
+  uploadProductImage,
+} from '@/lib/api';
 import { brand } from '@/lib/brand';
 import { ModuleHeader } from './module-header';
 import { BarcodeCameraScanner } from './barcode-camera-scanner';
@@ -28,11 +34,10 @@ type ProductFormState = {
   sku: string;
   barcode: string;
   imageUrl: string;
-  brand: string;
+  categoryId: string;
   unit: string;
   price: string;
   cost: string;
-  taxRate: string;
   stock: string;
   minStock: string;
   status: string;
@@ -44,11 +49,10 @@ const defaultState: ProductFormState = {
   sku: '',
   barcode: '',
   imageUrl: '',
-  brand: '',
+  categoryId: '',
   unit: 'UNIT',
   price: clearCurrencyInput(),
   cost: clearCurrencyInput(),
-  taxRate: '0.18',
   stock: '0',
   minStock: '0',
   status: 'ACTIVE',
@@ -73,14 +77,18 @@ export function ProductForm({
   const [form, setForm] = useState<ProductFormState>(defaultState);
   const [loadedProductId, setLoadedProductId] = useState<string | null>(null);
   const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
-  const basePrice = parseCurrencyInput(form.price);
-  const discountPrice = formatCurrencyInputFromNumber(basePrice * 0.95);
-  const preferredPrice = formatCurrencyInputFromNumber(basePrice * 0.9);
 
   const productQuery = useQuery({
     queryKey: ['product', productId, session?.tenantId],
     queryFn: () => getProduct(session?.tenantId ?? '', session?.accessToken ?? '', productId ?? ''),
     enabled: Boolean(session && productId),
+  });
+
+  const departmentsQuery = useQuery({
+    queryKey: ['product-departments', session?.tenantId],
+    queryFn: () =>
+      getProductDepartments(session?.tenantId ?? '', session?.accessToken ?? ''),
+    enabled: Boolean(session),
   });
 
   useEffect(() => {
@@ -91,13 +99,12 @@ export function ProductForm({
         sku: productQuery.data.sku ?? '',
         barcode: productQuery.data.barcode ?? '',
         imageUrl: productQuery.data.imageUrl ?? '',
-        brand: productQuery.data.brand ?? '',
+        categoryId: productQuery.data.category?.id ?? '',
         unit: productQuery.data.unit,
         price: formatCurrencyInputFromNumber(
           Number(productQuery.data.salePrice ?? productQuery.data.price ?? 0),
         ),
         cost: formatCurrencyInputFromNumber(Number(productQuery.data.cost ?? 0)),
-        taxRate: productQuery.data.taxRate,
         stock: String(productQuery.data.stock),
         minStock: String(productQuery.data.minStock),
         status: productQuery.data.status,
@@ -117,11 +124,10 @@ export function ProductForm({
         sku: form.sku || undefined,
         barcode: form.barcode || undefined,
         imageUrl: form.imageUrl || undefined,
-        brand: form.brand || undefined,
+        categoryId: form.categoryId || undefined,
         unit: form.unit,
         price: parseCurrencyInput(form.price),
         cost: parseCurrencyInput(form.cost),
-        taxRate: Number(form.taxRate),
         stock: Number(form.stock),
         minStock: Number(form.minStock),
         status: form.status,
@@ -246,6 +252,11 @@ export function ProductForm({
       return;
     }
 
+    if ((departmentsQuery.data?.length ?? 0) > 0 && !form.categoryId) {
+      toast.error('Selecciona el departamento del producto.');
+      return;
+    }
+
     saveMutation.mutate();
   }
 
@@ -261,14 +272,14 @@ export function ProductForm({
       ) : null}
       <CardContent className={embedded ? 'p-0' : undefined}>
         <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-          <Field label="Nombre" required>
+          <Field label="Nombre del producto" required>
             <Input
               value={form.name}
               onChange={(event) => updateField('name', event.target.value)}
               required
             />
           </Field>
-          <Field label="Codigo de producto">
+          <Field label="SKU / Codigo interno">
             <Input
               value={form.sku}
               onChange={(event) => updateField('sku', event.target.value)}
@@ -343,19 +354,39 @@ export function ProductForm({
               ) : null}
             </div>
           </Field>
-          <Field label="Marca">
-            <Input
-              value={form.brand}
-              onChange={(event) => updateField('brand', event.target.value)}
-            />
+          <Field label="Departamento" required={(departmentsQuery.data?.length ?? 0) > 0}>
+            <select
+              value={form.categoryId}
+              onChange={(event) => updateField('categoryId', event.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
+              disabled={departmentsQuery.isLoading}
+            >
+              <option value="">
+                {departmentsQuery.isLoading
+                  ? 'Cargando departamentos...'
+                  : departmentsQuery.data?.length
+                    ? 'Selecciona un departamento'
+                    : 'No hay departamentos registrados'}
+              </option>
+              {(departmentsQuery.data ?? []).map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+            </select>
+            {departmentsQuery.isError ? (
+              <p className="text-xs text-danger">No se pudieron cargar los departamentos.</p>
+            ) : null}
           </Field>
-          <Field label="Unidad">
+          <Field label="Unidad de medida" required>
             <select
               value={form.unit}
               onChange={(event) => updateField('unit', event.target.value)}
               className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
             >
               <option value="UNIT">Unidad</option>
+              <option value="BOX">Caja</option>
+              <option value="PACK">Paquete</option>
               <option value="BAG">Saco</option>
               <option value="METER">Metro (MT)</option>
               <option value="FOOT">Pie (FT)</option>
@@ -363,7 +394,9 @@ export function ProductForm({
               <option value="ROLL">Rollo</option>
               <option value="POUND">Libra (LB/POUND)</option>
               <option value="GALLON">Galon</option>
-              <option value="PACK">Paquete</option>
+              <option value="LITER">Litro</option>
+              <option value="KILOGRAM">Kilogramo</option>
+              <option value="SERVICE">Servicio</option>
             </select>
           </Field>
           <Field label="Estado">
@@ -377,44 +410,20 @@ export function ProductForm({
               <option value="DISCONTINUED">Descontinuado</option>
             </select>
           </Field>
-          <Field label="Precio (RD$)" required>
-            <div className="space-y-3">
-              <Input
-                type="text"
-                inputMode="decimal"
-                value={form.price}
-                onChange={(event) =>
-                  updateField('price', sanitizeCurrencyInput(event.target.value))
-                }
-                onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
-                onFocus={(event) => event.currentTarget.select()}
-                required
-              />
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Precio descuento (5%)</Label>
-                  <Input
-                    value={discountPrice}
-                    readOnly
-                    tabIndex={-1}
-                    className="bg-zinc-100 text-zinc-600"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">
-                    Cliente preferencial (10%)
-                  </Label>
-                  <Input
-                    value={preferredPrice}
-                    readOnly
-                    tabIndex={-1}
-                    className="bg-zinc-100 text-zinc-600"
-                  />
-                </div>
-              </div>
-            </div>
+          <Field label="Precio de venta con ITBIS (RD$)" required>
+            <Input
+              type="text"
+              inputMode="decimal"
+              value={form.price}
+              onChange={(event) =>
+                updateField('price', sanitizeCurrencyInput(event.target.value))
+              }
+              onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
+              onFocus={(event) => event.currentTarget.select()}
+              required
+            />
           </Field>
-          <Field label="Costo (RD$)">
+          <Field label="Costo unitario (RD$)">
             <Input
               type="text"
               inputMode="decimal"
@@ -424,16 +433,7 @@ export function ProductForm({
               onFocus={(event) => event.currentTarget.select()}
             />
           </Field>
-          <Field label="ITBIS">
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.taxRate}
-              onChange={(event) => updateField('taxRate', event.target.value)}
-            />
-          </Field>
-          <Field label="Stock actual" required>
+          <Field label="Existencia actual" required>
             <Input
               type="number"
               min="0"
@@ -444,7 +444,7 @@ export function ProductForm({
               required
             />
           </Field>
-          <Field label="Stock minimo" required>
+          <Field label="Existencia minima" required>
             <Input
               type="number"
               min="0"

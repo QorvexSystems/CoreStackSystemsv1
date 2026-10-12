@@ -476,6 +476,10 @@ export class EmployeesService {
     if (role === Role.ORDER_TAKER) {
       return {
         ...this.blankPermissions(),
+        canUsePos: true,
+        canOpenCashSession: true,
+        canCloseCashSession: true,
+        canReprintReceipt: true,
         canTakeOrders: true,
       };
     }

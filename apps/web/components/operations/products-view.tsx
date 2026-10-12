@@ -26,10 +26,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { deleteProduct, generateProductBarcode, getProductLabel, getProducts } from '@/lib/api';
+import {
+  deleteProduct,
+  generateProductBarcode,
+  getProductDepartments,
+  getProductLabel,
+  getProducts,
+} from '@/lib/api';
 import { openBarcodeLabelPrintWindow, printBarcodeLabel } from '@/lib/barcode-label-print';
 import { brand } from '@/lib/brand';
-import { getStatusVariant, translateBarcodeType, translateStatus } from '@/lib/display-labels';
+import {
+  getStatusVariant,
+  translateBarcodeType,
+  translateProductUnit,
+  translateStatus,
+} from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { formatQuantity } from './pos/pos-utils';
@@ -40,6 +51,7 @@ export function ProductsView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -59,6 +71,12 @@ export function ProductsView() {
   const productsQuery = useQuery({
     queryKey: ['products', session?.tenantId, search],
     queryFn: () => getProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
+    enabled: Boolean(session),
+  });
+  const departmentsQuery = useQuery({
+    queryKey: ['product-departments', session?.tenantId],
+    queryFn: () =>
+      getProductDepartments(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
   const generateMutation = useMutation({
@@ -136,11 +154,20 @@ export function ProductsView() {
 
   const readOnly = session.role === 'ACCOUNTANT';
   const products = productsQuery.data ?? [];
-  const pageCount = Math.max(1, Math.ceil(products.length / pageSize));
+  const filteredProducts = products
+    .filter((product) => departmentFilter === 'ALL' || product.category?.id === departmentFilter)
+    .sort((left, right) => {
+      const departmentOrder = (left.category?.name ?? '').localeCompare(
+        right.category?.name ?? '',
+        'es',
+      );
+      return departmentOrder || left.name.localeCompare(right.name, 'es');
+    });
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
   const currentPage = Math.min(page, pageCount);
-  const rangeStart = products.length ? (currentPage - 1) * pageSize + 1 : 0;
-  const rangeEnd = Math.min(currentPage * pageSize, products.length);
-  const visibleProducts = products.slice(rangeStart ? rangeStart - 1 : 0, rangeEnd);
+  const rangeStart = filteredProducts.length ? (currentPage - 1) * pageSize + 1 : 0;
+  const rangeEnd = Math.min(currentPage * pageSize, filteredProducts.length);
+  const visibleProducts = filteredProducts.slice(rangeStart ? rangeStart - 1 : 0, rangeEnd);
 
   return (
     <div className="space-y-6">
@@ -149,18 +176,39 @@ export function ProductsView() {
         description={`Catálogo de productos y servicios de ${brand.name}, precios e inventario desde PostgreSQL.`}
       />
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid flex-1 gap-3 sm:grid-cols-[minmax(260px,1fr)_minmax(220px,0.65fr)]">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              className="bg-white pl-9"
+              placeholder="Buscar nombre, SKU, departamento o codigo"
+            />
+          </div>
+          <select
+            value={departmentFilter}
             onChange={(event) => {
-              setSearch(event.target.value);
+              setDepartmentFilter(event.target.value);
               setPage(1);
             }}
-            className="bg-white pl-9"
-            placeholder="Buscar nombre, SKU, marca o codigo"
-          />
+            className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+            aria-label="Filtrar productos por departamento"
+            disabled={departmentsQuery.isLoading}
+          >
+            <option value="ALL">
+              {departmentsQuery.isLoading ? 'Cargando departamentos...' : 'Todos los departamentos'}
+            </option>
+            {(departmentsQuery.data ?? []).map((department) => (
+              <option key={department.id} value={department.id}>
+                {department.name}
+              </option>
+            ))}
+          </select>
         </div>
         {!readOnly ? (
           <Button
@@ -181,7 +229,11 @@ export function ProductsView() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <CardTitle>Catalogo</CardTitle>
-              <CardDescription>{products.length} productos activos o inactivos.</CardDescription>
+              <CardDescription>
+                {departmentFilter === 'ALL'
+                  ? `${products.length} productos activos o inactivos.`
+                  : `${filteredProducts.length} de ${products.length} productos en el departamento seleccionado.`}
+              </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground" aria-label="Leyenda de inventario">
               <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-300" />Stock bajo</span>
@@ -196,13 +248,38 @@ export function ProductsView() {
             pageSize={pageSize}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
-            total={products.length}
+            total={filteredProducts.length}
             onPageChange={setPage}
             onPageSizeChange={(nextPageSize) => {
               setPageSize(nextPageSize);
               setPage(1);
             }}
           />
+
+          {productsQuery.isLoading ? (
+            <div className="rounded-md border border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+              Cargando productos...
+            </div>
+          ) : productsQuery.isError ? (
+            <div className="rounded-md border border-danger/20 bg-danger/5 px-4 py-8 text-center">
+              <p className="text-sm font-medium text-danger">No se pudo cargar el catálogo.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => void productsQuery.refetch()}
+              >
+                Reintentar
+              </Button>
+            </div>
+          ) : filteredProducts.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              {search || departmentFilter !== 'ALL'
+                ? 'No hay productos que coincidan con los filtros.'
+                : 'No hay productos registrados.'}
+            </div>
+          ) : null}
 
           <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 md:hidden">
             {visibleProducts.map((product) => {
@@ -226,13 +303,23 @@ export function ProductsView() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{product.name}</p>
                       <p className="text-xs text-muted-foreground">{product.sku ?? 'Sin SKU'}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {product.category?.name ?? 'Sin departamento'} · {translateProductUnit(product.unit)}
+                      </p>
                     </div>
                     <Badge variant={getStatusVariant(product.status)}>
                       {translateStatus(product.status)}
                     </Badge>
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3 text-sm">
-                    <span className="font-semibold">{formatCurrency(Number(product.price))}</span>
+                    <div>
+                      <p className="font-semibold">
+                        {formatCurrency(getSalePrice(product))}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Costo {formatCurrency(Number(product.cost ?? 0))}
+                      </p>
+                    </div>
                     {product.trackInventory ? (
                       <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
                         {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
@@ -264,10 +351,12 @@ export function ProductsView() {
               <TableHeader className="sticky top-0 z-10 bg-card shadow-sm">
                 <TableRow>
                   <TableHead>Producto</TableHead>
-                  <TableHead>Marca</TableHead>
-                  <TableHead>Precio</TableHead>
-                  <TableHead>Codigo</TableHead>
-                  <TableHead>Stock</TableHead>
+                  <TableHead>Departamento</TableHead>
+                  <TableHead>Unidad</TableHead>
+                  <TableHead className="text-right">Costo unitario</TableHead>
+                  <TableHead className="text-right">Precio con ITBIS</TableHead>
+                  <TableHead>Codigo de barras</TableHead>
+                  <TableHead>Existencia</TableHead>
                   <TableHead>Estado</TableHead>
                   {!readOnly ? <TableHead className="text-right">Acciones</TableHead> : null}
                 </TableRow>
@@ -284,20 +373,26 @@ export function ProductsView() {
                       key={product.id}
                       className={
                         outOfStock
-                          ? 'bg-red-50/80 hover:bg-red-100/80'
+                          ? 'group bg-red-50/80 hover:bg-red-100/80'
                           : lowStock
-                            ? 'bg-amber-50/80 hover:bg-amber-100/80'
-                            : undefined
+                            ? 'group bg-amber-50/80 hover:bg-amber-100/80'
+                            : 'group'
                       }
                     >
                       <TableCell>
                         <div className="font-medium">{product.name}</div>
                         <div className="text-xs text-muted-foreground">
-                          {product.sku ?? 'Sin SKU'} {product.brand ? `- ${product.brand}` : ''}
+                          {product.sku ?? 'Sin SKU'}
                         </div>
                       </TableCell>
-                      <TableCell>{product.brand?.trim() || 'Sin marca'}</TableCell>
-                      <TableCell>{formatCurrency(Number(product.price))}</TableCell>
+                      <TableCell>{product.category?.name ?? 'Sin departamento'}</TableCell>
+                      <TableCell>{translateProductUnit(product.unit)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(Number(product.cost ?? 0))}
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        {formatCurrency(getSalePrice(product))}
+                      </TableCell>
                       <TableCell>
                         <div className="text-sm">{product.barcode ?? 'Sin codigo'}</div>
                         <div className="text-xs text-muted-foreground">
@@ -327,7 +422,7 @@ export function ProductsView() {
                       </TableCell>
                       {!readOnly ? (
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
+                          <div className="pointer-events-none flex justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
                             {!product.barcode ? (
                               <Button
                                 variant="outline"
@@ -386,7 +481,7 @@ export function ProductsView() {
             pageSize={pageSize}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
-            total={products.length}
+            total={filteredProducts.length}
             onPageChange={setPage}
             onPageSizeChange={(nextPageSize) => {
               setPageSize(nextPageSize);
@@ -516,4 +611,9 @@ function ProductPagination({
 
 function getAvailableStock(product: { stock: number | string; reservedStock: number | string }) {
   return Math.max(Number(product.stock) - Number(product.reservedStock), 0);
+}
+
+function getSalePrice(product: { salePrice: number | string; price: number | string }) {
+  const salePrice = Number(product.salePrice);
+  return salePrice > 0 ? salePrice : Number(product.price);
 }

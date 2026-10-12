@@ -64,6 +64,8 @@ export function SupplierInvoiceEntryPanel({
 }) {
   const queryClient = useQueryClient();
   const admin = isAdminSession(session);
+  const pricesIncludeTax =
+    session.salePricesIncludeTax ?? (session.tenantSlug ? session.tenantSlug === 'allpa' : true);
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<EntryItem[]>([]);
   const [confirmingEntry, setConfirmingEntry] = useState(false);
@@ -154,7 +156,12 @@ export function SupplierInvoiceEntryPanel({
           Number(product.cost) !== Number(invoiceItem.unitCostNet);
         const canRecalculateMargin =
           costChanged &&
-          calculateSuggestedPrice(Number(invoiceItem.unitCostNet), Number(product?.margin)) !== null;
+          calculateSuggestedPrice(
+            Number(invoiceItem.unitCostNet),
+            Number(product?.margin),
+            Number(product?.taxRate ?? 0),
+            pricesIncludeTax,
+          ) !== null;
 
         return {
           invoiceItem,
@@ -173,7 +180,7 @@ export function SupplierInvoiceEntryPanel({
         };
       }),
     );
-  }, [confirmedQuantitiesKey, invoice.id, invoiceItemsKey, productsById]);
+  }, [confirmedQuantitiesKey, invoice.id, invoiceItemsKey, pricesIncludeTax, productsById]);
 
   useEffect(() => {
     setOrderReconciliationAccepted(false);
@@ -663,6 +670,8 @@ export function SupplierInvoiceEntryPanel({
             const suggestedPrice = calculateSuggestedPrice(
               Number(item.invoiceItem.unitCostNet),
               Number(product?.margin),
+              Number(product?.taxRate ?? 0),
+              pricesIncludeTax,
             );
 
             return (
@@ -1222,11 +1231,18 @@ function needsDifferenceAcceptance(item: EntryItem, cumulativeByInvoiceItem: Map
   );
 }
 
-function calculateSuggestedPrice(cost: number, margin: number) {
+function calculateSuggestedPrice(
+  cost: number,
+  margin: number,
+  taxRate: number,
+  pricesIncludeTax: boolean,
+) {
   if (!Number.isFinite(cost) || !Number.isFinite(margin) || margin < 0 || margin >= 1) {
     return null;
   }
-  return Math.round((cost / (1 - margin)) * 100) / 100;
+  const netPrice = cost / (1 - margin);
+  const advertisedPrice = pricesIncludeTax ? netPrice * (1 + taxRate) : netPrice;
+  return Math.round(advertisedPrice * 100) / 100;
 }
 
 function EntryMeta({ label, value }: { label: string; value: string }) {

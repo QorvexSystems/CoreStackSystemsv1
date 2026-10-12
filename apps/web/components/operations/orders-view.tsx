@@ -1,10 +1,21 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardCheck, CreditCard, FileText, Search, Send, X } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ClipboardCheck,
+  CreditCard,
+  FileText,
+  PackagePlus,
+  Search,
+  Send,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  acceptSalesOrder,
   cancelSalesOrder,
   createSalesOrder,
   getCustomers,
@@ -40,13 +52,23 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils';
 import { CancelReasonModal } from './cancel-reason-modal';
 import { ModuleHeader } from './module-header';
 import { OrderActivityDrawer } from './orders/order-activity-drawer';
+import { CommonProductDialog, type CommonProductDraft } from './orders/common-product-dialog';
 import { CartSummaryBar, OrderCartDrawer } from './orders/order-cart-drawer';
 import { BarcodeInput } from './pos/barcode-input';
+import {
+  clearCurrencyInput,
+  formatCurrencyInput,
+  formatCurrencyInputFromNumber,
+  parseCurrencyInput,
+  sanitizeCurrencyInput,
+} from './pos/currency-input';
 import { PosCart } from './pos/pos-cart';
 import { PosProductGrid } from './pos/pos-product-grid';
 import {
   canAddProduct,
+  calculateSaleAmounts,
   getAvailableStock,
+  getCommonProductUnit,
   getDefaultQuantity,
   getProductPrice,
   getQuantityStep,
@@ -71,6 +93,8 @@ const finalDiscountCustomerId = '__FINAL_DISCOUNT_10__';
 const finalPreferredCustomerId = '__FINAL_PREFERRED_18__';
 
 const specialCustomerLabels = [
+  'Consumidor final (descuento al por mayor 5%)',
+  'Consumidor final (descuento al por mayor 10%)',
   'Consumidor final (descuento 5%)',
   'Consumidor final (cliente preferencial 10%)',
   // Keep recognizing labels stored by drafts created before the rate change.
@@ -78,7 +102,13 @@ const specialCustomerLabels = [
   'Consumidor final (cliente preferencial 18%)',
 ];
 
-function getPriceLevelDiscountRate(priceLevel: SalesOrderPriceLevel) {
+function getPriceLevelDiscountRate(
+  priceLevel: SalesOrderPriceLevel,
+  customDiscountPercent?: number | null,
+) {
+  if (customDiscountPercent !== undefined && customDiscountPercent !== null) {
+    return customDiscountPercent / 100;
+  }
   if (priceLevel === 'DISCOUNT_10') {
     return 0.05;
   }
@@ -136,29 +166,83 @@ function buildPricedCartItem(
   quantity: number,
   priceLevel: SalesOrderPriceLevel,
   reservedQuantity = 0,
+  customDiscountPercent?: number | null,
+  pricesIncludeTax = false,
 ): CartItem {
   const regularUnitPrice = getProductPrice(product);
-  const discountRate = getPriceLevelDiscountRate(priceLevel);
-  const unitPrice = roundMoney(regularUnitPrice * (1 - discountRate));
-  const regularSubtotal = roundMoney(regularUnitPrice * quantity);
-  const subtotal = roundMoney(unitPrice * quantity);
-  const discountTotal = roundMoney(Math.max(regularSubtotal - subtotal, 0));
-  const taxTotal = roundMoney(subtotal * Number(product.taxRate));
+  const discountRate = getPriceLevelDiscountRate(priceLevel, customDiscountPercent);
+  const amounts = calculateSaleAmounts(
+    regularUnitPrice,
+    quantity,
+    Number(product.taxRate),
+    discountRate,
+    pricesIncludeTax,
+  );
 
   return {
     product,
     quantity,
     reservedQuantity,
-    unitPrice,
-    discountTotal,
-    subtotal,
-    taxTotal,
-    total: roundMoney(subtotal + taxTotal),
+    unitPrice: amounts.unitPrice,
+    discountTotal: amounts.discountTotal,
+    subtotal: amounts.subtotal,
+    taxTotal: amounts.taxTotal,
+    total: amounts.total,
+  };
+}
+
+function buildCommonCartItem(
+  id: string,
+  draft: CommonProductDraft,
+  priceLevel: SalesOrderPriceLevel,
+  customDiscountPercent?: number | null,
+): CartItem {
+  const product: Product = {
+    id,
+    name: draft.description,
+    sku: null,
+    barcode: null,
+    barcodeType: null,
+    generatedBarcode: false,
+    barcodeLabelPrintCount: 0,
+    description: 'Producto común agregado únicamente a esta venta',
+    imageUrl: null,
+    brand: null,
+    unit: draft.unit,
+    price: String(draft.unitPrice),
+    salePrice: String(draft.unitPrice),
+    cost: null,
+    taxRate: '0.18',
+    trackInventory: false,
+    inventoryDestination: 'SALES_INVENTORY',
+    stock: 0,
+    reservedStock: 0,
+    minStock: 0,
+    status: 'ACTIVE',
+    category: null,
+  };
+
+  return {
+    ...buildPricedCartItem(
+      product,
+      draft.quantity,
+      priceLevel,
+      0,
+      customDiscountPercent,
+      false,
+    ),
+    commonProduct: {
+      description: draft.description,
+      unit: draft.unit,
+      regularUnitPrice: draft.unitPrice,
+    },
   };
 }
 
 export function OrdersView() {
   const session = useCurrentSession();
+  const pricesIncludeTax =
+    session?.salePricesIncludeTax ?? (session?.tenantSlug ? session.tenantSlug === 'allpa' : true);
   const canUseOrderTaking = canTakeOrders(session);
   const cashierCreditOnly = session?.role === 'CASHIER';
   const queryClient = useQueryClient();
@@ -182,9 +266,15 @@ export function OrdersView() {
   const [quotationDocumentNumber, setQuotationDocumentNumber] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [priceLevel, setPriceLevel] = useState<SalesOrderPriceLevel>('REGULAR');
+  const [customDiscountPercent, setCustomDiscountPercent] = useState<number | null>(null);
+  const [customDiscountOpen, setCustomDiscountOpen] = useState(false);
+  const [customDiscountInput, setCustomDiscountInput] = useState('');
+  const [discountRequestOrderId, setDiscountRequestOrderId] = useState<string | null>(null);
   const [paymentMode, setPaymentMode] = useState<SalePaymentMode>('CASH');
   const [initialPaymentOption, setInitialPaymentOption] =
     useState<InitialPaymentOption>('PERCENT_30');
+  const [customInitialPaymentAmount, setCustomInitialPaymentAmount] =
+    useState(clearCurrencyInput());
   const [creditTermOption, setCreditTermOption] = useState<CreditTermOption>('CUSTOMER_DEFAULT');
   const [customDueDate, setCustomDueDate] = useState('');
   const [creditRequestNote, setCreditRequestNote] = useState('');
@@ -196,12 +286,13 @@ export function OrdersView() {
   const [lastScannedProduct, setLastScannedProduct] = useState<Product | null>(null);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
-  const [brandFilter, setBrandFilter] = useState('ALL');
   const [availableOnly, setAvailableOnly] = useState(false);
-  const [notesExpanded, setNotesExpanded] = useState(false);
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(50);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
+  const [commonProductOpen, setCommonProductOpen] = useState(false);
   const [activityDrawer, setActivityDrawer] = useState<'orders' | 'quotations' | null>(null);
   const [loadedEditOrderId, setLoadedEditOrderId] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
@@ -235,6 +326,20 @@ export function OrdersView() {
     queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? '', 'QUOTATION'),
     enabled: canUseOrderTaking,
   });
+  const discountRequestOrderQuery = useQuery({
+    queryKey: ['discount-request-order', session?.tenantId, discountRequestOrderId],
+    queryFn: () =>
+      getSalesOrder(
+        session?.tenantId ?? '',
+        session?.accessToken ?? '',
+        discountRequestOrderId ?? '',
+      ),
+    enabled: Boolean(session && discountRequestOrderId),
+    refetchInterval: discountRequestOrderId ? 3000 : false,
+  });
+  const discountRequestOrder = discountRequestOrderQuery.data;
+  const discountApproval = discountRequestOrder?.discountApproval ?? null;
+  const discountApprovalStatus = discountApproval?.status ?? null;
 
   useEffect(() => {
     if (scannerEnabled) {
@@ -251,10 +356,29 @@ export function OrdersView() {
   useEffect(() => {
     setCart((current) =>
       current.map((item) =>
-        buildPricedCartItem(item.product, item.quantity, priceLevel, item.reservedQuantity),
+        item.commonProduct
+          ? buildCommonCartItem(
+              item.product.id,
+              {
+                description: item.commonProduct.description,
+                unit: item.commonProduct.unit,
+                unitPrice: item.commonProduct.regularUnitPrice,
+                quantity: item.quantity,
+              },
+              priceLevel,
+              customDiscountPercent,
+            )
+          : buildPricedCartItem(
+              item.product,
+              item.quantity,
+              priceLevel,
+              item.reservedQuantity,
+              customDiscountPercent,
+              pricesIncludeTax,
+            ),
       ),
     );
-  }, [priceLevel]);
+  }, [customDiscountPercent, priceLevel, pricesIncludeTax]);
 
   useEffect(() => () => stopCameraScan(), []);
 
@@ -297,8 +421,18 @@ export function OrdersView() {
         setClientName(order.clientName || '');
         setCustomerId(order.customerId || getSpecialCustomerValue(order.priceLevel));
         setPriceLevel(order.priceLevel ?? 'REGULAR');
+        const loadedCustomDiscountPercent =
+          order.priceLevel === 'REGULAR' && Number(order.discountRate) > 0
+            ? Number(order.discountRate) * 100
+            : null;
+        setCustomDiscountPercent(loadedCustomDiscountPercent);
         setPaymentMode(order.paymentMode ?? 'CASH');
         setInitialPaymentOption(order.initialPaymentOption ?? 'PERCENT_30');
+        setCustomInitialPaymentAmount(
+          order.initialPaymentOption === 'CUSTOM'
+            ? formatCurrencyInputFromNumber(Number(order.initialPaymentAmount))
+            : clearCurrencyInput(),
+        );
         setCreditTermOption(order.creditTermOption ?? 'CUSTOMER_DEFAULT');
         setCustomDueDate(
           order.creditTermOption === 'CUSTOM_DATE' && order.dueDate
@@ -313,16 +447,48 @@ export function OrdersView() {
         setQuotationDocumentNumber(order.quotationDocumentNumber || '');
 
         // Cargar productos en el carrito
-        const cartItems = order.items.map((item) => ({
-          product: item.product! as Product,
-          quantity: Number(item.quantity),
-          reservedQuantity: item.reservedQuantity,
-          unitPrice: Number(item.unitPrice),
-          discountTotal: Number(item.discountTotal ?? 0),
-          subtotal: Number(item.subtotal),
-          taxTotal: Number(item.taxTotal),
-          total: Number(item.total),
-        }));
+        const cartItems = order.items.map((item) => {
+          const quantity = Number(item.quantity);
+          const discountTotal = Number(item.discountTotal ?? 0);
+          const subtotal = Number(item.subtotal);
+          if (!item.productId) {
+            const regularNetSubtotal = subtotal + discountTotal;
+            const regularUnitPrice =
+              quantity > 0 ? roundMoney(regularNetSubtotal / quantity) : 0;
+            return {
+              ...buildCommonCartItem(
+                `common:${item.id}`,
+                {
+                  description: item.description,
+                  unit: getCommonProductUnit(item.sku),
+                  unitPrice: regularUnitPrice,
+                  quantity,
+                },
+                order.priceLevel,
+                loadedCustomDiscountPercent,
+              ),
+              reservedQuantity: 0,
+              unitPrice: Number(item.unitPrice),
+              discountTotal,
+              subtotal,
+              taxTotal: Number(item.taxTotal),
+              total: Number(item.total),
+            };
+          }
+          if (!item.product) {
+            throw new Error('La cotización contiene un producto de inventario no disponible.');
+          }
+          return {
+            product: item.product as Product,
+            quantity,
+            reservedQuantity: item.reservedQuantity,
+            unitPrice: Number(item.unitPrice),
+            discountTotal,
+            subtotal,
+            taxTotal: Number(item.taxTotal),
+            total: Number(item.total),
+          };
+        });
 
         setCart(cartItems);
         setCartDrawerOpen(true);
@@ -392,39 +558,51 @@ export function OrdersView() {
       .map((product) => product.category?.name)
       .filter((value): value is string => Boolean(value)),
   );
-  const brands = uniqueValues(
-    productPool.map((product) => product.brand).filter((value): value is string => Boolean(value)),
-  );
   const filteredProducts = productPool
     .filter((product) => categoryFilter === 'ALL' || product.category?.name === categoryFilter)
-    .filter((product) => brandFilter === 'ALL' || product.brand === brandFilter)
     .filter(
       (product) => !availableOnly || !product.trackInventory || getAvailableStock(product) > 0,
     );
+  const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / productPageSize));
+  const productRangeStart = filteredProducts.length ? (productPage - 1) * productPageSize + 1 : 0;
+  const productRangeEnd = Math.min(productPage * productPageSize, filteredProducts.length);
+  const visibleProducts = filteredProducts.slice(
+    productRangeStart ? productRangeStart - 1 : 0,
+    productRangeEnd,
+  );
   const quantitiesByProduct = Object.fromEntries(
     cart.map((item) => [item.product.id, item.quantity]),
   );
   const totals = useMemo(() => {
-    const subtotal = cart.reduce(
-      (sum, item) => sum + (item.subtotal ?? getProductPrice(item.product) * item.quantity),
-      0,
-    );
+    const lineAmounts = cart.map((item) => {
+      if (item.subtotal !== undefined && item.taxTotal !== undefined && item.total !== undefined) {
+        return {
+          subtotal: item.subtotal,
+          taxTotal: item.taxTotal,
+          total: item.total,
+        };
+      }
+
+      return calculateSaleAmounts(
+        getProductPrice(item.product),
+        item.quantity,
+        Number(item.product.taxRate),
+        getPriceLevelDiscountRate(priceLevel, customDiscountPercent),
+        pricesIncludeTax,
+      );
+    });
+    const subtotal = lineAmounts.reduce((sum, item) => sum + item.subtotal, 0);
     const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
-    const tax = cart.reduce(
-      (sum, item) =>
-        sum +
-        (item.taxTotal ??
-          getProductPrice(item.product) * item.quantity * Number(item.product.taxRate)),
-      0,
-    );
+    const tax = lineAmounts.reduce((sum, item) => sum + item.taxTotal, 0);
+    const total = lineAmounts.reduce((sum, item) => sum + item.total, 0);
 
     return {
       subtotal,
       discount,
       tax,
-      total: subtotal + tax,
+      total,
     };
-  }, [cart]);
+  }, [cart, customDiscountPercent, priceLevel, pricesIncludeTax]);
   const initialPaymentRate =
     initialPaymentOption === 'PERCENT_30'
       ? 0.3
@@ -433,7 +611,10 @@ export function OrdersView() {
         : initialPaymentOption === 'PERCENT_70'
           ? 0.7
           : 0;
-  const initialPaymentAmount = roundMoney(totals.total * initialPaymentRate);
+  const initialPaymentAmount =
+    initialPaymentOption === 'CUSTOM'
+      ? roundMoney(parseCurrencyInput(customInitialPaymentAmount))
+      : roundMoney(totals.total * initialPaymentRate);
   const financedAmount = roundMoney(totals.total - initialPaymentAmount);
   const projectedCustomerBalance = roundMoney(
     Number(selectedCustomer?.creditBalance ?? 0) + financedAmount,
@@ -473,19 +654,12 @@ export function OrdersView() {
   });
 
   const createOrderMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (discountRequest?: { percent: number; requestApproval: boolean }) => {
       if (!session) {
         throw new Error('Sesion requerida.');
       }
 
       const trimmedClientName = clientName.trim();
-      if (!trimmedClientName) {
-        throw new Error('El nombre del cliente es requerido.');
-      }
-
-      if (destination === 'CASH_SALE' && electronicInvoiceRequested && !ecfRecipientEmail.trim()) {
-        throw new Error('Indica el correo que recibirá la copia de la factura electrónica.');
-      }
 
       if (paymentMode === 'CREDIT') {
         if (!selectedCustomer) {
@@ -496,6 +670,14 @@ export function OrdersView() {
         }
         if (creditTermOption === 'CUSTOM_DATE' && !customDueDate) {
           throw new Error('Selecciona la fecha de vencimiento del crédito.');
+        }
+        if (initialPaymentOption === 'CUSTOM') {
+          if (initialPaymentAmount <= 0) {
+            throw new Error('Indica un pago inicial personalizado mayor que cero.');
+          }
+          if (initialPaymentAmount > totals.total) {
+            throw new Error('El pago inicial personalizado no puede superar el total de la orden.');
+          }
         }
       }
 
@@ -514,20 +696,28 @@ export function OrdersView() {
         }
       }
 
+      const effectiveCustomDiscountPercent =
+        discountRequest?.percent ?? customDiscountPercent ?? undefined;
       const payload = {
         destination,
         inventorySource,
         electronicInvoiceRequested:
           destination === 'CASH_SALE' ? electronicInvoiceRequested : false,
         ecfRecipientEmail:
-          destination === 'CASH_SALE' && electronicInvoiceRequested
+          destination === 'CASH_SALE' && electronicInvoiceRequested && ecfRecipientEmail.trim()
             ? ecfRecipientEmail.trim()
             : undefined,
-        clientName: trimmedClientName,
+        clientName: trimmedClientName || undefined,
         customerId: getRegisteredCustomerId(customerId) || undefined,
         priceLevel,
+        customDiscountPercent: effectiveCustomDiscountPercent,
+        requestCustomDiscount: discountRequest?.requestApproval || undefined,
         paymentMode,
         initialPaymentOption: paymentMode === 'CREDIT' ? initialPaymentOption : undefined,
+        customInitialPaymentAmount:
+          paymentMode === 'CREDIT' && initialPaymentOption === 'CUSTOM'
+            ? initialPaymentAmount
+            : undefined,
         creditTermOption: paymentMode === 'CREDIT' ? creditTermOption : undefined,
         customDueDate:
           paymentMode === 'CREDIT' && creditTermOption === 'CUSTOM_DATE'
@@ -544,10 +734,19 @@ export function OrdersView() {
             ? normalizeDominicanDocument(quotationDocumentNumber)
             : undefined,
         notes: notes.trim() || undefined,
-        items: cart.map((item) => ({
-          productId: item.product.id,
-          quantity: item.quantity,
-        })),
+        items: cart.map((item) =>
+          item.commonProduct
+            ? {
+                description: item.commonProduct.description,
+                unit: item.commonProduct.unit,
+                unitPrice: item.commonProduct.regularUnitPrice,
+                quantity: item.quantity,
+              }
+            : {
+                productId: item.product.id,
+                quantity: item.quantity,
+              },
+        ),
       };
 
       if (editOrderId) {
@@ -557,24 +756,50 @@ export function OrdersView() {
       return createSalesOrder(session.tenantId, session.accessToken, payload);
     },
     onSuccess: async (order) => {
+      if (session?.role === 'ORDER_TAKER' && order.discountApproval) {
+        const percent = Number(order.discountRate) * 100;
+        setDiscountRequestOrderId(order.id);
+        setCustomDiscountPercent(percent);
+        setCustomDiscountInput(String(percent));
+        setCustomDiscountOpen(false);
+        setCartDrawerOpen(true);
+        setMessage(
+          `Descuento personalizado de ${percent}% pendiente de aprobación administrativa.`,
+        );
+        queryClient.setQueryData(
+          ['discount-request-order', session.tenantId, order.id],
+          order,
+        );
+        await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+        toast.success('Descuento enviado para aprobación', {
+          description: `${percent}% · ${order.orderNumber}`,
+        });
+        return;
+      }
+
       const successMessage = editOrderId
         ? `Cotizacion ${order.orderNumber} actualizada correctamente.`
-        : destination === 'QUOTATION'
-          ? `Cotizacion ${order.orderNumber} registrada correctamente.`
-          : paymentMode === 'CREDIT'
-            ? `Solicitud de crédito ${order.orderNumber} enviada para aprobación administrativa.`
-            : `Ticket pendiente ${order.orderNumber} enviado a caja. No es una factura fiscal.`;
+        : order.discountApproval?.status === 'PENDING'
+          ? `Solicitud de descuento para ${order.orderNumber} enviada a los administradores.`
+          : destination === 'QUOTATION'
+            ? `Cotizacion ${order.orderNumber} registrada correctamente.`
+            : paymentMode === 'CREDIT'
+              ? `Solicitud de crédito ${order.orderNumber} enviada para aprobación administrativa.`
+              : `Ticket pendiente ${order.orderNumber} enviado a caja. No es una factura fiscal.`;
       setMessage(successMessage);
       setCart([]);
       setInventorySource('SALES_INVENTORY');
       setElectronicInvoiceRequested(false);
       setEcfRecipientEmail('');
       setNotes('');
-      setNotesExpanded(false);
       setCustomerId('');
       setPriceLevel('REGULAR');
+      setCustomDiscountPercent(null);
+      setCustomDiscountInput('');
+      setCustomDiscountOpen(false);
       setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
       setInitialPaymentOption('PERCENT_30');
+      setCustomInitialPaymentAmount(clearCurrencyInput());
       setCreditTermOption('CUSTOMER_DEFAULT');
       setCustomDueDate('');
       setCreditRequestNote('');
@@ -588,11 +813,13 @@ export function OrdersView() {
       toast.success(
         editOrderId
           ? 'Cotizacion actualizada'
-          : destination === 'QUOTATION'
-            ? 'Cotizacion creada'
-            : paymentMode === 'CREDIT'
-              ? 'Crédito enviado para aprobación'
-              : 'Ticket enviado a caja',
+          : order.discountApproval?.status === 'PENDING'
+            ? 'Descuento enviado para aprobación'
+            : destination === 'QUOTATION'
+              ? 'Cotizacion creada'
+              : paymentMode === 'CREDIT'
+                ? 'Crédito enviado para aprobación'
+                : 'Ticket enviado a caja',
         { description: order.orderNumber },
       );
 
@@ -604,6 +831,44 @@ export function OrdersView() {
       const nextMessage = error instanceof Error ? error.message : 'No se pudo enviar la orden.';
       setMessage(nextMessage);
       toast.error(nextMessage);
+    },
+  });
+
+  const sendApprovedDiscountOrderMutation = useMutation({
+    mutationFn: (orderId: string) => {
+      if (!session) throw new Error('Sesion requerida.');
+      return acceptSalesOrder(session.tenantId, session.accessToken, orderId);
+    },
+    onSuccess: async (order) => {
+      setMessage(`${order.orderNumber} enviado a caja con el descuento aprobado.`);
+      setCart([]);
+      setInventorySource('SALES_INVENTORY');
+      setElectronicInvoiceRequested(false);
+      setEcfRecipientEmail('');
+      setNotes('');
+      setCustomerId('');
+      setPriceLevel('REGULAR');
+      setCustomDiscountPercent(null);
+      setCustomDiscountInput('');
+      setCustomDiscountOpen(false);
+      setDiscountRequestOrderId(null);
+      setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
+      setInitialPaymentOption('PERCENT_30');
+      setCustomInitialPaymentAmount(clearCurrencyInput());
+      setCreditTermOption('CUSTOMER_DEFAULT');
+      setCustomDueDate('');
+      setCreditRequestNote('');
+      setClientName('');
+      setQuotationDocumentNumber('');
+      setCartDrawerOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.success('Orden enviada a caja', {
+        description: `${order.orderNumber} · descuento ${Number(order.discountRate) * 100}%`,
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudo enviar la orden a caja.');
+      setCartDrawerOpen(true);
     },
   });
 
@@ -665,13 +930,25 @@ export function OrdersView() {
                   roundQuantity(cappedQuantity),
                   priceLevel,
                   item.reservedQuantity,
+                  customDiscountPercent,
+                  pricesIncludeTax,
                 );
               })()
             : item,
         );
       }
 
-      return [...current, buildPricedCartItem(product, getDefaultQuantity(product), priceLevel)];
+      return [
+        ...current,
+        buildPricedCartItem(
+          product,
+          getDefaultQuantity(product),
+          priceLevel,
+          0,
+          customDiscountPercent,
+          pricesIncludeTax,
+        ),
+      ];
     });
 
     return true;
@@ -695,15 +972,49 @@ export function OrdersView() {
             ? Math.min(Math.max(quantity, quantityStep), availableStock)
             : Math.max(quantity, quantityStep);
 
-          return buildPricedCartItem(
-            item.product,
-            roundQuantity(nextQuantity),
-            priceLevel,
-            item.reservedQuantity,
-          );
+          return {
+            ...(item.commonProduct
+              ? buildCommonCartItem(
+                  item.product.id,
+                  {
+                    description: item.commonProduct.description,
+                    unit: item.commonProduct.unit,
+                    unitPrice: item.commonProduct.regularUnitPrice,
+                    quantity: roundQuantity(nextQuantity),
+                  },
+                  priceLevel,
+                  customDiscountPercent,
+                )
+              : buildPricedCartItem(
+                  item.product,
+                  roundQuantity(nextQuantity),
+                  priceLevel,
+                  item.reservedQuantity,
+                  customDiscountPercent,
+                  pricesIncludeTax,
+                )),
+          };
         })
         .filter((item) => item.quantity > 0),
     );
+  }
+
+  function addCommonProduct(draft: CommonProductDraft) {
+    const id = `common:${crypto.randomUUID()}`;
+    setCart((current) => [
+      ...current,
+      buildCommonCartItem(
+        id,
+        draft,
+        priceLevel,
+        customDiscountPercent,
+      ),
+    ]);
+    setCommonProductOpen(false);
+    setMessage(`${draft.description} agregado como producto común.`);
+    toast.success('Producto común agregado', {
+      description: 'Esta línea existirá solamente en la orden y su factura.',
+    });
   }
 
   function handleCustomerSelection(nextCustomerId: string) {
@@ -718,6 +1029,7 @@ export function OrdersView() {
 
     if (nextPriceLevel) {
       setPriceLevel(nextPriceLevel);
+      setCustomDiscountPercent(null);
       if (clientNameWasAutoFilled) {
         setClientName('');
       }
@@ -725,6 +1037,7 @@ export function OrdersView() {
     }
 
     setPriceLevel('REGULAR');
+    setCustomDiscountPercent(null);
 
     if (!nextCustomerId) {
       if (wasSpecialCustomer) {
@@ -791,8 +1104,8 @@ export function OrdersView() {
     setInventorySource(nextInventorySource);
     setCart([]);
     setCategoryFilter('ALL');
-    setBrandFilter('ALL');
     setAvailableOnly(false);
+    setProductPage(1);
     setMessage(
       nextInventorySource === 'WAREHOUSE'
         ? 'Catálogo B2B de almacén seleccionado.'
@@ -936,9 +1249,9 @@ export function OrdersView() {
         </Button>
       </div>
 
-      <section className="xl:h-[calc(100vh-9rem)] xl:overflow-hidden">
-        <div className="space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:space-y-3">
-          <Card className="overflow-hidden border-zinc-200 bg-white xl:shrink-0">
+      <section>
+        <div className="space-y-4">
+          <Card className="overflow-hidden border-zinc-200 bg-white">
             <CardHeader className="border-b border-zinc-100 bg-zinc-50/70 pb-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -953,6 +1266,50 @@ export function OrdersView() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3 p-3 sm:p-4">
+              <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <Label>Origen de la venta</Label>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Selecciona el inventario antes de agregar productos.
+                    </p>
+                  </div>
+                  <div className="grid min-w-72 grid-cols-2 gap-1 rounded-md border border-zinc-200 bg-white p-1">
+                    <button
+                      type="button"
+                      disabled={Boolean(editOrderId)}
+                      aria-pressed={inventorySource === 'SALES_INVENTORY'}
+                      className={`min-h-10 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+                        inventorySource === 'SALES_INVENTORY'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-zinc-600 hover:bg-zinc-50'
+                      }`}
+                      onClick={() => handleInventorySourceChange('SALES_INVENTORY')}
+                    >
+                      Inventario
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(editOrderId)}
+                      aria-pressed={inventorySource === 'WAREHOUSE'}
+                      className={`min-h-10 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+                        inventorySource === 'WAREHOUSE'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-zinc-600 hover:bg-zinc-50'
+                      }`}
+                      onClick={() => handleInventorySourceChange('WAREHOUSE')}
+                    >
+                      Almacén B2B
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {inventorySource === 'WAREHOUSE'
+                    ? 'Los productos y existencias corresponden al almacén B2B.'
+                    : 'Los productos y existencias corresponden al inventario de ventas.'}
+                </p>
+              </div>
+
               <BarcodeInput
                 barcode={barcode}
                 scannerEnabled={scannerEnabled}
@@ -969,46 +1326,43 @@ export function OrdersView() {
                 onStartCamera={startCameraScan}
               />
 
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr_auto]">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.4fr_0.9fr_auto]">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     value={search}
-                    onChange={(event) => setSearch(event.target.value)}
+                    onChange={(event) => {
+                      setSearch(event.target.value);
+                      setProductPage(1);
+                    }}
                     className="h-11 bg-white pl-9"
                     placeholder="Buscar por nombre o SKU"
                   />
                 </div>
                 <select
                   value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  onChange={(event) => {
+                    setCategoryFilter(event.target.value);
+                    setProductPage(1);
+                  }}
                   className="h-11 rounded-md border border-input bg-white px-3 text-sm"
                 >
-                  <option value="ALL">Todos los tipos</option>
+                  <option value="ALL">Todos los departamentos</option>
                   {categories.map((category) => (
                     <option key={category} value={category}>
                       {category}
                     </option>
                   ))}
                 </select>
-                <select
-                  value={brandFilter}
-                  onChange={(event) => setBrandFilter(event.target.value)}
-                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
-                >
-                  <option value="ALL">Marca/proveedor</option>
-                  {brands.map((brand) => (
-                    <option key={brand} value={brand}>
-                      {brand}
-                    </option>
-                  ))}
-                </select>
-                <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-md border border-input bg-white px-3 text-sm font-medium sm:col-span-2 lg:col-span-1">
+                <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-md border border-input bg-white px-3 text-sm font-medium">
                   <span className="whitespace-nowrap">Solo disponibles</span>
                   <input
                     type="checkbox"
                     checked={availableOnly}
-                    onChange={(event) => setAvailableOnly(event.target.checked)}
+                    onChange={(event) => {
+                      setAvailableOnly(event.target.checked);
+                      setProductPage(1);
+                    }}
                     className="h-5 w-5 rounded border-input accent-primary"
                   />
                 </label>
@@ -1016,14 +1370,29 @@ export function OrdersView() {
             </CardContent>
           </Card>
 
-          <div className="surface-scrollbar xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-2">
+          <div className="space-y-4">
             <PosProductGrid
-              products={filteredProducts}
+              products={visibleProducts}
               quantitiesByProduct={quantitiesByProduct}
               inventorySource={inventorySource}
               isLoading={productsQuery.isLoading}
               onAddProduct={addProduct}
             />
+            {!productsQuery.isLoading && filteredProducts.length ? (
+              <OrderProductPagination
+                page={productPage}
+                pageCount={productPageCount}
+                pageSize={productPageSize}
+                rangeStart={productRangeStart}
+                rangeEnd={productRangeEnd}
+                total={filteredProducts.length}
+                onPageChange={setProductPage}
+                onPageSizeChange={(nextPageSize) => {
+                  setProductPageSize(nextPageSize);
+                  setProductPage(1);
+                }}
+              />
+            ) : null}
           </div>
 
           <CartSummaryBar
@@ -1042,12 +1411,24 @@ export function OrdersView() {
           total={totals.total}
           onClose={() => setCartDrawerOpen(false)}
           onClear={() => setCart([])}
+          clearDisabled={Boolean(discountRequestOrderId)}
         >
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-center border-dashed"
+            onClick={() => setCommonProductOpen(true)}
+            disabled={Boolean(discountRequestOrderId)}
+          >
+            <PackagePlus className="h-4 w-4" />
+            Producto común
+          </Button>
           <PosCart
             items={cart}
             onUpdateQuantity={updateQuantity}
             onClear={() => setCart([])}
             showHeader={false}
+            readOnly={Boolean(discountRequestOrderId)}
           />
           <Card>
             <CardHeader>
@@ -1082,11 +1463,13 @@ export function OrdersView() {
                       setCart([]);
                       setElectronicInvoiceRequested(false);
                       setNotes('');
-                      setNotesExpanded(false);
                       setCustomerId('');
                       setPriceLevel('REGULAR');
+                      setCustomDiscountPercent(null);
+                      setCustomDiscountInput('');
                       setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
                       setInitialPaymentOption('PERCENT_30');
+                      setCustomInitialPaymentAmount(clearCurrencyInput());
                       setCreditTermOption('CUSTOMER_DEFAULT');
                       setCustomDueDate('');
                       setCreditRequestNote('');
@@ -1109,7 +1492,13 @@ export function OrdersView() {
                 className="space-y-4 [&_input]:min-h-11 [&_select]:h-11"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  createOrderMutation.mutate();
+                  if (discountRequestOrderId) {
+                    if (discountApprovalStatus === 'APPROVED') {
+                      sendApprovedDiscountOrderMutation.mutate(discountRequestOrderId);
+                    }
+                    return;
+                  }
+                  createOrderMutation.mutate(undefined);
                 }}
               >
                 <div className="space-y-2">
@@ -1140,41 +1529,6 @@ export function OrdersView() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Origen de la venta</Label>
-                  <div className="grid grid-cols-2 gap-2 rounded-md border border-zinc-200 bg-white p-1">
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'SALES_INVENTORY'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('SALES_INVENTORY')}
-                    >
-                      Inventario
-                    </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'WAREHOUSE'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('WAREHOUSE')}
-                    >
-                      Almacén B2B
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {inventorySource === 'WAREHOUSE'
-                      ? 'La venta descontará únicamente las existencias del almacén.'
-                      : 'La venta descontará únicamente el inventario de ventas.'}
-                  </p>
-                </div>
-
                 {destination === 'CASH_SALE' ? (
                   <div className="space-y-3">
                     <div className="space-y-2">
@@ -1189,7 +1543,7 @@ export function OrdersView() {
                         }}
                         className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm"
                       >
-                        <option value="FINAL">Consumidor final</option>
+                        <option value="FINAL">Facturación local (NCF)</option>
                         <option value="ECF">Factura electrónica (e-CF)</option>
                       </select>
                     </div>
@@ -1205,11 +1559,10 @@ export function OrdersView() {
                           onChange={(event) => setEcfRecipientEmail(event.target.value)}
                           placeholder="cliente@correo.com"
                           maxLength={320}
-                          required
                         />
                         <p className="text-xs text-muted-foreground">
-                          Se enviará una copia individual a este correo y otra a{' '}
-                          facturacion@corestack-systems.com.
+                          Opcional. Si lo indicas, se enviará una copia individual a este correo;
+                          facturacion@corestack-systems.com también recibirá la factura.
                         </p>
                       </div>
                     ) : null}
@@ -1241,14 +1594,14 @@ export function OrdersView() {
                   <div className="space-y-1 border-l-2 border-primary pl-3">
                     <p className="text-sm font-semibold text-foreground">Datos de cotización</p>
                     <p className="text-xs text-muted-foreground">
-                      El nombre del cliente es obligatorio. La cédula o el RNC son opcionales.
+                      El nombre del cliente, la cédula y el RNC son opcionales.
                     </p>
                   </div>
                 ) : null}
 
                 <div className="space-y-2">
                   <Label htmlFor="orderClientName">
-                    Nombre del cliente <span className="text-danger">*</span>
+                    Nombre del cliente <span className="text-muted-foreground">(opcional)</span>
                   </Label>
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1268,7 +1621,6 @@ export function OrdersView() {
                       placeholder="Busca por nombre, cedula, telefono o correo"
                       className="bg-white pl-9"
                       autoComplete="off"
-                      required
                     />
                     {customerSearchOpen ? (
                       <div
@@ -1466,10 +1818,10 @@ export function OrdersView() {
                     {paymentMode === 'CASH' ? (
                       <>
                         <option value={finalDiscountCustomerId}>
-                          Consumidor Final (descuento 5%)
+                          Consumidor Final (Descuento al por mayor 5%)
                         </option>
                         <option value={finalPreferredCustomerId}>
-                          Consumidor Final (Cliente preferencial 10%)
+                          Consumidor Final (Descuento al por mayor 10%)
                         </option>
                       </>
                     ) : null}
@@ -1491,11 +1843,11 @@ export function OrdersView() {
                       </option>
                     ))}
                   </select>
-                  {priceLevel !== 'REGULAR' ? (
+                  {priceLevel !== 'REGULAR' || customDiscountPercent !== null ? (
                     <p className="text-xs font-medium text-emerald-700">
                       Se aplicara un descuento de{' '}
-                      {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}% a los productos de
-                      esta orden.
+                      {getPriceLevelDiscountRate(priceLevel, customDiscountPercent) * 100}% a los
+                      productos de esta orden.
                     </p>
                   ) : null}
                 </div>
@@ -1510,43 +1862,117 @@ export function OrdersView() {
                         type="button"
                         size="sm"
                         variant={customerId === finalDiscountCustomerId ? 'default' : 'outline'}
+                        disabled={Boolean(discountRequestOrderId)}
                         onClick={() =>
                           handleCustomerSelection(
                             customerId === finalDiscountCustomerId ? '' : finalDiscountCustomerId,
                           )
                         }
                       >
-                        Descuento 5%
+                        Descuento al por mayor 5%
                       </Button>
                       <Button
                         type="button"
                         size="sm"
                         variant={customerId === finalPreferredCustomerId ? 'default' : 'outline'}
+                        disabled={Boolean(discountRequestOrderId)}
                         onClick={() =>
                           handleCustomerSelection(
                             customerId === finalPreferredCustomerId ? '' : finalPreferredCustomerId,
                           )
                         }
                       >
-                        Cliente preferencial 10%
+                        Descuento al por mayor 10%
                       </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={notesExpanded || notes ? 'default' : 'outline'}
-                        onClick={() => setNotesExpanded((current) => !current)}
-                      >
-                        <FileText className="h-4 w-4" />
-                        {notesExpanded || notes ? 'Ocultar nota' : 'Agregar nota'}
-                      </Button>
+                      {session?.role === 'ORDER_TAKER' || isAdminSession(session) ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={customDiscountPercent !== null ? 'default' : 'outline'}
+                          disabled={
+                            discountApprovalStatus === 'PENDING' ||
+                            discountApprovalStatus === 'APPROVED'
+                          }
+                          onClick={() => {
+                            setCartDrawerOpen(true);
+                            setCustomDiscountInput(
+                              customDiscountPercent === null ? '' : String(customDiscountPercent),
+                            );
+                            setCustomDiscountOpen(true);
+                          }}
+                        >
+                          <FileText className="h-4 w-4" />
+                          {session?.role === 'ORDER_TAKER'
+                            ? 'Solicitar descuento personalizado'
+                            : 'Descuento personalizado'}
+                        </Button>
+                      ) : null}
                     </div>
+                    {discountApproval ? (
+                      <div
+                        className={cn(
+                          'rounded-md border px-3 py-2 text-sm',
+                          discountApproval.status === 'APPROVED'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                            : discountApproval.status === 'REJECTED'
+                              ? 'border-red-200 bg-red-50 text-red-950'
+                              : 'border-amber-200 bg-amber-50 text-amber-950',
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold">
+                            Descuento personalizado{' '}
+                            {Number(discountApproval.requestedRate) * 100}%
+                          </span>
+                          <Badge
+                            variant={
+                              discountApproval.status === 'APPROVED'
+                                ? 'success'
+                                : discountApproval.status === 'REJECTED'
+                                  ? 'danger'
+                                  : 'warning'
+                            }
+                          >
+                            {discountApproval.status === 'APPROVED'
+                              ? 'Aprobado'
+                              : discountApproval.status === 'REJECTED'
+                                ? 'Rechazado'
+                                : 'Pendiente'}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs">
+                          {discountApproval.status === 'APPROVED'
+                            ? 'Revisa la orden y pulsa Enviar a caja cuando estés listo.'
+                            : discountApproval.status === 'REJECTED'
+                              ? discountApproval.decisionNote ||
+                                'El administrador rechazó este descuento.'
+                              : 'Esperando la decisión de un administrador. El carrito permanece abierto.'}
+                        </p>
+                        {discountApproval.status === 'REJECTED' ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="mt-2"
+                            onClick={() => {
+                              setDiscountRequestOrderId(null);
+                              setCustomDiscountPercent(null);
+                              setCustomDiscountInput('');
+                              setMessage('Puedes ajustar la orden y solicitar otro descuento.');
+                            }}
+                          >
+                            Preparar otra solicitud
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
-                {priceLevel !== 'REGULAR' ? (
+                {priceLevel !== 'REGULAR' || customDiscountPercent !== null ? (
                   <p className="text-xs font-medium text-emerald-700">
                     Se aplicara un descuento de{' '}
-                    {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}% a los productos de
-                    esta orden.
+                    {getPriceLevelDiscountRate(priceLevel, customDiscountPercent) * 100}% a los
+                    productos de esta orden.
                   </p>
                 ) : null}
 
@@ -1592,6 +2018,7 @@ export function OrdersView() {
                           <option value="PERCENT_30">30 %</option>
                           <option value="PERCENT_50">50 %</option>
                           <option value="PERCENT_70">70 %</option>
+                          <option value="CUSTOM">Monto personalizado</option>
                         </select>
                       </div>
                       <div className="space-y-2">
@@ -1616,6 +2043,27 @@ export function OrdersView() {
                         </select>
                       </div>
                     </div>
+                    {initialPaymentOption === 'CUSTOM' ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="customInitialPaymentAmount">Monto del pago inicial</Label>
+                        <Input
+                          id="customInitialPaymentAmount"
+                          inputMode="decimal"
+                          value={customInitialPaymentAmount}
+                          disabled={Boolean(editOrderId)}
+                          onChange={(event) =>
+                            setCustomInitialPaymentAmount(sanitizeCurrencyInput(event.target.value))
+                          }
+                          onBlur={(event) =>
+                            setCustomInitialPaymentAmount(formatCurrencyInput(event.target.value))
+                          }
+                          required
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Debe ser mayor que cero y no puede superar el total de la orden.
+                        </p>
+                      </div>
+                    ) : null}
                     {creditTermOption === 'CUSTOM_DATE' ? (
                       <div className="space-y-2">
                         <Label htmlFor="customDueDate">Fecha de vencimiento</Label>
@@ -1666,7 +2114,7 @@ export function OrdersView() {
                   </div>
                 ) : null}
 
-                {paymentMode === 'CREDIT' || notesExpanded || notes ? (
+                {paymentMode === 'CREDIT' || notes ? (
                   <div className="space-y-2">
                     <Label htmlFor="orderNotes">Notas</Label>
                     <textarea
@@ -1707,9 +2155,30 @@ export function OrdersView() {
                   <Button
                     type="submit"
                     className="h-14 w-full text-base font-bold"
-                    disabled={!cart.length || createOrderMutation.isPending}
+                    disabled={
+                      !cart.length ||
+                      createOrderMutation.isPending ||
+                      sendApprovedDiscountOrderMutation.isPending ||
+                      (Boolean(discountRequestOrderId) && discountApprovalStatus !== 'APPROVED')
+                    }
                   >
-                    {editOrderId ? (
+                    {discountRequestOrderId ? (
+                      discountApprovalStatus === 'APPROVED' ? (
+                        <>
+                          <Send className="h-5 w-5" />
+                          {sendApprovedDiscountOrderMutation.isPending
+                            ? 'Enviando a caja...'
+                            : 'Enviar a caja'}
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="h-5 w-5" />
+                          {discountApprovalStatus === 'REJECTED'
+                            ? 'Descuento rechazado'
+                            : 'Aprobación pendiente'}
+                        </>
+                      )
+                    ) : editOrderId ? (
                       <>
                         <FileText className="h-5 w-5" />
                         Actualizar cotizacion
@@ -1736,6 +2205,34 @@ export function OrdersView() {
             </CardContent>
           </Card>
         </OrderCartDrawer>
+        <CommonProductDialog
+          open={commonProductOpen}
+          onClose={() => setCommonProductOpen(false)}
+          onAdd={addCommonProduct}
+        />
+        <CustomDiscountDialog
+          open={customDiscountOpen}
+          mode={session?.role === 'ORDER_TAKER' ? 'REQUEST' : 'APPLY'}
+          value={customDiscountInput}
+          busy={createOrderMutation.isPending}
+          onChange={setCustomDiscountInput}
+          onClose={() => {
+            setCustomDiscountOpen(false);
+            setCartDrawerOpen(true);
+          }}
+          onConfirm={(percent) => {
+            if (session?.role === 'ORDER_TAKER') {
+              createOrderMutation.mutate({ percent, requestApproval: true });
+              return;
+            }
+            setCustomerId('');
+            setPriceLevel('REGULAR');
+            setCustomDiscountPercent(percent);
+            setCustomDiscountOpen(false);
+            setCartDrawerOpen(true);
+            toast.success(`Descuento personalizado de ${percent}% aplicado a la orden.`);
+          }}
+        />
       </section>
 
       <OrderActivityDrawer
@@ -1812,6 +2309,159 @@ export function OrdersView() {
           setCancelReason('');
         }}
       />
+    </div>
+  );
+}
+
+function CustomDiscountDialog({
+  open,
+  mode,
+  value,
+  busy,
+  onChange,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  mode: 'REQUEST' | 'APPLY';
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onConfirm: (percent: number) => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted || !open) return null;
+
+  const percent = Number(value);
+  const valid = Number.isFinite(percent) && percent > 0 && percent <= 100;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4 backdrop-blur-[2px]">
+      <div className="w-full max-w-md rounded-lg bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-zinc-200 p-5">
+          <div>
+            <h2 className="text-lg font-bold">
+              {mode === 'REQUEST' ? 'Solicitar descuento personalizado' : 'Descuento personalizado'}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Digita el porcentaje que se aplicará al subtotal de los productos.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar">
+            <X className="h-5 w-5 text-muted-foreground" />
+          </button>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="space-y-2">
+            <Label htmlFor="customDiscountPercent">Porcentaje de descuento</Label>
+            <div className="relative">
+              <Input
+                id="customDiscountPercent"
+                type="number"
+                min="0.01"
+                max="100"
+                step="0.01"
+                inputMode="decimal"
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                autoFocus
+                className="pr-10"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                %
+              </span>
+            </div>
+          </div>
+          {mode === 'REQUEST' ? (
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              La orden quedará pendiente hasta que un administrador apruebe o rechace el descuento.
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+              Cancelar
+            </Button>
+            <Button type="button" disabled={!valid || busy} onClick={() => onConfirm(percent)}>
+              {mode === 'REQUEST' ? 'Solicitar' : 'Aplicar descuento'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function OrderProductPagination({
+  page,
+  pageCount,
+  pageSize,
+  rangeStart,
+  rangeEnd,
+  total,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  page: number;
+  pageCount: number;
+  pageSize: number;
+  rangeStart: number;
+  rangeEnd: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span>Mostrar</span>
+        <select
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(Number(event.target.value))}
+          className="h-9 rounded-md border border-input bg-white px-2 text-sm text-foreground"
+          aria-label="Productos por bloque"
+        >
+          {[50, 100].map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+        <span>por bloque</span>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 sm:justify-end">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          aria-label="Bloque anterior"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <div className="min-w-36 text-center text-sm">
+          <span className="font-medium text-foreground">
+            {rangeStart}-{rangeEnd}
+          </span>{' '}
+          <span className="text-muted-foreground">de {total}</span>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          disabled={page >= pageCount}
+          onClick={() => onPageChange(page + 1)}
+          aria-label="Bloque siguiente"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
     </div>
   );
 }

@@ -260,7 +260,13 @@ export class ReceiptsService {
     userId: string,
     dto: CreateReceiptDto,
   ) {
-    const invoice = await this.getReceivableInvoice(tx, tenantId, dto.supplierInvoiceId);
+    const [invoice, tenant] = await Promise.all([
+      this.getReceivableInvoice(tx, tenantId, dto.supplierInvoiceId),
+      tx.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+    ]);
     this.ensurePurchaseOrderCanReceive(invoice);
 
     const existingDraft = await tx.goodsReceipt.findFirst({
@@ -277,7 +283,7 @@ export class ReceiptsService {
       );
     }
 
-    const items = this.prepareDraftItems(invoice, dto.items);
+    const items = this.prepareDraftItems(invoice, dto.items, tenant.salePricesIncludeTax);
     const receiptNumber = this.generateReceiptNumber();
 
     const created = await tx.goodsReceipt.create({
@@ -323,9 +329,17 @@ export class ReceiptsService {
     const receipt = await this.runSerializable(async (tx) => {
       const current = await this.getReceiptForMutation(tx, tenantId, id);
       this.ensureDraft(current, 'editar');
-      const invoice = await this.getReceivableInvoice(tx, tenantId, current.supplierInvoiceId);
+      const [invoice, tenant] = await Promise.all([
+        this.getReceivableInvoice(tx, tenantId, current.supplierInvoiceId),
+        tx.tenant.findUniqueOrThrow({
+          where: { id: tenantId },
+          select: { salePricesIncludeTax: true },
+        }),
+      ]);
       this.ensurePurchaseOrderCanReceive(invoice);
-      const items = dto.items ? this.prepareDraftItems(invoice, dto.items) : undefined;
+      const items = dto.items
+        ? this.prepareDraftItems(invoice, dto.items, tenant.salePricesIncludeTax)
+        : undefined;
 
       if (items) {
         await tx.goodsReceiptItem.deleteMany({
@@ -385,6 +399,10 @@ export class ReceiptsService {
     id: string,
   ) {
     const current = await this.getReceiptForMutation(tx, tenantId, id);
+    const tenant = await tx.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { salePricesIncludeTax: true },
+    });
     this.ensureDraft(current, 'confirmar');
     this.ensureInvoiceStatus(current.supplierInvoice.status);
     this.ensureReceiptPurchaseOrderCanReceive(current);
@@ -449,6 +467,8 @@ export class ReceiptsService {
         newCostNet: item.supplierInvoiceItem.unitCostNet,
         requestedFinalSalePrice: item.finalSalePrice,
         requireMatchingSuggestedPrice: true,
+        taxRate: product.taxRate,
+        pricesIncludeTax: tenant.salePricesIncludeTax,
       });
 
       if (isWarehouseReceipt) {
@@ -708,6 +728,10 @@ export class ReceiptsService {
     const normalizedReason = this.normalizeRequiredReason(reason);
     const receipt = await this.runSerializable(async (tx) => {
       const current = await this.getReceiptForMutation(tx, tenantId, id);
+      const tenant = await tx.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      });
       if (current.status !== GoodsReceiptStatus.CONFIRMED || !current.confirmedAt) {
         throw new ConflictException('Solo una recepción confirmada puede revertirse.');
       }
@@ -806,7 +830,12 @@ export class ReceiptsService {
               costWithTax: item.previousCostWithTax,
               price: restoredSalePrice,
               salePrice: restoredSalePrice,
-              margin: calculateMargin(restoredSalePrice, item.previousCostNet),
+              margin: calculateMargin(
+                restoredSalePrice,
+                item.previousCostNet,
+                product.taxRate,
+                tenant.salePricesIncludeTax,
+              ),
             },
           });
 
@@ -965,7 +994,11 @@ export class ReceiptsService {
     }
   }
 
-  private prepareDraftItems(invoice: InvoiceForReceipt, dtoItems: ReceiptItemDto[]) {
+  private prepareDraftItems(
+    invoice: InvoiceForReceipt,
+    dtoItems: ReceiptItemDto[],
+    pricesIncludeTax: boolean,
+  ) {
     const requestedIds = dtoItems.map((item) => item.supplierInvoiceItemId);
     if (new Set(requestedIds).size !== requestedIds.length) {
       throw new BadRequestException(
@@ -1021,6 +1054,8 @@ export class ReceiptsService {
         currentSalePrice: state.salePrice,
         newCostNet: invoiceItem.unitCostNet,
         requestedFinalSalePrice,
+        taxRate: invoiceItem.product.taxRate,
+        pricesIncludeTax,
       });
       const newStock = state.stock.add(quantity).toDecimalPlaces(3);
 
@@ -1113,8 +1148,15 @@ export class ReceiptsService {
     newCostNet: Prisma.Decimal;
     requestedFinalSalePrice?: Prisma.Decimal | null;
     requireMatchingSuggestedPrice?: boolean;
+    taxRate: Prisma.Decimal;
+    pricesIncludeTax: boolean;
   }) {
-    const suggestedSalePrice = calculateSuggestedSalePrice(input.newCostNet, input.currentMargin);
+    const suggestedSalePrice = calculateSuggestedSalePrice(
+      input.newCostNet,
+      input.currentMargin,
+      input.taxRate,
+      input.pricesIncludeTax,
+    );
 
     if (input.decision === ReceiptPriceDecision.RECALCULATE_MARGIN) {
       if (!suggestedSalePrice) {
@@ -1148,14 +1190,24 @@ export class ReceiptsService {
       return {
         suggestedSalePrice,
         finalSalePrice: manualPrice,
-        nextMargin: calculateMargin(manualPrice, input.newCostNet),
+        nextMargin: calculateMargin(
+          manualPrice,
+          input.newCostNet,
+          input.taxRate,
+          input.pricesIncludeTax,
+        ),
       };
     }
 
     return {
       suggestedSalePrice,
       finalSalePrice: input.currentSalePrice.toDecimalPlaces(2),
-      nextMargin: calculateMargin(input.currentSalePrice, input.newCostNet),
+      nextMargin: calculateMargin(
+        input.currentSalePrice,
+        input.newCostNet,
+        input.taxRate,
+        input.pricesIncludeTax,
+      ),
     };
   }
 
@@ -1390,11 +1442,20 @@ export class ReceiptsService {
   }
 }
 
-function calculateSuggestedSalePrice(cost: Prisma.Decimal, margin: Prisma.Decimal | null) {
+function calculateSuggestedSalePrice(
+  cost: Prisma.Decimal,
+  margin: Prisma.Decimal | null,
+  taxRate: Prisma.Decimal,
+  pricesIncludeTax: boolean,
+) {
   if (!margin || margin.gte(1)) {
     return null;
   }
-  const suggested = cost.div(new Prisma.Decimal(1).sub(margin)).toDecimalPlaces(2);
+  const suggestedNet = cost.div(new Prisma.Decimal(1).sub(margin));
+  const suggested = (pricesIncludeTax
+    ? suggestedNet.mul(new Prisma.Decimal(1).add(taxRate))
+    : suggestedNet
+  ).toDecimalPlaces(2);
   return suggested.gt(0) ? suggested : null;
 }
 
@@ -1415,11 +1476,19 @@ function decimalToString(value: Prisma.Decimal | number | string | null | undefi
   return new Prisma.Decimal(value).toFixed(2);
 }
 
-function calculateMargin(salePrice: Prisma.Decimal, cost: Prisma.Decimal | null) {
-  if (!cost || salePrice.lte(0)) {
+function calculateMargin(
+  salePrice: Prisma.Decimal,
+  cost: Prisma.Decimal | null,
+  taxRate: Prisma.Decimal,
+  pricesIncludeTax: boolean,
+) {
+  const netSalePrice = pricesIncludeTax
+    ? salePrice.div(new Prisma.Decimal(1).add(taxRate))
+    : salePrice;
+  if (!cost || netSalePrice.lte(0)) {
     return null;
   }
-  return salePrice.sub(cost).div(salePrice).toDecimalPlaces(4);
+  return netSalePrice.sub(cost).div(netSalePrice).toDecimalPlaces(4);
 }
 
 function effectiveSalePrice(salePrice: Prisma.Decimal, price: Prisma.Decimal) {

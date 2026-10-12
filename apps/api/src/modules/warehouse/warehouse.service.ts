@@ -475,11 +475,7 @@ export class WarehouseService {
       });
       if (existing) throw new ConflictException('Esta orden ya fue entregada.');
 
-      if (order.items.some((item) => !item.productId)) {
-        throw new BadRequestException(
-          'La orden contiene líneas sin producto y requiere revisión antes del despacho.',
-        );
-      }
+      const inventoryItems = order.items.filter((item) => item.productId);
 
       const confirmedByItem = new Map<string, number>();
       for (const item of dto.items) {
@@ -490,8 +486,8 @@ export class WarehouseService {
       }
 
       const verificationIsComplete =
-        confirmedByItem.size === order.items.length &&
-        order.items.every((item) => {
+        confirmedByItem.size === inventoryItems.length &&
+        inventoryItems.every((item) => {
           const confirmedQuantity = confirmedByItem.get(item.id);
           return (
             confirmedQuantity !== undefined &&
@@ -508,12 +504,12 @@ export class WarehouseService {
         where: {
           tenantId,
           productId: {
-            in: order.items.flatMap((item) => (item.productId ? [item.productId] : [])),
+            in: inventoryItems.flatMap((item) => (item.productId ? [item.productId] : [])),
           },
         },
       });
       const stockByProduct = new Map(stockRows.map((stock) => [stock.productId, stock]));
-      const movementItems = order.items.filter((item) => item.productId);
+      const movementItems = inventoryItems;
       await tx.warehouseMovement.createMany({
         data: movementItems.map((item) => {
           const stock = stockByProduct.get(item.productId!);

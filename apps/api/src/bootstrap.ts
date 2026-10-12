@@ -87,7 +87,8 @@ export async function createQorvexApiApp() {
       limit: getNumberConfig(config, 'API_RATE_LIMIT_MAX', 600),
       standardHeaders: 'draft-8',
       legacyHeaders: false,
-      skip: (request) => request.path === '/' || request.path === '/health',
+      skip: (request) =>
+        request.method === 'OPTIONS' || request.path === '/' || request.path === '/health',
       message: {
         statusCode: 429,
         message: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.',
@@ -102,6 +103,7 @@ export async function createQorvexApiApp() {
       limit: getNumberConfig(config, 'AUTH_RATE_LIMIT_MAX', 10),
       standardHeaders: 'draft-8',
       legacyHeaders: false,
+      skip: (request) => request.method === 'OPTIONS',
       message: {
         statusCode: 429,
         message:

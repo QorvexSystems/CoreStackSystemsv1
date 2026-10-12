@@ -18,7 +18,11 @@ import {
 } from '@/components/ui/table';
 import { getInvoices } from '@/lib/api';
 import { brand } from '@/lib/brand';
-import { getStatusVariant, translateStatus } from '@/lib/display-labels';
+import {
+  getStatusVariant,
+  translatePaymentMethod,
+  translateStatus,
+} from '@/lib/display-labels';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -28,6 +32,7 @@ export function InvoicesView() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [periodFilter, setPeriodFilter] = useState('ALL');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState('ALL');
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search).get('q');
@@ -53,6 +58,13 @@ export function InvoicesView() {
             ? ['VOID', 'VOIDED'].includes(invoice.status)
             : invoice.status === statusFilter),
       )
+      .filter(
+        (invoice) =>
+          paymentMethodFilter === 'ALL' ||
+          (paymentMethodFilter === 'NONE'
+            ? !invoice.paymentMethod
+            : invoice.paymentMethod === paymentMethodFilter),
+      )
       .filter((invoice) => matchesPeriod(invoice.issuedAt ?? invoice.createdAt, periodFilter))
       .filter((invoice) => {
         if (!query) {
@@ -74,7 +86,7 @@ export function InvoicesView() {
         (a, b) =>
           new Date(b.issuedAt ?? b.createdAt).getTime() - new Date(a.issuedAt ?? a.createdAt).getTime(),
       );
-  }, [invoicesQuery.data, periodFilter, search, statusFilter]);
+  }, [invoicesQuery.data, paymentMethodFilter, periodFilter, search, statusFilter]);
   const total = filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.total), 0);
 
   if (!session) {
@@ -112,7 +124,7 @@ export function InvoicesView() {
       </section>
 
       <Card>
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1.4fr_0.8fr_0.8fr]">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[1.4fr_0.8fr_0.8fr_0.8fr]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -147,6 +159,20 @@ export function InvoicesView() {
             <option value="CANCELLED">Canceladas</option>
             <option value="VOIDED">Anuladas</option>
           </select>
+          <select
+            value={paymentMethodFilter}
+            onChange={(event) => setPaymentMethodFilter(event.target.value)}
+            className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+            aria-label="Filtrar por tipo de pago"
+          >
+            <option value="ALL">Todos los tipos de pago</option>
+            <option value="CASH">Efectivo</option>
+            <option value="CARD">Tarjeta</option>
+            <option value="TRANSFER">Transferencia</option>
+            <option value="CREDIT">Crédito</option>
+            <option value="OTHER">Otro</option>
+            <option value="NONE">Sin método registrado</option>
+          </select>
         </CardContent>
       </Card>
 
@@ -172,6 +198,9 @@ export function InvoicesView() {
                   <span>{formatDate(invoice.issuedAt ?? invoice.createdAt)}</span>
                   <span className="font-semibold">{formatCurrency(Number(invoice.total))}</span>
                 </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Pago: {translatePaymentMethod(invoice.paymentMethod)}
+                </p>
                 <div className="mt-3 flex justify-end">
                   <Button asChild variant="outline" size="sm">
                     <Link href={`/invoices/${invoice.id}/print`}>
@@ -192,6 +221,7 @@ export function InvoicesView() {
                 <TableHead>Cliente</TableHead>
                 <TableHead>Fecha</TableHead>
                 <TableHead>Estado</TableHead>
+                <TableHead>Pago</TableHead>
                 <TableHead>Items</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead className="text-right">Acciones</TableHead>
@@ -210,6 +240,7 @@ export function InvoicesView() {
                   <TableCell>
                     <Badge variant={getStatusVariant(invoice.status)}>{translateStatus(invoice.status)}</Badge>
                   </TableCell>
+                  <TableCell>{translatePaymentMethod(invoice.paymentMethod)}</TableCell>
                   <TableCell>{invoice.items.length}</TableCell>
                   <TableCell className="text-right">{formatCurrency(Number(invoice.total))}</TableCell>
                   <TableCell className="text-right">

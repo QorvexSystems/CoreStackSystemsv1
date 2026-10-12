@@ -1,6 +1,6 @@
 export const brand = {
   name: 'ALLPA',
-  tagline: 'Ama, vive y crea',
+  tagline: 'Tu mundo de empaques',
   descriptor: 'Exhibidores, empaques y tips',
   logoPath: '/brand/allpa-logo.png',
   faviconPath: '/icon.png',

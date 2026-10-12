@@ -67,7 +67,7 @@ export function ProductSalesRankingView() {
     const source = order === 'most' ? ranking.mostSold : ranking.leastSold;
 
     return source.filter((product) => {
-      const searchableText = [product.name, product.sku, product.brand, product.categoryName]
+      const searchableText = [product.name, product.sku, product.categoryName]
         .filter(Boolean)
         .join(' ');
       const matchesSearch = !normalizedSearch || normalize(searchableText).includes(normalizedSearch);
@@ -163,13 +163,13 @@ export function ProductSalesRankingView() {
           <div className="grid gap-3 border-b border-slate-100 bg-slate-50/60 p-4 md:grid-cols-2 xl:grid-cols-[minmax(260px,1.5fr)_repeat(3,minmax(150px,0.7fr))_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Buscar nombre, SKU, marca o categoría" className="bg-white pl-9" />
+              <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Buscar nombre, SKU o departamento" className="bg-white pl-9" />
             </div>
             <FilterSelect value={salesState} onChange={(value) => { setSalesState(value as typeof salesState); setPage(1); }} label="Estado de venta">
               <option value="all">Todos</option><option value="sold">Con ventas</option><option value="unsold">Sin ventas</option>
             </FilterSelect>
-            <FilterSelect value={category} onChange={(value) => { setCategory(value); setPage(1); }} label="Categoría">
-              <option value="all">Todas las categorías</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}
+            <FilterSelect value={category} onChange={(value) => { setCategory(value); setPage(1); }} label="Departamento">
+              <option value="all">Todos los departamentos</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}
             </FilterSelect>
             <FilterSelect value={unit} onChange={(value) => { setUnit(value); setPage(1); }} label="Unidad">
               <option value="all">Todas las unidades</option>{units.map((item) => <option key={item} value={item}>{translateProductUnit(item)}</option>)}
@@ -180,7 +180,7 @@ export function ProductSalesRankingView() {
           <div className="overflow-x-auto">
             <Table>
               <TableHeader><TableRow>
-                <TableHead className="w-16">#</TableHead><TableHead>Producto</TableHead><TableHead>Categoría</TableHead><TableHead>Unidad</TableHead>
+                <TableHead className="w-16">#</TableHead><TableHead>Producto</TableHead><TableHead>Departamento</TableHead><TableHead>Unidad</TableHead>
                 <TableHead className="text-right">Cantidad</TableHead><TableHead className="text-right">Facturas</TableHead><TableHead className="text-right">Total vendido</TableHead><TableHead>Última venta</TableHead>
               </TableRow></TableHeader>
               <TableBody>

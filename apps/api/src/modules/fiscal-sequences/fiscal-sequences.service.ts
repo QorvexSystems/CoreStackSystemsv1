@@ -4,6 +4,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import {
+  DocumentType,
   FiscalSequenceStatus,
   InvoiceDocumentType,
   Role,
@@ -178,22 +179,17 @@ export class FiscalSequencesService {
       throw new BadRequestException('Este tipo de comprobante no admite bloques fiscales.');
     }
 
-    if (
-      dto.issuerDocumentType !== 'RNC' &&
-      dto.issuerDocumentType !== 'CEDULA'
-    ) {
-      throw new BadRequestException('El documento del emisor debe ser RNC o cédula.');
-    }
-
-    if (!validateDominicanDocument(dto.issuerDocumentType, dto.issuerDocumentNumber)) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { rnc: true },
+    });
+    if (!tenant?.rnc || !validateDominicanDocument(DocumentType.RNC, tenant.rnc)) {
       throw new BadRequestException(
-        dto.issuerDocumentType === 'RNC'
-          ? 'El RNC del emisor no es válido.'
-          : 'La cédula del emisor no es válida.',
+        'Configura un RNC válido para la empresa antes de registrar secuencias fiscales.',
       );
     }
 
-    const issuerDocumentNumber = normalizeDominicanDocument(dto.issuerDocumentNumber);
+    const issuerDocumentNumber = normalizeDominicanDocument(tenant.rnc);
 
     const validUntil = dto.validUntil ? this.parseValidUntil(dto.validUntil) : null;
     const requiresDgiiAuthorization =
@@ -251,7 +247,7 @@ export class FiscalSequencesService {
           endNumber: dto.endNumber,
           nextNumber: dto.nextNumber,
           authorizationNumber: dto.authorizationNumber?.trim() || null,
-          issuerDocumentType: dto.issuerDocumentType,
+          issuerDocumentType: DocumentType.RNC,
           issuerDocumentNumber,
           validUntil,
           status: activeBlock ? FiscalSequenceStatus.INACTIVE : FiscalSequenceStatus.ACTIVE,

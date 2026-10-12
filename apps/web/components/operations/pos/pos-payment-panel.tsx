@@ -4,7 +4,7 @@ import { Delete, ReceiptText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Customer } from '@/lib/api';
+import type { Customer, StoreCreditLookup } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import {
   appendCurrencyInput,
@@ -30,6 +30,10 @@ type PosPaymentPanelProps = {
   dueDate?: string | null;
   customerLocked?: boolean;
   amountReceived: string;
+  storeCreditReference: string;
+  storeCredit: StoreCreditLookup | null;
+  isStoreCreditLoading: boolean;
+  discountPercent?: number;
   totals: PosTotals;
   message: string | null;
   canCompleteSale: boolean;
@@ -40,6 +44,9 @@ type PosPaymentPanelProps = {
   onFiscalDocumentNumberChange: (value: string) => void;
   onPaymentMethodChange: (value: string) => void;
   onAmountReceivedChange: (value: string) => void;
+  onStoreCreditReferenceChange: (value: string) => void;
+  onLookupStoreCredit: () => void;
+  onClearStoreCredit: () => void;
   onCompleteSale: () => void;
 };
 
@@ -58,6 +65,10 @@ export function PosPaymentPanel({
   dueDate,
   customerLocked = false,
   amountReceived,
+  storeCreditReference,
+  storeCredit,
+  isStoreCreditLoading,
+  discountPercent,
   totals,
   message,
   canCompleteSale,
@@ -68,6 +79,9 @@ export function PosPaymentPanel({
   onFiscalDocumentNumberChange,
   onPaymentMethodChange,
   onAmountReceivedChange,
+  onStoreCreditReferenceChange,
+  onLookupStoreCredit,
+  onClearStoreCredit,
   onCompleteSale,
 }: PosPaymentPanelProps) {
   const cashInsufficient =
@@ -207,10 +221,68 @@ export function PosPaymentPanel({
 
       {creditSale ? (
         <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
-          Crédito aprobado · Inicial <strong>{formatCurrency(totals.requiredPayment)}</strong>
+          Crédito aprobado · Inicial <strong>{formatCurrency(totals.baseRequiredPayment)}</strong>
           {dueDate ? ` · Vence ${new Date(dueDate).toLocaleDateString('es-DO')}` : ''}
         </div>
       ) : null}
+
+      <div className="rounded-md border border-zinc-200 bg-zinc-50 p-2.5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1 space-y-1">
+            <Label htmlFor="storeCreditInvoice" className="text-xs font-semibold">
+              Crédito por devolución
+            </Label>
+            <Input
+              id="storeCreditInvoice"
+              value={storeCreditReference}
+              onChange={(event) => onStoreCreditReferenceChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  onLookupStoreCredit();
+                }
+              }}
+              placeholder="Ej. ALL-B0200000257"
+              className="h-9 bg-white uppercase"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9"
+              disabled={!storeCreditReference.trim() || isStoreCreditLoading}
+              onClick={onLookupStoreCredit}
+            >
+              {isStoreCreditLoading ? 'Buscando...' : 'Buscar crédito'}
+            </Button>
+            {storeCredit ? (
+              <Button type="button" variant="ghost" className="h-9" onClick={onClearStoreCredit}>
+                Quitar
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        {storeCredit ? (
+          <div className="mt-2 grid gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950 sm:grid-cols-3">
+            <span>
+              Disponible <strong>{formatCurrency(storeCredit.availableAmount)}</strong>
+            </span>
+            <span>
+              Aplicado <strong>{formatCurrency(totals.storeCreditApplied)}</strong>
+            </span>
+            <span>
+              Saldo posterior{' '}
+              <strong>
+                {formatCurrency(storeCredit.availableAmount - totals.storeCreditApplied)}
+              </strong>
+            </span>
+            <span className="sm:col-span-3">
+              Vence {new Date(storeCredit.expiresAt).toLocaleDateString('es-DO')}
+            </span>
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded-lg bg-slate-950 px-3 py-2.5 text-white shadow-sm">
@@ -262,12 +334,25 @@ export function PosPaymentPanel({
 
           <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs">
             <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Subtotal</span>
-              <span className="font-medium">{formatCurrency(totals.subtotal)}</span>
+              <span className="text-muted-foreground">Subtotal bruto</span>
+              <span className="font-medium">
+                {formatCurrency(totals.subtotal + totals.discount)}
+              </span>
             </div>
+            {totals.discount > 0 ? (
+              <div className="flex justify-between py-0.5 text-emerald-700">
+                <span>
+                  Descuento sobre productos
+                  {discountPercent && discountPercent > 0
+                    ? ` (${formatDiscountPercent(discountPercent)})`
+                    : ''}
+                </span>
+                <span className="font-medium">-{formatCurrency(totals.discount)}</span>
+              </div>
+            ) : null}
             <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Descuento</span>
-              <span className="font-medium">{formatCurrency(totals.discount)}</span>
+              <span className="text-muted-foreground">Subtotal después de descuento</span>
+              <span className="font-medium">{formatCurrency(totals.subtotal)}</span>
             </div>
             <div className="flex justify-between py-0.5">
               <span className="text-muted-foreground">ITBIS</span>
@@ -289,6 +374,16 @@ export function PosPaymentPanel({
                 </div>
               </>
             ) : null}
+            {totals.storeCreditApplied > 0 ? (
+              <div className="flex justify-between font-semibold text-emerald-700">
+                <span>Crédito aplicado</span>
+                <span>-{formatCurrency(totals.storeCreditApplied)}</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between font-bold text-slate-950">
+              <span>A pagar ahora</span>
+              <span>{formatCurrency(totals.requiredPayment)}</span>
+            </div>
           </div>
         </div>
 
@@ -342,4 +437,8 @@ export function PosPaymentPanel({
       </p>
     </div>
   );
+}
+
+function formatDiscountPercent(value: number) {
+  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}%`;
 }

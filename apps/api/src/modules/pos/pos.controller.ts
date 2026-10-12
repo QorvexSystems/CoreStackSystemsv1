@@ -30,6 +30,15 @@ export class PosController {
     return this.posService.findByBarcode(tenantId, user, barcode);
   }
 
+  @Get('store-credits/lookup')
+  lookupStoreCredit(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('q') q = '',
+  ) {
+    return this.posService.lookupStoreCredit(tenantId, user, q);
+  }
+
   @Post('sales/preview')
   previewSale(
     @TenantId() tenantId: string,

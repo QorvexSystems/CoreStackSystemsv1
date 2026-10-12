@@ -40,6 +40,11 @@ export class ProductsController {
     return this.productsService.search(tenantId, q);
   }
 
+  @Get('departments')
+  findDepartments(@TenantId() tenantId: string) {
+    return this.productsService.findDepartments(tenantId);
+  }
+
   @Get('barcode/:barcode')
   findByBarcode(@TenantId() tenantId: string, @Param('barcode') barcode: string) {
     return this.productsService.findByBarcode(tenantId, barcode);

@@ -13,6 +13,9 @@ coverage
 .tmp
 .dev-logs/
 /AbarrotesPDV/
+/AbarrotesPDV.zip
+__pycache__/
+*.py[cod]
 /docs/
 .DS_Store
 .vscode/

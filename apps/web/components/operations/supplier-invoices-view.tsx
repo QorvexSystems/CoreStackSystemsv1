@@ -154,7 +154,7 @@ export function SupplierInvoicesView() {
   const [paymentCondition, setPaymentCondition] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<EditableInvoiceItem[]>([blankItem()]);
-  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'TRANSFER' | 'CHECK'>('CASH');
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'TRANSFER'>('CASH');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentReference, setPaymentReference] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
@@ -1921,7 +1921,6 @@ export function SupplierInvoicesView() {
                           >
                             <option value="CASH">Efectivo</option>
                             <option value="TRANSFER">Transferencia</option>
-                            <option value="CHECK">Cheque</option>
                           </select>
                         </FormField>
                         <FormField
@@ -1950,7 +1949,7 @@ export function SupplierInvoicesView() {
                           <Input
                             value={paymentReference}
                             onChange={(event) => setPaymentReference(event.target.value)}
-                            placeholder="Cheque / transferencia"
+                            placeholder="Referencia de transferencia"
                           />
                         </FormField>
                         <FormField label="Notas">
@@ -1982,8 +1981,8 @@ export function SupplierInvoicesView() {
                       ) : null}
                       {paymentExceedsBalance ? (
                         <p className="mt-3 text-xs font-medium text-danger">
-                          Transferencia y cheque deben registrarse por un monto que no supere el
-                          saldo pendiente.
+                          La transferencia debe registrarse por un monto que no supere el saldo
+                          pendiente.
                         </p>
                       ) : null}
                       <div className="mt-4 flex justify-end">

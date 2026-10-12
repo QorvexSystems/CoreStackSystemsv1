@@ -219,6 +219,7 @@ export type LoginResponse = {
     tenantId: string;
     tenantName: string;
     tenantSlug: string;
+    salePricesIncludeTax: boolean;
     role: string;
     permissions: Record<string, boolean>;
   }>;
@@ -271,6 +272,11 @@ export type Product = {
     id: string;
     name: string;
   } | null;
+};
+
+export type ProductDepartment = {
+  id: string;
+  name: string;
 };
 
 export type InventoryMovement = {
@@ -471,10 +477,18 @@ export type PosSalePayload = {
   amountReceived?: number;
   cashSessionId?: string;
   orderId?: string;
+  storeCreditInvoiceNumber?: string;
   items?: Array<{
     productId: string;
     quantity: number;
   }>;
+};
+
+export type StoreCreditLookup = {
+  sourceInvoiceId: string;
+  invoiceNumber: string;
+  availableAmount: number;
+  expiresAt: string;
 };
 
 export type ReturnInvoiceLookup = Omit<Invoice, 'items'> & {
@@ -514,6 +528,12 @@ export type ReturnRequest = {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  storeCredit?: {
+    id: string;
+    originalAmount: string;
+    remainingAmount: string;
+    expiresAt: string;
+  } | null;
   requestedBy: {
     id: string;
     name: string;
@@ -569,7 +589,7 @@ export type CreateReturnRequestPayload = {
 
 export type SalesOrderPriceLevel = 'REGULAR' | 'DISCOUNT_10' | 'PREFERRED_18';
 export type SalePaymentMode = 'CASH' | 'CREDIT';
-export type InitialPaymentOption = 'NONE' | 'PERCENT_30' | 'PERCENT_50' | 'PERCENT_70';
+export type InitialPaymentOption = 'NONE' | 'PERCENT_30' | 'PERCENT_50' | 'PERCENT_70' | 'CUSTOM';
 export type CreditTermOption =
   | 'CUSTOMER_DEFAULT'
   | 'DAYS_15'
@@ -620,6 +640,16 @@ export type SalesOrder = {
   cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
+  tenant: {
+    id: string;
+    name: string;
+    commercialName: string | null;
+    legalName: string | null;
+    rnc: string | null;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+  };
   customer: Customer | null;
   createdBy: {
     id: string;
@@ -650,6 +680,7 @@ export type SalesOrder = {
     total: string;
   } | null;
   creditApproval: CreditSaleApproval | null;
+  discountApproval: DiscountApproval | null;
   items: Array<{
     id: string;
     salesOrderId: string;
@@ -692,8 +723,11 @@ export type CreateSalesOrderPayload = {
   clientName?: string;
   customerId?: string;
   priceLevel?: SalesOrderPriceLevel;
+  customDiscountPercent?: number;
+  requestCustomDiscount?: boolean;
   paymentMode?: SalePaymentMode;
   initialPaymentOption?: InitialPaymentOption;
+  customInitialPaymentAmount?: number;
   creditTermOption?: CreditTermOption;
   customDueDate?: string;
   creditRequestNote?: string;
@@ -701,7 +735,10 @@ export type CreateSalesOrderPayload = {
   quotationDocumentNumber?: string;
   notes?: string;
   items: Array<{
-    productId: string;
+    productId?: string;
+    description?: string;
+    unit?: string;
+    unitPrice?: number;
     quantity: number;
   }>;
 };
@@ -752,6 +789,48 @@ export type CreditSaleApproval = {
     status: string;
     clientName: string | null;
     total: string;
+    createdBy: {
+      id: string;
+      name: string;
+      email: string;
+    };
+    items: SalesOrder['items'];
+  };
+};
+
+export type DiscountApproval = {
+  id: string;
+  tenantId: string;
+  salesOrderId: string;
+  requestedRate: string;
+  status: CreditApprovalStatus;
+  requestNote: string | null;
+  decisionNote: string | null;
+  requestedAt: string;
+  decidedAt: string | null;
+  dismissedAt: string | null;
+  requestedBy: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  decidedBy: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+  salesOrder: {
+    id: string;
+    orderNumber: string;
+    destination: 'CASH_SALE' | 'QUOTATION';
+    status: string;
+    clientName: string | null;
+    subtotal: string;
+    discountTotal: string;
+    taxTotal: string;
+    total: string;
+    createdAt: string;
+    customer: Customer | null;
     createdBy: {
       id: string;
       name: string;
@@ -1021,8 +1100,6 @@ export type CreateFiscalSequenceInput = {
   nextNumber: number;
   authorizationNumber?: string;
   validUntil?: string;
-  issuerDocumentType: 'RNC' | 'CEDULA';
-  issuerDocumentNumber: string;
 };
 
 export type ImportBatch = {
@@ -1634,6 +1711,9 @@ const apiMessageTranslations: Record<string, string> = {
     'Tu usuario no tiene permiso para ver los logs de caja.',
   'An open cash session for this cashier is required to complete POS sales.':
     'Debes abrir una caja con tu usuario antes de completar ventas.',
+  'An open cash session is required to complete POS sales.':
+    'Debe existir una caja abierta antes de completar ventas.',
+  'Selected cash session is no longer open.': 'La caja seleccionada ya no esta abierta.',
   'Employee does not have POS access.': 'Tu usuario no tiene permiso para usar la caja.',
   'Employee profile must be active to use POS.':
     'El perfil del empleado debe estar activo para usar el POS.',
@@ -1673,6 +1753,8 @@ const apiMessageTranslations: Record<string, string> = {
     'Tu usuario no puede liberar esta orden.',
   'An open cash session for this cashier is required to claim sales orders.':
     'Debes abrir caja antes de tomar una orden para cobrar.',
+  'An open cash session is required to claim sales orders.':
+    'Debe existir una caja abierta antes de tomar una orden para cobrar.',
   'Close pending claimed sales orders before closing cash session.':
     'Libera o cobra las ordenes tomadas antes de cerrar la caja.',
   'Could not reserve fiscal sequence.':
@@ -1714,6 +1796,16 @@ const apiMessageTranslations: Record<string, string> = {
   'Return quantity exceeds invoice remaining quantity.':
     'La cantidad a devolver supera lo disponible en la factura.',
   'Return request not found for tenant.': 'Solicitud de devolucion no encontrada en esta empresa.',
+  'Invoice number is required for store credit lookup.':
+    'Escribe el número de la factura que tiene el crédito.',
+  'Invoice not found for store credit lookup.': 'No encontramos esa factura.',
+  'This invoice has no store credit.': 'Esta factura no tiene crédito por devolución.',
+  'Store credit expired after 30 days.': 'El crédito venció después de 30 días.',
+  'Store credit has already been exhausted.': 'El crédito de esta factura ya fue agotado.',
+  'There is no amount due to apply store credit to.':
+    'No hay un monto pendiente al cual aplicar el crédito.',
+  'Store credit changed during checkout. Search the invoice again.':
+    'El saldo del crédito cambió durante el cobro. Busca la factura nuevamente.',
   'Only requested returns can be approved.': 'Solo se pueden aprobar devoluciones solicitadas.',
   'Only requested returns can be rejected.': 'Solo se pueden rechazar devoluciones solicitadas.',
   'Return rejection reason is required.': 'Debes indicar el motivo del rechazo.',
@@ -1777,7 +1869,7 @@ const apiMessageTranslations: Record<string, string> = {
   'Supplier payment cannot exceed invoice balance.':
     'El pago no puede superar el saldo pendiente de la factura.',
   'Tendered amount must equal the applied amount for transfers and checks.':
-    'En transferencias y cheques, el monto entregado debe coincidir con el monto aplicado.',
+    'En transferencias, el monto entregado debe coincidir con el monto aplicado.',
   'Supplier invoice has no pending balance to pay.':
     'La factura no tiene saldo pendiente para pagar.',
   'Only pending or partially paid supplier invoices accept payments.':
@@ -2015,6 +2107,12 @@ export function deleteCustomer(tenantId: string, accessToken: string, customerId
 export function getProducts(tenantId: string, accessToken: string, q?: string) {
   const query = q ? `?q=${encodeURIComponent(q)}` : '';
   return fetchJson<Product[]>(`/products${query}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getProductDepartments(tenantId: string, accessToken: string) {
+  return fetchJson<ProductDepartment[]>('/products/departments', {
     headers: tenantHeaders(tenantId, accessToken),
   });
 }
@@ -2292,6 +2390,13 @@ export function completePosSale(tenantId: string, accessToken: string, payload: 
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify(payload),
   });
+}
+
+export function lookupPosStoreCredit(tenantId: string, accessToken: string, invoiceNumber: string) {
+  return fetchJson<StoreCreditLookup>(
+    `/pos/store-credits/lookup?q=${encodeURIComponent(invoiceNumber)}`,
+    { headers: tenantHeaders(tenantId, accessToken) },
+  );
 }
 
 export function getEmployees(tenantId: string, accessToken: string) {
@@ -2878,7 +2983,7 @@ export function registerSupplierPayment(
   accessToken: string,
   invoiceId: string,
   payload: {
-    method: 'CASH' | 'TRANSFER' | 'CHECK';
+    method: 'CASH' | 'TRANSFER';
     amount: number;
     tenderedAmount?: number;
     reference?: string;
@@ -3113,6 +3218,49 @@ export function rejectCreditSale(
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify({ reason }),
+  });
+}
+
+export function getDiscountApprovalNotifications(tenantId: string, accessToken: string) {
+  return fetchJson<DiscountApproval[]>('/discount-approvals/notifications', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function approveDiscountRequest(
+  tenantId: string,
+  accessToken: string,
+  approvalId: string,
+  note?: string,
+) {
+  return fetchJson<DiscountApproval>(`/discount-approvals/${approvalId}/approve`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function rejectDiscountRequest(
+  tenantId: string,
+  accessToken: string,
+  approvalId: string,
+  note?: string,
+) {
+  return fetchJson<DiscountApproval>(`/discount-approvals/${approvalId}/reject`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function dismissDiscountNotification(
+  tenantId: string,
+  accessToken: string,
+  approvalId: string,
+) {
+  return fetchJson<{ dismissed: true }>(`/discount-approvals/${approvalId}/notification`, {
+    method: 'DELETE',
+    headers: tenantHeaders(tenantId, accessToken),
   });
 }
 

@@ -10,6 +10,7 @@ import {
 } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { computeSaleAmounts } from '../../common/utils/sale-pricing';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 
@@ -56,7 +57,13 @@ export class InvoicesService {
     }
 
     const productIds = dto.items.map((item) => item.productId!);
-    const products = await this.getProductsForInvoice(tenantId, productIds);
+    const [tenant, products] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+      this.getProductsForInvoice(tenantId, productIds),
+    ]);
     const items = dto.items.map((item) => {
       const product = products.get(item.productId!);
 
@@ -65,17 +72,21 @@ export class InvoicesService {
       }
 
       const quantity = new Prisma.Decimal(item.quantity);
-      const unitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
-      const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
-      const taxTotal = subtotal.mul(product.taxRate).toDecimalPlaces(2);
+      const advertisedUnitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
+      const amounts = computeSaleAmounts({
+        advertisedUnitPrice,
+        quantity,
+        taxRate: product.taxRate,
+        pricesIncludeTax: tenant.salePricesIncludeTax,
+      });
 
       return {
         product,
         quantity,
-        unitPrice,
-        subtotal,
-        taxTotal,
-        total: subtotal.add(taxTotal).toDecimalPlaces(2),
+        unitPrice: amounts.unitPrice,
+        subtotal: amounts.subtotal,
+        taxTotal: amounts.taxTotal,
+        total: amounts.total,
       };
     });
     const subtotal = items
