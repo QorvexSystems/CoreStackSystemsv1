@@ -103,8 +103,18 @@ export function KpiCard({
           <Icon className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1 pt-0.5">
-          <p className="truncate text-xs font-medium text-slate-600">{title}</p>
-          <p className="mt-1 truncate text-xl font-bold tracking-tight text-slate-950">{value}</p>
+          <p className="line-clamp-2 text-xs font-medium leading-tight text-slate-600" title={title}>
+            {title}
+          </p>
+          <p
+            className={cn(
+              'mt-1 whitespace-nowrap font-bold tabular-nums tracking-tight text-slate-950',
+              getKpiValueSize(value),
+            )}
+            title={value}
+          >
+            {value}
+          </p>
           <p className={cn('mt-1 truncate text-[11px] text-slate-500', tone === 'red' && 'text-rose-500')}>
             {detail}
           </p>
@@ -127,6 +137,13 @@ export function KpiCard({
   ) : (
     <DashboardCard>{content}</DashboardCard>
   );
+}
+
+function getKpiValueSize(value: string) {
+  if (value.length >= 16) return 'text-sm';
+  if (value.length >= 13) return 'text-base';
+  if (value.length >= 10) return 'text-lg';
+  return 'text-xl';
 }
 
 function PanelHeader({
