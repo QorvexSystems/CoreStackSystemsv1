@@ -20,6 +20,7 @@
     "cleanup:rivnu:operational": "dotenv -e ../../.env -- tsx prisma/cleanup-rivnu-operational-data.ts",
     "cleanup:allpa:operational": "dotenv -e ../../.env -- tsx prisma/cleanup-allpa-operational-data.ts",
     "import:allpa-products": "dotenv -e ../../.env -- tsx prisma/import-allpa-products.ts",
+    "sync:allpa-products": "dotenv -e ../../.env -- tsx prisma/sync-allpa-legacy-products.ts",
     "ensure:allpa-warehouse-keeper": "dotenv -e ../../.env -- tsx prisma/ensure-allpa-warehouse-keeper.ts",
     "update:allpa-team": "dotenv -e ../../.env -- tsx prisma/update-allpa-team.ts",
     "enable:allpa-admin-pos": "dotenv -e ../../.env -- tsx prisma/enable-allpa-admin-pos.ts",

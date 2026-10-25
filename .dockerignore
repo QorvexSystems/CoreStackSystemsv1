@@ -4,6 +4,7 @@
 **/dist
 **/generated
 .git
+/AbarrotesPDV*.zip
 .env
 .env.*
 **/.env
