@@ -14,11 +14,13 @@ import {
   getDashboardSummary,
   getDiscountApprovalNotifications,
   getFiscalSequenceAlerts,
+  getFiscalSequences,
   approveDiscountRequest,
   dismissDiscountNotification,
   rejectDiscountRequest,
   type DiscountApproval,
   type FiscalSequenceAlert,
+  type FiscalSequence,
 } from '@/lib/api';
 import { isAdminSession } from '@/lib/authorization';
 import { brand } from '@/lib/brand';
@@ -47,6 +49,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const fiscalSequenceAlertsQuery = useQuery({
     queryKey: ['fiscal-sequence-alerts', session?.tenantId],
     queryFn: () => getFiscalSequenceAlerts(session?.tenantId ?? '', session?.accessToken ?? ''),
+    enabled: Boolean(session && isAdminSession(session)),
+    refetchInterval: 60_000,
+  });
+  const fiscalSequencesQuery = useQuery({
+    queryKey: ['fiscal-sequences', session?.tenantId],
+    queryFn: () => getFiscalSequences(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session && isAdminSession(session)),
     refetchInterval: 60_000,
   });
@@ -204,10 +212,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   inventoryAlerts={summaryQuery.data?.recentInventoryAlerts ?? []}
                   openCashSessions={summaryQuery.data?.openCashSessions ?? 0}
                   fiscalSequenceAlerts={fiscalSequenceAlertsQuery.data ?? []}
+                  fiscalSequences={fiscalSequencesQuery.data ?? []}
+                  fiscalSequencesError={fiscalSequencesQuery.isError}
                   discountApprovals={discountApprovalsQuery.data ?? []}
                   loading={
                     summaryQuery.isLoading ||
                     fiscalSequenceAlertsQuery.isLoading ||
+                    fiscalSequencesQuery.isLoading ||
                     discountApprovalsQuery.isLoading
                   }
                   onClose={() => setNotificationsOpen(false)}
@@ -260,6 +271,8 @@ function NotificationsPanel({
   inventoryAlerts,
   openCashSessions,
   fiscalSequenceAlerts,
+  fiscalSequences,
+  fiscalSequencesError,
   discountApprovals,
   loading,
   onClose,
@@ -277,11 +290,18 @@ function NotificationsPanel({
   }>;
   openCashSessions: number;
   fiscalSequenceAlerts: FiscalSequenceAlert[];
+  fiscalSequences: FiscalSequence[];
+  fiscalSequencesError: boolean;
   discountApprovals: DiscountApproval[];
   loading: boolean;
   onClose: () => void;
   onSelectDiscount: (approval: DiscountApproval) => void;
 }) {
+  const sequencesById = new Map(fiscalSequences.map((sequence) => [sequence.id, sequence]));
+  const alertedSequenceIds = new Set(fiscalSequenceAlerts.map((alert) => alert.id));
+  const healthyActiveSequences = fiscalSequences
+    .filter((sequence) => sequence.status === 'ACTIVE' && !alertedSequenceIds.has(sequence.id))
+    .sort((left, right) => left.prefix.localeCompare(right.prefix));
   const notifications = [
     {
       id: 'pending-invoices',
@@ -304,7 +324,7 @@ function NotificationsPanel({
       label: getFiscalSequenceAlertLabel(alert),
       value: alert.missing ? 'Sin bloque' : `${alert.remaining} restantes`,
       href: '/settings/fiscal-sequences',
-      detail: getFiscalSequenceAlertDetail(alert),
+      detail: getFiscalSequenceAlertDetail(alert, sequencesById.get(alert.id)),
       critical: alert.severity === 'critical',
     })),
   ].filter((item) => item.value !== 0);
@@ -385,6 +405,44 @@ function NotificationsPanel({
               </span>
             </Link>
           ))}
+          {fiscalSequencesError ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              No se pudo cargar el consumo de las secuencias fiscales.
+            </p>
+          ) : null}
+          {healthyActiveSequences.length > 0 ? (
+            <div className="space-y-2 border-t border-zinc-200 pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Consumo de secuencias fiscales
+              </p>
+              {healthyActiveSequences.map((sequence) => {
+                const usage = getFiscalSequenceUsage(sequence);
+                return (
+                  <Link
+                    key={sequence.id}
+                    href="/settings/fiscal-sequences"
+                    onClick={onClose}
+                    className="block rounded-md border border-zinc-200 px-3 py-2 text-sm transition hover:bg-zinc-50"
+                  >
+                    <span className="flex items-center justify-between gap-2 font-medium">
+                      <span>{sequence.prefix} · bloque activo</span>
+                      <span>{usage.percent}% usado</span>
+                    </span>
+                    <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-zinc-100">
+                      <span
+                        className="block h-full rounded-full bg-primary"
+                        style={{ width: `${usage.percent}%` }}
+                      />
+                    </span>
+                    <span className="mt-1.5 block text-xs text-muted-foreground">
+                      {usage.consumed} de {usage.total} consumidos · {usage.remaining} disponibles
+                      {sequence.validUntil ? ` · vence ${formatDate(sequence.validUntil)}` : ''}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          ) : null}
           {lowStockProducts > 0 ? inventoryAlerts.map((product) => {
             const available = Math.max(Number(product.stock) - Number(product.reservedStock), 0);
             const gap = Math.max(Number(product.minStock) - available, 0);
@@ -412,7 +470,7 @@ function NotificationsPanel({
               {openCashSessions} caja(s) abierta(s)
             </Link>
           ) : null}
-          {notifications.length === 0 && discountApprovals.length === 0 && openCashSessions === 0 ? (
+          {notifications.length === 0 && discountApprovals.length === 0 && openCashSessions === 0 && healthyActiveSequences.length === 0 && !fiscalSequencesError ? (
             <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">No hay alertas pendientes.</p>
           ) : null}
         </div>
@@ -429,17 +487,29 @@ function getFiscalSequenceAlertLabel(alert: FiscalSequenceAlert) {
   return `${alert.prefix}: próximo a agotarse`;
 }
 
-function getFiscalSequenceAlertDetail(alert: FiscalSequenceAlert) {
+function getFiscalSequenceAlertDetail(alert: FiscalSequenceAlert, sequence?: FiscalSequence) {
   if (alert.missing) return 'No hay un bloque configurado para este comprobante.';
+  const usage = sequence ? getFiscalSequenceUsage(sequence) : null;
+  const consumed = usage
+    ? `${usage.consumed} de ${usage.total} consumidos (${usage.percent}%). `
+    : '';
   const validity = alert.validUntil ? ` · vence ${formatDate(alert.validUntil)}` : '';
   if (alert.expired) return alert.validUntil
-    ? `Venció ${formatDate(alert.validUntil)} · quedan ${alert.remaining} sin usar.`
-    : `${alert.remaining} números sin usar en un bloque vencido.`;
-  if (alert.exhausted) return `No quedan números disponibles${validity}.`;
+    ? `${consumed}Venció ${formatDate(alert.validUntil)} · quedan ${alert.remaining} sin usar.`
+    : `${consumed}${alert.remaining} números sin usar en un bloque vencido.`;
+  if (alert.exhausted) return `${consumed}No quedan números disponibles${validity}.`;
   if (alert.remaining <= alert.threshold) {
-    return `Aviso al llegar a ${alert.threshold} restantes${validity}.`;
+    return `${consumed}Aviso al llegar a ${alert.threshold} restantes${validity}.`;
   }
-  return `Vence en ${alert.daysUntilExpiry} día(s)${validity}.`;
+  return `${consumed}Vence en ${alert.daysUntilExpiry} día(s)${validity}.`;
+}
+
+function getFiscalSequenceUsage(sequence: FiscalSequence) {
+  const total = Math.max(sequence.endNumber - sequence.startNumber + 1, 0);
+  const consumed = Math.min(Math.max(sequence.nextNumber - sequence.startNumber, 0), total);
+  const remaining = total - consumed;
+  const percent = total > 0 ? Math.round((consumed / total) * 100) : 0;
+  return { total, consumed, remaining, percent };
 }
 
 function DiscountApprovalDialog({
