@@ -19,6 +19,8 @@ export type FiscalSequenceAlert = {
   severity: 'warning' | 'critical';
   expired: boolean;
   exhausted: boolean;
+  expiringSoon: boolean;
+  daysUntilExpiry: number | null;
   missing?: boolean;
 };
 

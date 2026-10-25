@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { ActionDialog } from '@/components/ui/action-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -50,8 +51,10 @@ import { SessionRequired, useCurrentSession } from './session-required';
 export function ProductsView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('ALL');
+  const [stockFilter, setStockFilter] = useState<'ALL' | 'LOW' | 'OUT'>('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -62,11 +65,11 @@ export function ProductsView() {
   } | null>(null);
 
   useEffect(() => {
-    const query = new URLSearchParams(window.location.search).get('q');
-    if (query) {
-      setSearch(query);
-    }
-  }, []);
+    setSearch(searchParams.get('q') ?? '');
+    const stock = searchParams.get('stock');
+    setStockFilter(stock === 'low' ? 'LOW' : stock === 'out' ? 'OUT' : 'ALL');
+    setPage(1);
+  }, [searchParams]);
 
   const productsQuery = useQuery({
     queryKey: ['products', session?.tenantId, search],
@@ -154,8 +157,28 @@ export function ProductsView() {
 
   const readOnly = session.role === 'ACCOUNTANT';
   const products = productsQuery.data ?? [];
+  const stockCounts = products.filter(
+    (product) => departmentFilter === 'ALL' || product.category?.id === departmentFilter,
+  ).reduce(
+    (counts, product) => {
+      if (product.status !== 'ACTIVE' || !product.trackInventory) return counts;
+      const available = getAvailableStock(product);
+      if (available <= 0) counts.out += 1;
+      else if (available <= Number(product.minStock)) counts.low += 1;
+      return counts;
+    },
+    { low: 0, out: 0 },
+  );
   const filteredProducts = products
     .filter((product) => departmentFilter === 'ALL' || product.category?.id === departmentFilter)
+    .filter((product) => {
+      if (stockFilter === 'ALL') return true;
+      if (product.status !== 'ACTIVE' || !product.trackInventory) return false;
+      const available = getAvailableStock(product);
+      return stockFilter === 'OUT'
+        ? available <= 0
+        : available > 0 && available <= Number(product.minStock);
+    })
     .sort((left, right) => {
       const departmentOrder = (left.category?.name ?? '').localeCompare(
         right.category?.name ?? '',
@@ -177,7 +200,7 @@ export function ProductsView() {
       />
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="grid flex-1 gap-3 sm:grid-cols-[minmax(260px,1fr)_minmax(220px,0.65fr)]">
+        <div className="grid flex-1 gap-3 sm:grid-cols-[minmax(260px,1fr)_minmax(200px,0.65fr)_minmax(180px,0.55fr)]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -209,6 +232,19 @@ export function ProductsView() {
               </option>
             ))}
           </select>
+          <select
+            value={stockFilter}
+            onChange={(event) => {
+              setStockFilter(event.target.value as 'ALL' | 'LOW' | 'OUT');
+              setPage(1);
+            }}
+            className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+            aria-label="Filtrar productos por nivel de stock"
+          >
+            <option value="ALL">Todos los niveles de stock</option>
+            <option value="LOW">Stock bajo ({stockCounts.low})</option>
+            <option value="OUT">Agotados ({stockCounts.out})</option>
+          </select>
         </div>
         {!readOnly ? (
           <Button
@@ -230,9 +266,9 @@ export function ProductsView() {
             <div>
               <CardTitle>Catalogo</CardTitle>
               <CardDescription>
-                {departmentFilter === 'ALL'
+                {departmentFilter === 'ALL' && stockFilter === 'ALL'
                   ? `${products.length} productos activos o inactivos.`
-                  : `${filteredProducts.length} de ${products.length} productos en el departamento seleccionado.`}
+                  : `${filteredProducts.length} de ${products.length} productos coinciden con los filtros.`}
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground" aria-label="Leyenda de inventario">
@@ -275,7 +311,7 @@ export function ProductsView() {
             </div>
           ) : filteredProducts.length === 0 ? (
             <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-              {search || departmentFilter !== 'ALL'
+              {search || departmentFilter !== 'ALL' || stockFilter !== 'ALL'
                 ? 'No hay productos que coincidan con los filtros.'
                 : 'No hay productos registrados.'}
             </div>
@@ -321,10 +357,20 @@ export function ProductsView() {
                       </p>
                     </div>
                     {product.trackInventory ? (
-                      <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
-                        {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
-                        {' · '}{formatQuantity(product.reservedStock)} res.
-                      </Badge>
+                      <div className="text-right">
+                        <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
+                          {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
+                          {' · '}{formatQuantity(product.reservedStock)} res.
+                        </Badge>
+                        {(outOfStock || lowStock) ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {formatQuantity(availableStock)} disp. / mín. {formatQuantity(product.minStock)}
+                            {Number(product.minStock) > availableStock
+                              ? ` · faltan ${formatQuantity(Number(product.minStock) - availableStock)}`
+                              : ''}
+                          </p>
+                        ) : null}
+                      </div>
                     ) : (
                       <Badge variant="outline">Servicio</Badge>
                     )}
@@ -407,8 +453,10 @@ export function ProductsView() {
                               {' · '}{formatQuantity(product.reservedStock)} res.
                             </Badge>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              Total {formatQuantity(product.stock)} / min{' '}
-                              {formatQuantity(product.minStock)}
+                              {formatQuantity(availableStock)} disp. / mín. {formatQuantity(product.minStock)}
+                              {Number(product.minStock) > availableStock
+                                ? ` · faltan ${formatQuantity(Number(product.minStock) - availableStock)}`
+                                : ''}
                             </p>
                           </div>
                         ) : (

@@ -23,7 +23,8 @@ import {
 import { isAdminSession } from '@/lib/authorization';
 import { brand } from '@/lib/brand';
 import { translateRole } from '@/lib/display-labels';
-import { cn, formatCurrency, formatDateTime } from '@/lib/utils';
+import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatQuantity } from '@/components/operations/pos/pos-utils';
 import { GlobalSearch } from './global-search';
 import { MobileNavigation, Sidebar } from './sidebar';
 
@@ -46,7 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const fiscalSequenceAlertsQuery = useQuery({
     queryKey: ['fiscal-sequence-alerts', session?.tenantId],
     queryFn: () => getFiscalSequenceAlerts(session?.tenantId ?? '', session?.accessToken ?? ''),
-    enabled: Boolean(session),
+    enabled: Boolean(session && isAdminSession(session)),
     refetchInterval: 60_000,
   });
   const discountApprovalsQuery = useQuery({
@@ -145,6 +146,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const notificationCount =
+    (summaryQuery.data?.pendingInvoices ? 1 : 0) +
+    (summaryQuery.data?.lowStockProducts ? 1 : 0) +
+    (fiscalSequenceAlertsQuery.data?.length ?? 0) +
+    (discountApprovalsQuery.data?.length ?? 0);
+
   return (
     <div className="min-h-screen bg-zinc-100">
       <Sidebar
@@ -184,16 +191,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 onClick={() => setNotificationsOpen((current) => !current)}
               >
                 <Bell className="h-5 w-5" />
-                {(fiscalSequenceAlertsQuery.data?.length ?? 0) +
-                  (discountApprovalsQuery.data?.length ?? 0) >
-                0 ? (
+                {notificationCount > 0 ? (
                   <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
-                    {(fiscalSequenceAlertsQuery.data?.length ?? 0) +
-                      (discountApprovalsQuery.data?.length ?? 0) >
-                    9
-                      ? '9+'
-                      : (fiscalSequenceAlertsQuery.data?.length ?? 0) +
-                        (discountApprovalsQuery.data?.length ?? 0)}
+                    {notificationCount > 9 ? '9+' : notificationCount}
                   </span>
                 ) : null}
               </Button>
@@ -201,6 +201,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <NotificationsPanel
                   pendingInvoices={summaryQuery.data?.pendingInvoices ?? 0}
                   lowStockProducts={summaryQuery.data?.lowStockProducts ?? 0}
+                  inventoryAlerts={summaryQuery.data?.recentInventoryAlerts ?? []}
                   openCashSessions={summaryQuery.data?.openCashSessions ?? 0}
                   fiscalSequenceAlerts={fiscalSequenceAlertsQuery.data ?? []}
                   discountApprovals={discountApprovalsQuery.data ?? []}
@@ -256,6 +257,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 function NotificationsPanel({
   pendingInvoices,
   lowStockProducts,
+  inventoryAlerts,
   openCashSessions,
   fiscalSequenceAlerts,
   discountApprovals,
@@ -265,6 +267,14 @@ function NotificationsPanel({
 }: {
   pendingInvoices: number;
   lowStockProducts: number;
+  inventoryAlerts: Array<{
+    id: string;
+    name: string;
+    sku: string | null;
+    stock: number;
+    reservedStock: number;
+    minStock: number;
+  }>;
   openCashSessions: number;
   fiscalSequenceAlerts: FiscalSequenceAlert[];
   discountApprovals: DiscountApproval[];
@@ -278,43 +288,29 @@ function NotificationsPanel({
       label: 'Facturas pendientes',
       value: pendingInvoices,
       href: '/invoices',
-      detail: undefined,
+      detail: 'Revisar comprobantes pendientes.',
       critical: false,
     },
     {
       id: 'low-stock-products',
-      label: 'Productos bajo stock',
+      label: 'Productos con stock bajo o agotado',
       value: lowStockProducts,
       href: '/products',
-      detail: undefined,
-      critical: false,
-    },
-    {
-      id: 'open-cash-sessions',
-      label: 'Cajas abiertas',
-      value: openCashSessions,
-      href: '/cash/sessions',
-      detail: undefined,
-      critical: false,
+      detail: 'Consulta abajo las existencias y el mínimo.',
+      critical: true,
     },
     ...fiscalSequenceAlerts.map((alert) => ({
       id: alert.id,
       label: getFiscalSequenceAlertLabel(alert),
-      value:
-        alert.missing || alert.exhausted || alert.expired
-          ? 'Revisar'
-          : `${alert.remaining} restantes`,
+      value: alert.missing ? 'Sin bloque' : `${alert.remaining} restantes`,
       href: '/settings/fiscal-sequences',
-      detail:
-        alert.missing || alert.exhausted || alert.expired
-          ? 'Requiere un bloque autorizado por DGII.'
-          : undefined,
+      detail: getFiscalSequenceAlertDetail(alert),
       critical: alert.severity === 'critical',
     })),
-  ];
+  ].filter((item) => item.value !== 0);
 
   return (
-    <div className="absolute right-12 top-12 z-50 w-80 rounded-md border border-zinc-200 bg-white p-3 shadow-xl">
+    <div className="absolute right-2 top-12 z-50 max-h-[min(75vh,38rem)] w-96 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-md border border-zinc-200 bg-white p-3 shadow-xl sm:right-12">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-sm font-semibold">Notificaciones</p>
         <button type="button" className="text-xs text-muted-foreground" onClick={onClose}>
@@ -389,6 +385,36 @@ function NotificationsPanel({
               </span>
             </Link>
           ))}
+          {lowStockProducts > 0 ? inventoryAlerts.map((product) => {
+            const available = Math.max(Number(product.stock) - Number(product.reservedStock), 0);
+            const gap = Math.max(Number(product.minStock) - available, 0);
+            const level = available <= 0 ? 'out' : 'low';
+            const query = product.sku || product.name;
+            return (
+              <Link
+                key={product.id}
+                href={`/products?stock=${level}&q=${encodeURIComponent(query)}`}
+                onClick={onClose}
+                className="block rounded-md border border-amber-200 bg-amber-50/50 px-3 py-2 text-sm hover:bg-amber-50"
+              >
+                <span className="block truncate font-medium">{product.name}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {formatQuantity(available)} disponibles · mínimo {formatQuantity(product.minStock)}
+                  {gap > 0
+                    ? ` · faltan ${formatQuantity(gap)}`
+                    : available <= 0 ? ' · agotado' : ' · en el mínimo'}
+                </span>
+              </Link>
+            );
+          }) : null}
+          {openCashSessions > 0 ? (
+            <Link href="/cash/sessions" onClick={onClose} className="block rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50">
+              {openCashSessions} caja(s) abierta(s)
+            </Link>
+          ) : null}
+          {notifications.length === 0 && discountApprovals.length === 0 && openCashSessions === 0 ? (
+            <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">No hay alertas pendientes.</p>
+          ) : null}
         </div>
       )}
     </div>
@@ -399,7 +425,21 @@ function getFiscalSequenceAlertLabel(alert: FiscalSequenceAlert) {
   if (alert.missing) return `${alert.prefix}: falta bloque autorizado`;
   if (alert.expired) return `${alert.prefix}: vigencia fiscal vencida`;
   if (alert.exhausted) return `${alert.prefix}: bloque agotado`;
+  if (alert.expiringSoon && alert.remaining > alert.threshold) return `${alert.prefix}: próximo a vencer`;
   return `${alert.prefix}: próximo a agotarse`;
+}
+
+function getFiscalSequenceAlertDetail(alert: FiscalSequenceAlert) {
+  if (alert.missing) return 'No hay un bloque configurado para este comprobante.';
+  const validity = alert.validUntil ? ` · vence ${formatDate(alert.validUntil)}` : '';
+  if (alert.expired) return alert.validUntil
+    ? `Venció ${formatDate(alert.validUntil)} · quedan ${alert.remaining} sin usar.`
+    : `${alert.remaining} números sin usar en un bloque vencido.`;
+  if (alert.exhausted) return `No quedan números disponibles${validity}.`;
+  if (alert.remaining <= alert.threshold) {
+    return `Aviso al llegar a ${alert.threshold} restantes${validity}.`;
+  }
+  return `Vence en ${alert.daysUntilExpiry} día(s)${validity}.`;
 }
 
 function DiscountApprovalDialog({

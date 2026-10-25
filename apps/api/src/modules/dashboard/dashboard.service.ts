@@ -495,7 +495,14 @@ export class DashboardService {
       .map(([name, count]) => ({ name, count }))
       .sort((first, second) => second.count - first.count || first.name.localeCompare(second.name))
       .slice(0, 5);
-    const recentInventoryAlerts = lowStockProductsList.slice(0, 5);
+    const recentInventoryAlerts = lowStockProductsList
+      .sort((left, right) => {
+        const leftAvailable = Math.max(left.stock - left.reservedStock, 0);
+        const rightAvailable = Math.max(right.stock - right.reservedStock, 0);
+        return leftAvailable - rightAvailable ||
+          (right.minStock - rightAvailable) - (left.minStock - leftAvailable);
+      })
+      .slice(0, 5);
     const grossSalesMonth = this.decimalToNumber(paymentsForMonth._sum.amount);
     const grossSalesToday = this.decimalToNumber(paymentsForToday._sum.amount);
     const refundsMonth = this.decimalToNumber(returnsMonth._sum.refundAmount);

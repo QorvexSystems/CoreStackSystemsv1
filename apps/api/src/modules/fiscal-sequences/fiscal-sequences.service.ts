@@ -42,6 +42,8 @@ type FiscalSequenceAlert = {
   severity: 'warning' | 'critical';
   expired: boolean;
   exhausted: boolean;
+  expiringSoon: boolean;
+  daysUntilExpiry: number | null;
   missing?: boolean;
 };
 
@@ -114,6 +116,10 @@ export class FiscalSequencesService {
           sequence.status === FiscalSequenceStatus.EXPIRED ||
           (sequence.validUntil !== null && sequence.validUntil < now);
         const exhausted = sequence.status === FiscalSequenceStatus.EXHAUSTED || remaining === 0;
+        const daysUntilExpiry = sequence.validUntil
+          ? Math.ceil((sequence.validUntil.getTime() - now.getTime()) / 86_400_000)
+          : null;
+        const expiringSoon = !expired && daysUntilExpiry !== null && daysUntilExpiry <= 30;
 
         return {
           id: sequence.id,
@@ -126,20 +132,28 @@ export class FiscalSequencesService {
           validUntil: sequence.validUntil,
           status: sequence.status,
           severity:
-            expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
+            expired ||
+            exhausted ||
+            (daysUntilExpiry !== null && daysUntilExpiry <= 7) ||
+            remaining <= Math.max(5, Math.ceil(total * 0.02))
               ? ('critical' as const)
               : ('warning' as const),
           expired,
           exhausted,
+          expiringSoon,
+          daysUntilExpiry,
         };
       })
       .filter(
         (sequence) =>
-          sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold,
+          sequence.expired ||
+          sequence.exhausted ||
+          sequence.expiringSoon ||
+          sequence.remaining <= sequence.threshold,
       );
 
     if (
-      !sequences.some(
+      !alertableSequences.some(
         (sequence) => sequence.documentType === InvoiceDocumentType.CONSUMER_02,
       )
     ) {
@@ -156,6 +170,8 @@ export class FiscalSequencesService {
         severity: 'critical',
         expired: false,
         exhausted: false,
+        expiringSoon: false,
+        daysUntilExpiry: null,
         missing: true,
       });
     }
