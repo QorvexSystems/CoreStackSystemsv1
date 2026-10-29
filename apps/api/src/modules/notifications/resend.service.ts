@@ -11,6 +11,14 @@ type EcfEmailCopy = {
   templateVariables: Record<string, string>;
 };
 
+type OrderReadyEmail = {
+  orderId: string;
+  orderNumber: string;
+  recipient: string;
+  clientName: string;
+  deliveryLabel: string;
+};
+
 @Injectable()
 export class ResendService {
   private readonly logger = new Logger(ResendService.name);
@@ -18,6 +26,13 @@ export class ResendService {
   constructor(private readonly prisma: PrismaService) {}
 
   async sendEcfCopy(input: EcfEmailCopy) {
+    if (process.env.ENABLE_EMAIL_DELIVERY !== 'true') {
+      await this.markFailure(
+        input.electronicDocumentId,
+        'Correo real pendiente de configurar; envío desactivado.',
+      );
+      return;
+    }
     const apiKey = process.env.RESEND_API_KEY;
     const from = process.env.RESEND_FROM;
     const templateId = process.env.RESEND_ECF_TEMPLATE_ID;
@@ -81,6 +96,35 @@ export class ResendService {
     }
   }
 
+  async sendOrderReady(input: OrderReadyEmail) {
+    if (process.env.ENABLE_EMAIL_DELIVERY !== 'true')
+      return {
+        sent: false as const,
+        error: 'Correo real pendiente de configurar; envío desactivado.',
+      };
+    const apiKey = process.env.RESEND_API_KEY;
+    const from = process.env.RESEND_FROM;
+    if (!apiKey || !from) {
+      return { sent: false as const, error: 'Falta configurar RESEND_API_KEY o RESEND_FROM.' };
+    }
+    try {
+      const resend = new Resend(apiKey);
+      const { data, error } = await resend.emails.send({
+        from,
+        to: [input.recipient],
+        subject: `Tu orden ${input.orderNumber} está lista`,
+        html: `<p>Hola ${escapeHtml(input.clientName)},</p><p>Tu orden <strong>${escapeHtml(input.orderNumber)}</strong> está lista.</p><p>${escapeHtml(input.deliveryLabel)}</p><p>Gracias por elegir Unique Personalizado.</p>`,
+        headers: { 'Idempotency-Key': `order-ready-${input.orderId}` },
+      });
+      if (error || !data?.id) throw new Error(error?.message ?? 'Resend no confirmó el envío.');
+      return { sent: true as const, id: data.id };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo enviar el correo.';
+      this.logger.error(`No se pudo notificar la orden ${input.orderNumber}: ${message}`);
+      return { sent: false as const, error: message.slice(0, 1000) };
+    }
+  }
+
   private async markFailure(electronicDocumentId: string, message: string) {
     await this.prisma.electronicDocument.update({
       where: { id: electronicDocumentId },
@@ -95,4 +139,18 @@ export class ResendService {
       },
     });
   }
+}
+
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      })[character]!,
+  );
 }

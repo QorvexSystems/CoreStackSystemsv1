@@ -1,16 +1,28 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
+  DeliveryMethod,
+  DispatchLocation,
+  DocumentType,
   ImportRowStatus,
   ImportStatus,
   ImportType,
+  OrderPriority,
+  OrderSource,
+  ProductionStage,
   Prisma,
+  ProductInventoryDestination,
   ProductStatus,
+  ProductKind,
   ProductUnit,
+  SalesOrderDestination,
   TaxCategory,
 } from '@qorvex/database';
 import { readSheet, type CellValue } from 'read-excel-file/node';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { AuthenticatedUser } from '../../common/types/authenticated-request';
 import { ProductsService } from '../products/products.service';
+import { CustomersService } from '../customers/customers.service';
+import { OrdersService } from '../orders/orders.service';
 
 type UploadedImportFile = {
   originalname: string;
@@ -30,6 +42,9 @@ type PreparedProductImportRow = {
     barcode?: string;
     imageUrl?: string;
     brand?: string;
+    kind?: ProductKind;
+    material?: string;
+    measurement?: string;
     unit?: ProductUnit;
     price: number;
     cost?: number;
@@ -77,6 +92,8 @@ export class ImportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly productsService: ProductsService,
+    private readonly customersService: CustomersService,
+    private readonly ordersService: OrdersService,
   ) {}
 
   async findAll(tenantId: string) {
@@ -225,6 +242,388 @@ export class ImportsService {
     }
   }
 
+  async importCustomers(tenantId: string, userId: string, file?: UploadedImportFile) {
+    if (!file?.buffer?.length) throw new BadRequestException('Import file is required.');
+    const rows = await readWorkbookRows(file);
+    if (rows.length > maxImportRows) {
+      throw new BadRequestException(`El archivo supera el limite de ${maxImportRows} filas.`);
+    }
+    const batch = await this.prisma.importBatch.create({
+      data: {
+        tenantId,
+        type: ImportType.CUSTOMERS,
+        filename: file.originalname || 'clientes.xlsx',
+        status: ImportStatus.VALIDATING,
+        totalRows: rows.length,
+        createdById: userId,
+      },
+      select: { id: true },
+    });
+    const rowErrors: ImportRowErrorInput[] = [];
+    const imported = new Map<number, string>();
+    for (const [index, row] of rows.entries()) {
+      const rowNumber = index + 2;
+      const normalized = normalizeRow(row);
+      const rawData = toJsonObject(row);
+      const name = getText(normalized, ['nombre', 'cliente', 'name', 'customer']);
+      if (!name) {
+        rowErrors.push({
+          rowNumber,
+          field: 'nombre',
+          message: 'El nombre del cliente es requerido.',
+          rawData,
+        });
+        continue;
+      }
+      try {
+        const customer = await this.customersService.create(tenantId, userId, {
+          name,
+          documentType: parseCustomerDocumentType(
+            getText(normalized, ['tipo documento', 'document type', 'tipo']),
+          ),
+          documentNumber: getText(normalized, [
+            'documento',
+            'rnc',
+            'cedula',
+            'cédula',
+            'document number',
+          ]),
+          email: getText(normalized, ['correo', 'email']),
+          phone: getText(normalized, ['telefono', 'teléfono', 'phone']),
+          address: getText(normalized, ['direccion', 'dirección', 'address']),
+        });
+        imported.set(rowNumber, customer.name);
+      } catch (error) {
+        rowErrors.push({ rowNumber, message: getImportErrorMessage(error), rawData });
+      }
+    }
+    const errorsByRow = groupImportErrorsByRow(rowErrors);
+    const importRows: ImportBatchRowInput[] = rows.map((row, index) => {
+      const rowNumber = index + 2;
+      const errors = errorsByRow.get(rowNumber) ?? [];
+      return {
+        rowNumber,
+        status: errors.length ? ImportRowStatus.FAILED : ImportRowStatus.IMPORTED,
+        productLabel: imported.get(rowNumber),
+        rawData: toJsonObject(row),
+        reasons: errors.length ? toImportRowReasons(errors) : undefined,
+      };
+    });
+    const invalidRows = importRows.filter((row) => row.status === ImportRowStatus.FAILED).length;
+    return this.persistImportResults({
+      batchId: batch.id,
+      totalRows: rows.length,
+      validRows: rows.length - invalidRows,
+      invalidRows,
+      importedRows: rows.length - invalidRows,
+      importRows,
+      rowErrors,
+    });
+  }
+
+  private importStage(value?: string) {
+    const stage = (value ?? 'WAITING').trim().toUpperCase();
+    const aliases: Record<string, ProductionStage> = {
+      'EN ESPERA': ProductionStage.WAITING,
+      'EN FABRICA': ProductionStage.FACTORY,
+      'EN FÁBRICA': ProductionStage.FACTORY,
+      LISTA: ProductionStage.READY,
+    };
+    const parsed = aliases[stage] ?? stage;
+    if (
+      !(
+        [
+          ProductionStage.WAITING,
+          ProductionStage.FACTORY,
+          ProductionStage.READY,
+        ] as ProductionStage[]
+      ).includes(parsed as ProductionStage)
+    )
+      throw new BadRequestException('Etapa histórica: WAITING, FACTORY o READY.');
+    return parsed as ProductionStage;
+  }
+
+  async importOpenOrders(tenantId: string, user: AuthenticatedUser, file?: UploadedImportFile) {
+    if (!file?.buffer?.length) throw new BadRequestException('Import file is required.');
+    const rows = await readWorkbookRows(file);
+    if (rows.length > maxImportRows) {
+      throw new BadRequestException(`El archivo supera el limite de ${maxImportRows} filas.`);
+    }
+
+    const batch = await this.prisma.importBatch.create({
+      data: {
+        tenantId,
+        type: ImportType.OPEN_ORDERS,
+        filename: file.originalname || 'ordenes-abiertas.xlsx',
+        status: ImportStatus.VALIDATING,
+        totalRows: rows.length,
+        createdById: user.id,
+      },
+      select: { id: true },
+    });
+    const rowErrors: ImportRowErrorInput[] = [];
+    const invalidOrderReferences = new Set<string>();
+    const groups = new Map<
+      string,
+      Array<{
+        rowNumber: number;
+        rawData: Prisma.InputJsonObject;
+        normalized: Map<string, unknown>;
+        productId: string;
+        quantity: number;
+      }>
+    >();
+
+    for (const [index, row] of rows.entries()) {
+      const rowNumber = index + 2;
+      const normalized = normalizeRow(row);
+      const rawData = toJsonObject(row);
+      const orderReference = getText(normalized, [
+        'numero orden',
+        'número orden',
+        'orden',
+        'order number',
+      ]);
+      const sku = getText(normalized, ['sku', 'codigo producto', 'código producto']);
+      const quantity = getQuantity(normalized, ['cantidad', 'quantity', 'unidades']);
+      const promisedDate = getBusinessDate(normalized, [
+        'fecha prometida',
+        'fecha entrega',
+        'promised date',
+      ]);
+
+      if (!orderReference) {
+        rowErrors.push({
+          rowNumber,
+          field: 'numero orden',
+          message: 'El número de orden original es requerido.',
+          rawData,
+        });
+      }
+      if (!sku) {
+        rowErrors.push({ rowNumber, field: 'sku', message: 'El SKU es requerido.', rawData });
+      }
+      if (quantity === null || quantity <= 0) {
+        rowErrors.push({
+          rowNumber,
+          field: 'cantidad',
+          message: 'La cantidad debe ser mayor que cero.',
+          rawData,
+        });
+      }
+      if (!promisedDate) {
+        rowErrors.push({
+          rowNumber,
+          field: 'fecha prometida',
+          message: 'Usa una fecha prometida válida en formato AAAA-MM-DD.',
+          rawData,
+        });
+      }
+      if (!orderReference || !sku || quantity === null || quantity <= 0 || !promisedDate) {
+        if (orderReference) invalidOrderReferences.add(orderReference);
+        continue;
+      }
+
+      const product = await this.prisma.product.findFirst({
+        where: { tenantId, sku, status: ProductStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (!product) {
+        invalidOrderReferences.add(orderReference);
+        rowErrors.push({
+          rowNumber,
+          field: 'sku',
+          message: `No existe un producto activo con el SKU ${sku}.`,
+          rawData,
+        });
+        continue;
+      }
+
+      const group = groups.get(orderReference) ?? [];
+      group.push({ rowNumber, rawData, normalized, productId: product.id, quantity });
+      groups.set(orderReference, group);
+    }
+
+    const importedLabels = new Map<number, string>();
+    for (const [orderReference, group] of groups) {
+      if (invalidOrderReferences.has(orderReference)) {
+        for (const item of group) {
+          rowErrors.push({
+            rowNumber: item.rowNumber,
+            message: `La orden ${orderReference} contiene otra línea inválida y no fue importada parcialmente.`,
+            rawData: item.rawData,
+          });
+        }
+        continue;
+      }
+      const first = group[0];
+      const customerDocument = getText(first.normalized, [
+        'documento cliente',
+        'rnc',
+        'cedula',
+        'cédula',
+      ]);
+      const customerName = getText(first.normalized, ['cliente', 'nombre cliente', 'customer']);
+      const customer = customerDocument
+        ? await this.prisma.customer.findFirst({
+            where: { tenantId, documentNumber: customerDocument },
+          })
+        : customerName
+          ? await this.prisma.customer.findFirst({
+              where: { tenantId, name: { equals: customerName, mode: 'insensitive' } },
+            })
+          : null;
+
+      try {
+        const headers = [
+          ['cliente', 'nombre cliente', 'customer'],
+          ['pagado', 'anticipo', 'paid amount'],
+          ['inventario', 'origen inventario'],
+          ['etapa', 'stage'],
+          ['canal', 'origen'],
+          ['fecha prometida', 'fecha entrega', 'promised date'],
+        ];
+        for (const fields of headers) {
+          const values = new Set(
+            group.map((item) => getText(item.normalized, fields)?.trim()).filter(Boolean),
+          );
+          if (values.size > 1)
+            throw new BadRequestException('La orden tiene cabeceras inconsistentes: ' + fields[0]);
+        }
+        if (
+          group.some((item) => {
+            const price = getMoney(item.normalized, ['precio unitario', 'precio', 'unit price']);
+            return price === null || price <= 0;
+          })
+        )
+          throw new BadRequestException('Indica el precio unitario histórico de cada línea.');
+        if (
+          ['fabrica', 'fábrica', 'factory', 'warehouse'].includes(
+            getText(first.normalized, ['inventario', 'origen inventario'])?.toLowerCase() ?? '',
+          )
+        ) {
+          throw new BadRequestException(
+            'El stock físico de Fábrica fue retirado. Usa Tienda como origen de existencias.',
+          );
+        }
+        const created = await this.ordersService.create(
+          tenantId,
+          user,
+          {
+            destination: SalesOrderDestination.CASH_SALE,
+            inventorySource: ProductInventoryDestination.SALES_INVENTORY,
+            clientName: customerName,
+            customerId: customer?.id,
+            promisedDate: getBusinessDate(first.normalized, [
+              'fecha prometida',
+              'fecha entrega',
+              'promised date',
+            ]),
+            priority: isTruthyImportValue(getText(first.normalized, ['urgente', 'urgent']))
+              ? OrderPriority.URGENT
+              : OrderPriority.NORMAL,
+            isCorporate: isTruthyImportValue(
+              getText(first.normalized, ['empresarial', 'corporativa', 'corporate']),
+            ),
+            deliveryMethod: parseDeliveryMethod(
+              getText(first.normalized, ['entrega', 'metodo entrega', 'método entrega']),
+            ),
+            dispatchLocation: parseDispatchLocation(
+              getText(first.normalized, ['despacho', 'lugar despacho']),
+            ),
+            deliveryAddress: getText(first.normalized, ['direccion', 'dirección']),
+            deliveryPhone: getText(first.normalized, ['telefono', 'teléfono']),
+            notificationEmail: getText(first.normalized, ['correo', 'email']),
+            notes: [
+              `Orden histórica importada: ${orderReference}.`,
+              getText(first.normalized, ['notas', 'nota', 'notes']),
+            ]
+              .filter(Boolean)
+              .join(' '),
+            items: group.map((item) => {
+              const personalization = {
+                charms: getOptionalWholeNumber(item.normalized, ['dijes', 'charms']),
+                children: getOptionalWholeNumber(item.normalized, ['ninos', 'niños', 'children']),
+                material: getText(item.normalized, ['material']),
+                instructions: getText(item.normalized, [
+                  'personalizacion',
+                  'personalización',
+                  'instrucciones',
+                ]),
+              };
+              return {
+                productId: item.productId,
+                quantity: item.quantity,
+                unitPrice:
+                  getMoney(item.normalized, ['precio unitario', 'precio', 'unit price']) ??
+                  undefined,
+                personalization: Object.values(personalization).some((value) => value !== undefined)
+                  ? personalization
+                  : undefined,
+              };
+            }),
+          },
+          {
+            reference: orderReference,
+            paidAmount: getMoney(first.normalized, ['pagado', 'anticipo', 'paid amount']) ?? 0,
+            inventoryAlreadyDeducted: isTruthyImportValue(
+              getText(first.normalized, ['inventario descontado', 'stock deducted']),
+            ),
+            stage: this.importStage(getText(first.normalized, ['etapa', 'stage'])),
+            source:
+              getText(first.normalized, ['canal', 'origen'])?.toLowerCase() === 'shopify'
+                ? OrderSource.SHOPIFY
+                : OrderSource.STORE,
+            issuedAt: getBusinessDate(first.normalized, ['fecha factura', 'fecha original'])
+              ? new Date(
+                  getBusinessDate(first.normalized, ['fecha factura', 'fecha original'])! +
+                    'T12:00:00-04:00',
+                )
+              : undefined,
+            invoiceNumber: getText(first.normalized, ['factura original', 'numero factura']),
+            designApproved: isTruthyImportValue(
+              getText(first.normalized, ['diseno aprobado', 'diseño aprobado']),
+            ),
+            qualityApproved: isTruthyImportValue(getText(first.normalized, ['calidad aprobada'])),
+          },
+        );
+        for (const item of group) importedLabels.set(item.rowNumber, created.orderNumber);
+      } catch (error) {
+        for (const item of group) {
+          rowErrors.push({
+            rowNumber: item.rowNumber,
+            message: `Orden ${orderReference}: ${getImportErrorMessage(error)}`,
+            rawData: item.rawData,
+          });
+        }
+      }
+    }
+
+    const errorsByRow = groupImportErrorsByRow(rowErrors);
+    const importRows: ImportBatchRowInput[] = rows.map((row, index) => {
+      const rowNumber = index + 2;
+      const errors = errorsByRow.get(rowNumber) ?? [];
+      return {
+        rowNumber,
+        status: errors.length ? ImportRowStatus.FAILED : ImportRowStatus.IMPORTED,
+        productLabel: importedLabels.get(rowNumber),
+        rawData: toJsonObject(row),
+        reasons: errors.length ? toImportRowReasons(errors) : undefined,
+      };
+    });
+    const invalidRows = importRows.filter((row) => row.status === ImportRowStatus.FAILED).length;
+    const importedRows = importRows.length - invalidRows;
+    return this.persistImportResults({
+      batchId: batch.id,
+      totalRows: rows.length,
+      validRows: importedRows,
+      invalidRows,
+      importedRows,
+      importRows,
+      rowErrors,
+    });
+  }
+
   private async processProductRows(
     batchId: string,
     tenantId: string,
@@ -287,6 +686,13 @@ export class ImportsService {
           barcode: getText(normalized, ['codigo barras', 'codigo de barras', 'barcode']),
           imageUrl: getText(normalized, ['imagen', 'image', 'image url', 'imageurl']),
           brand: getText(normalized, ['marca', 'proveedor', 'brand', 'supplier']),
+          kind: ['personalizado', 'personalized'].includes(
+            getText(normalized, ['tipo producto', 'product kind'])?.toLowerCase() ?? '',
+          )
+            ? ProductKind.PERSONALIZED
+            : ProductKind.STANDARD,
+          material: getText(normalized, ['material']),
+          measurement: getText(normalized, ['medida', 'measurement']),
           unit: getProductUnit(getText(normalized, ['unidad', 'unit'])),
           price: price!,
           cost: cost ?? undefined,
@@ -846,6 +1252,42 @@ function getOptionalBoolean(row: Map<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+function getBusinessDate(row: Map<string, unknown>, keys: string[]) {
+  const value = getRawValue(row, keys);
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00Z`))) {
+    return text;
+  }
+  return undefined;
+}
+
+function getOptionalWholeNumber(row: Map<string, unknown>, keys: string[]) {
+  const value = getQuantity(row, keys);
+  return value !== null && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function isTruthyImportValue(value?: string) {
+  return ['si', 'sí', 'yes', 'true', '1', 'urgente'].includes(value?.trim().toLowerCase() ?? '');
+}
+
+function parseDeliveryMethod(value?: string) {
+  const normalized = normalizeImportAlias(value);
+  if (normalized === 'delivery' || normalized === 'domicilio') return DeliveryMethod.DELIVERY;
+  if (normalized === 'provincia' || normalized === 'envio provincia') {
+    return DeliveryMethod.PROVINCE_SHIPPING;
+  }
+  return DeliveryMethod.PICKUP;
+}
+
+function parseDispatchLocation(value?: string) {
+  return normalizeImportAlias(value) === 'fabrica'
+    ? DispatchLocation.FACTORY
+    : DispatchLocation.STORE;
+}
+
 function getRawValue(row: Map<string, unknown>, keys: string[]) {
   for (const key of keys.map(normalizeHeader)) {
     if (row.has(key)) {
@@ -1007,6 +1449,18 @@ function getProductStatus(value?: string) {
   };
 
   return statuses[key] ?? ProductStatus.ACTIVE;
+}
+
+function parseCustomerDocumentType(value?: string) {
+  const normalized = (value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (normalized === 'rnc') return DocumentType.RNC;
+  if (normalized === 'cedula') return DocumentType.CEDULA;
+  if (normalized === 'pasaporte' || normalized === 'passport') return DocumentType.PASSPORT;
+  return DocumentType.OTHER;
 }
 
 function toJsonObject(row: RawImportRow) {

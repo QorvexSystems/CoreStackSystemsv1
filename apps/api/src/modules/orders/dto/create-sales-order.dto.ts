@@ -5,6 +5,8 @@ import {
   IsEmail,
   IsEnum,
   IsNumber,
+  IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -14,15 +16,48 @@ import {
 } from 'class-validator';
 import {
   CreditTermOption,
+  DeliveryMethod,
   DocumentType,
+  DispatchLocation,
   InitialPaymentOption,
+  OrderPriority,
   ProductInventoryDestination,
   SalePaymentMode,
   SalesOrderDestination,
   SalesOrderPriceLevel,
 } from '@qorvex/database';
 
+export class SalesOrderItemPersonalizationDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  charms?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  children?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  material?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  instructions?: string;
+}
+
 export class SalesOrderItemDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  unitPrice?: number;
+
   @IsString()
   productId: string;
 
@@ -30,11 +65,25 @@ export class SalesOrderItemDto {
   @IsNumber()
   @Min(0.01)
   quantity: number;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => SalesOrderItemPersonalizationDto)
+  personalization?: SalesOrderItemPersonalizationDto;
 }
 
 export class CreateSalesOrderDto {
   @IsEnum(SalesOrderDestination)
   destination: SalesOrderDestination;
+
+  @IsOptional()
+  @IsBoolean()
+  isExpress?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresProduction?: boolean;
 
   @IsOptional()
   @IsEnum(ProductInventoryDestination)
@@ -98,6 +147,42 @@ export class CreateSalesOrderDto {
   @MaxLength(500)
   notes?: string;
 
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  promisedDate?: string;
+
+  @IsOptional()
+  @IsEnum(OrderPriority)
+  priority?: OrderPriority;
+
+  @IsOptional()
+  @IsBoolean()
+  isCorporate?: boolean;
+
+  @IsOptional()
+  @IsEnum(DeliveryMethod)
+  deliveryMethod?: DeliveryMethod;
+
+  @IsOptional()
+  @IsEnum(DispatchLocation)
+  dispatchLocation?: DispatchLocation;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  deliveryAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  deliveryPhone?: string;
+
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(320)
+  notificationEmail?: string;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => SalesOrderItemDto)
@@ -115,4 +200,10 @@ export class CancelSalesOrderDto {
   @IsString()
   @MaxLength(300)
   reason?: string;
+}
+
+export class AcceptSalesOrderDto {
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  promisedDate: string;
 }

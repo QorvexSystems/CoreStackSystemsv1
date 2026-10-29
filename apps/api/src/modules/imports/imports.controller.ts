@@ -86,6 +86,56 @@ export class ImportsController {
     return this.importsService.importProducts(tenantId, user.id, file);
   }
 
+  @Post('customers')
+  @Roles(Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: maxImportFileSizeBytes, files: 1 },
+      fileFilter: (_request, file, callback) => {
+        const filename = file.originalname.toLowerCase();
+        const valid =
+          allowedImportFileExtensions.some((extension) => filename.endsWith(extension)) &&
+          allowedImportMimeTypes.includes(file.mimetype);
+        callback(
+          valid ? null : new BadRequestException('Solo se permiten archivos Excel .xlsx.'),
+          valid,
+        );
+      },
+    }),
+  )
+  importCustomers(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: { originalname: string; buffer: Buffer; size: number },
+  ) {
+    return this.importsService.importCustomers(tenantId, user.id, file);
+  }
+
+  @Post('open-orders')
+  @Roles(Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: maxImportFileSizeBytes, files: 1 },
+      fileFilter: (_request, file, callback) => {
+        const filename = file.originalname.toLowerCase();
+        const valid =
+          allowedImportFileExtensions.some((extension) => filename.endsWith(extension)) &&
+          allowedImportMimeTypes.includes(file.mimetype);
+        callback(
+          valid ? null : new BadRequestException('Solo se permiten archivos Excel .xlsx.'),
+          valid,
+        );
+      },
+    }),
+  )
+  importOpenOrders(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: { originalname: string; buffer: Buffer; size: number },
+  ) {
+    return this.importsService.importOpenOrders(tenantId, user, file);
+  }
+
   @Delete(':id')
   @Roles(Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
   remove(

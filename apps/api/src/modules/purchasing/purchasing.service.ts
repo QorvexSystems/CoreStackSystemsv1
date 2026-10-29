@@ -468,10 +468,7 @@ export class PurchasingService {
           tenantId,
           id: { in: productIds },
           status: ProductStatus.ACTIVE,
-          inventoryDestination:
-            destination === PurchaseOrderDestination.WAREHOUSE
-              ? ProductInventoryDestination.WAREHOUSE
-              : ProductInventoryDestination.SALES_INVENTORY,
+          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         },
       }),
       this.prisma.supplierProduct.findMany({

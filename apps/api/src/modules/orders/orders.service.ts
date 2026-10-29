@@ -1,3 +1,5 @@
+import { markInventoryChanged, changeReservation } from '../../common/utils/stock-reservations';
+import { factoryOrder } from '../../common/utils/factory-view';
 import {
   BadRequestException,
   ForbiddenException,
@@ -10,15 +12,25 @@ import {
   CreditTermOption,
   CustomerCreditStatus,
   CustomerStatus,
+  DeliveryMethod,
   DocumentType,
   EmployeeLogAction,
   EmployeeStatus,
   InitialPaymentOption,
+  InventoryMovementType,
+  PaymentMethod,
+  PaymentStatus,
+  InvoiceDocumentType,
   InvoiceStatus,
+  OrderSource,
+  OrderExceptionStatus,
+  OrderPriority,
   Prisma,
+  ProductKind,
   ProductInventoryDestination,
   ProductStatus,
   ProductUnit,
+  ProductionStage,
   Role,
   SalePaymentMode,
   SalesOrderDestination,
@@ -39,11 +51,20 @@ import {
 } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
+  AcceptSalesOrderDto,
   CancelSalesOrderDto,
   ClaimSalesOrderDto,
   CreateSalesOrderDto,
   SalesOrderItemDto,
 } from './dto/create-sales-order.dto';
+import { UpdateOrderWorkflowDto } from './dto/update-order-workflow.dto';
+import {
+  AddCorporateOrderUnitsDto,
+  UpdateCorporateOrderUnitDto,
+} from './dto/corporate-order-unit.dto';
+import { ResendService } from '../notifications/resend.service';
+import { loadProductionBoard } from './production-board.query';
+import { readSheet } from 'read-excel-file/node';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 const openOrderStatuses: SalesOrderStatus[] = [
@@ -62,13 +83,17 @@ type ComputedOrderItem = {
   subtotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
   total: Prisma.Decimal;
+  personalization: Prisma.InputJsonValue | undefined;
 };
 
 @Injectable()
 export class OrdersService {
   private readonly expiredClaimSweepAt = new Map<string, number>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly resend: ResendService,
+  ) {}
 
   async findAll(tenantId: string, user: AuthenticatedUser, status?: string) {
     const membership = this.getMembership(tenantId, user);
@@ -76,8 +101,6 @@ export class OrdersService {
     await this.releaseExpiredClaims(tenantId);
 
     const parsedStatuses = this.parseStatuses(status);
-    const ownOrdersOnly =
-      !adminRoles.includes(membership.role) && membership.role === Role.ORDER_TAKER;
     const destinationFilter =
       status === 'OPEN'
         ? SalesOrderDestination.CASH_SALE
@@ -85,17 +108,24 @@ export class OrdersService {
           ? SalesOrderDestination.QUOTATION
           : undefined;
 
-    return this.prisma.salesOrder.findMany({
+    const rows = await this.prisma.salesOrder.findMany({
       where: {
         tenantId,
+        ...(membership.role === Role.WAREHOUSE_KEEPER
+          ? {
+              requiresProduction: true,
+              destination: SalesOrderDestination.CASH_SALE,
+              productionStage: { in: [ProductionStage.WAITING, ProductionStage.FACTORY] },
+            }
+          : {}),
         ...(destinationFilter ? { destination: destinationFilter } : {}),
         ...(parsedStatuses ? { status: { in: parsedStatuses } } : {}),
-        ...(ownOrdersOnly ? { createdById: user.id } : {}),
       },
       include: this.orderInclude(),
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: 150,
     });
+    return membership.role === Role.WAREHOUSE_KEEPER ? rows.map(factoryOrder) : rows;
   }
 
   async findOne(tenantId: string, user: AuthenticatedUser, id: string) {
@@ -107,20 +137,523 @@ export class OrdersService {
       include: this.orderInclude(),
     });
 
-    if (!order) {
+    if (
+      !order ||
+      (membership.role === Role.WAREHOUSE_KEEPER &&
+        (!order.requiresProduction ||
+          order.destination !== SalesOrderDestination.CASH_SALE ||
+          (order.productionStage !== ProductionStage.WAITING &&
+            order.productionStage !== ProductionStage.FACTORY)))
+    ) {
       throw new NotFoundException('Sales order not found for tenant.');
     }
 
     if (
       !adminRoles.includes(membership.role) &&
       membership.role !== Role.CASHIER &&
+      membership.role !== Role.WAREHOUSE_KEEPER &&
       !membership.canUsePos &&
       order.createdById !== user.id
     ) {
       throw new ForbiddenException('Employee does not have permission to view this sales order.');
     }
 
-    return order;
+    return membership.role === Role.WAREHOUSE_KEEPER ? factoryOrder(order) : order;
+  }
+
+  async getKanban(tenantId: string, user: AuthenticatedUser) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanViewProduction(membership);
+
+    const orders = await loadProductionBoard(
+      this.prisma,
+      tenantId,
+      membership.role === Role.WAREHOUSE_KEEPER,
+    );
+
+    return membership.role === Role.WAREHOUSE_KEEPER
+      ? orders
+          .filter(
+            (order) =>
+              order.requiresProduction &&
+              (order.productionStage === ProductionStage.WAITING ||
+                order.productionStage === ProductionStage.FACTORY),
+          )
+          .map(factoryOrder)
+      : orders;
+  }
+
+  async updateWorkflow(
+    tenantId: string,
+    user: AuthenticatedUser,
+    id: string,
+    dto: UpdateOrderWorkflowDto,
+  ) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanManageProduction(membership);
+
+    if (
+      membership.role === Role.WAREHOUSE_KEEPER &&
+      (dto.requiresProduction !== undefined ||
+        dto.priority !== undefined ||
+        (dto.stage !== undefined &&
+          dto.stage !== ProductionStage.FACTORY &&
+          dto.stage !== ProductionStage.READY))
+    ) {
+      throw new ForbiddenException('Fábrica solo puede iniciar o terminar sus trabajos.');
+    }
+
+    if (dto.exceptionStatus === OrderExceptionStatus.CANCELLED) {
+      return this.cancel(tenantId, user, id, {
+        reason: dto.note?.trim() || 'Cancelación desde producción',
+      });
+    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, id);
+      const current = await tx.salesOrder.findFirst({
+        where: { id, tenantId },
+        include: {
+          invoice: true,
+          items: { include: { product: { select: { kind: true } } } },
+          corporateUnits: { select: { status: true, deliveredAt: true, salesOrderItemId: true } },
+        },
+      });
+      if (!current) throw new NotFoundException('La orden no existe.');
+
+      if (membership.role === Role.WAREHOUSE_KEEPER) {
+        if (
+          !current.requiresProduction ||
+          (current.productionStage !== ProductionStage.WAITING &&
+            current.productionStage !== ProductionStage.FACTORY)
+        ) {
+          throw new ForbiddenException('Este trabajo no está asignado a Fábrica.');
+        }
+        if (
+          (dto.stage === ProductionStage.FACTORY &&
+            (current.productionStage !== ProductionStage.WAITING ||
+              (current.items.some((item) => item.product?.kind === ProductKind.PERSONALIZED) &&
+                !current.designApprovedAt))) ||
+          (dto.stage === ProductionStage.READY &&
+            (current.productionStage !== ProductionStage.FACTORY ||
+              !current.qualityApprovedAt ||
+              (current.isCorporate &&
+                (!current.corporateUnits.length ||
+                  current.corporateUnits.some((unit) => unit.status !== 'COMPLETED')))))
+        ) {
+          throw new BadRequestException('El trabajo aún no cumple los pasos para avanzar.');
+        }
+      }
+
+      if (dto.requiresProduction !== undefined) {
+        if (!adminRoles.includes(membership.role)) {
+          throw new ForbiddenException('Solo administración puede asignar trabajos a Fábrica.');
+        }
+        if (
+          current.isExpress ||
+          current.productionStage !== ProductionStage.WAITING ||
+          current.status === SalesOrderStatus.CANCELLED ||
+          dto.stage !== undefined
+        ) {
+          throw new BadRequestException(
+            'La asignación a Fábrica solo puede cambiarse mientras la orden está en espera.',
+          );
+        }
+        if (
+          dto.requiresProduction === false &&
+          current.items.some((item) => item.product?.kind === ProductKind.PERSONALIZED)
+        ) {
+          throw new BadRequestException(
+            'Los productos personalizados siempre requieren trabajo de Fábrica.',
+          );
+        }
+      }
+
+      const nextStage = dto.stage ?? current.productionStage;
+      if (
+        dto.stage === ProductionStage.DELIVERED &&
+        current.paymentMode !== SalePaymentMode.CREDIT &&
+        current.invoice?.balance.gt(0)
+      ) {
+        throw new BadRequestException('Completa el balance de la orden antes de entregarla.');
+      }
+      if (
+        dto.stage &&
+        (current.status === SalesOrderStatus.CANCELLED ||
+          current.exceptionStatus === OrderExceptionStatus.CANCELLED)
+      ) {
+        throw new BadRequestException('Una orden cancelada no puede avanzar en producción.');
+      }
+      if (dto.stage && current.status !== SalesOrderStatus.COMPLETED) {
+        throw new BadRequestException('La orden debe estar facturada y cobrada antes de avanzar.');
+      }
+      if (
+        dto.stage === ProductionStage.DELIVERED &&
+        (!current.invoice ||
+          ['DRAFT', 'CANCELLED', 'VOID', 'VOIDED', 'CREDITED'].includes(current.invoice.status))
+      ) {
+        throw new BadRequestException('La orden necesita una factura vigente antes de entregarse.');
+      }
+      const now = new Date();
+      const updated = await tx.salesOrder.update({
+        where: { id },
+        data: {
+          productionStage: dto.stage,
+          requiresProduction:
+            dto.requiresProduction ?? (dto.stage === ProductionStage.FACTORY ? true : undefined),
+          deliveredAt: dto.stage === ProductionStage.DELIVERED ? now : dto.stage ? null : undefined,
+          deliveredById:
+            dto.stage === ProductionStage.DELIVERED ? user.id : dto.stage ? null : undefined,
+          exceptionStatus: dto.exceptionStatus,
+          priority: dto.priority,
+          productionNotes: dto.note === undefined ? undefined : dto.note.trim() || null,
+        },
+        include: this.orderInclude(),
+      });
+
+      await tx.orderWorkflowEvent.create({
+        data: {
+          tenantId,
+          salesOrderId: id,
+          fromStage: current.productionStage,
+          toStage: nextStage,
+          exceptionStatus: dto.exceptionStatus ?? current.exceptionStatus,
+          note:
+            dto.requiresProduction === undefined
+              ? dto.note?.trim() || null
+              : dto.requiresProduction
+                ? 'Orden asignada a Fábrica por administración'
+                : 'Asignación a Fábrica retirada por administración',
+          changedById: user.id,
+        },
+      });
+      return updated;
+    });
+
+    if (
+      dto.stage === ProductionStage.READY &&
+      updated.notificationEmail &&
+      !updated.readyNotifiedAt
+    ) {
+      const deliveryLabel =
+        updated.deliveryMethod === DeliveryMethod.PICKUP
+          ? `Puedes recogerla en ${updated.dispatchLocation === 'FACTORY' ? 'la fábrica' : 'la tienda'}.`
+          : `La orden será despachada a: ${updated.deliveryAddress ?? 'la dirección registrada'}.`;
+      const notification = await this.resend.sendOrderReady({
+        orderId: updated.id,
+        orderNumber: updated.orderNumber,
+        recipient: updated.notificationEmail,
+        clientName: updated.clientName || updated.customer?.name || 'cliente',
+        deliveryLabel,
+      });
+      await this.prisma.salesOrder.update({
+        where: { id: updated.id },
+        data: notification.sent
+          ? {
+              readyNotifiedAt: new Date(),
+              readyNotificationId: notification.id,
+              readyNotificationError: null,
+            }
+          : { readyNotificationError: notification.error },
+      });
+    }
+
+    return this.findOne(tenantId, user, id);
+  }
+
+  async approveDesign(tenantId: string, user: AuthenticatedUser, id: string) {
+    return this.recordApproval(tenantId, user, id, 'design');
+  }
+
+  async approveQuality(tenantId: string, user: AuthenticatedUser, id: string) {
+    return this.recordApproval(tenantId, user, id, 'quality');
+  }
+
+  private async recordApproval(
+    tenantId: string,
+    user: AuthenticatedUser,
+    id: string,
+    type: 'design' | 'quality',
+  ) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanManageProduction(membership);
+    if (type === 'design' && membership.role === Role.WAREHOUSE_KEEPER) {
+      throw new ForbiddenException('La aprobación del diseño corresponde a administración.');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, id);
+      const order = await tx.salesOrder.findFirstOrThrow({
+        where: { id, tenantId },
+        include: { items: { include: { product: { select: { kind: true } } } } },
+      });
+      // Moving a paid order on the board does not imply design approval.
+      // Administration must still be able to record it after work has started.
+      const allowedStages: ProductionStage[] =
+        type === 'design'
+          ? [ProductionStage.WAITING, ProductionStage.FACTORY]
+          : [ProductionStage.FACTORY];
+      if (
+        !order.requiresProduction ||
+        !allowedStages.includes(order.productionStage) ||
+        order.exceptionStatus !== OrderExceptionStatus.NONE ||
+        order.status === SalesOrderStatus.CANCELLED
+      ) {
+        throw new BadRequestException('La orden no está disponible para esta aprobación.');
+      }
+      if (
+        type === 'quality' &&
+        !order.designApprovedAt &&
+        order.items.some((item) => item.product?.kind === ProductKind.PERSONALIZED)
+      )
+        throw new BadRequestException('Aprueba el diseño primero.');
+      await tx.salesOrder.update({
+        where: { id },
+        data:
+          type === 'design'
+            ? { designApprovedAt: new Date(), designApprovedById: user.id }
+            : { qualityApprovedAt: new Date(), qualityApprovedById: user.id },
+      });
+      await tx.orderWorkflowEvent.create({
+        data: {
+          tenantId,
+          salesOrderId: id,
+          fromStage: order.productionStage,
+          toStage: order.productionStage,
+          changedById: user.id,
+          note: type === 'design' ? 'Diseño aprobado' : 'Control de calidad aprobado',
+        },
+      });
+    });
+    return this.findOne(tenantId, user, id);
+  }
+
+  async addCorporateUnits(
+    tenantId: string,
+    user: AuthenticatedUser,
+    id: string,
+    dto: AddCorporateOrderUnitsDto,
+  ) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanManageProduction(membership);
+    if (membership.role === Role.WAREHOUSE_KEEPER) {
+      throw new ForbiddenException('Solo administración puede agregar destinatarios.');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, id);
+      const order = await tx.salesOrder.findFirst({
+        where: { id, tenantId, isCorporate: true },
+        include: { items: true, corporateUnits: true },
+      });
+      if (!order) throw new NotFoundException('La orden empresarial no existe.');
+      if (
+        order.status === SalesOrderStatus.CANCELLED ||
+        order.productionStage === ProductionStage.DELIVERED
+      )
+        throw new BadRequestException('La orden está cerrada.');
+      if (!dto.units.length) throw new BadRequestException('Agrega destinatarios.');
+      const counts = new Map<string, number>();
+      for (const unit of order.corporateUnits)
+        if (unit.salesOrderItemId)
+          counts.set(unit.salesOrderItemId, (counts.get(unit.salesOrderItemId) ?? 0) + 1);
+      const data = dto.units.map((unit) => {
+        const item =
+          order.items.find((item) => item.id === unit.salesOrderItemId) ??
+          (order.items.length === 1 ? order.items[0] : undefined);
+        if (!item) throw new BadRequestException('Selecciona el producto de los destinatarios.');
+        const count = (counts.get(item.id) ?? 0) + 1;
+        if (count > Number(item.quantity))
+          throw new BadRequestException(
+            'Los destinatarios exceden las unidades vendidas del producto.',
+          );
+        if (!unit.recipientName.trim()) throw new BadRequestException('Indica el destinatario.');
+        counts.set(item.id, count);
+        return {
+          tenantId,
+          salesOrderId: id,
+          salesOrderItemId: item.id,
+          recipientName: unit.recipientName.trim(),
+          message: unit.message?.trim() || null,
+          personalization: unit.personalization ?? undefined,
+          updatedById: user.id,
+        };
+      });
+      await tx.corporateOrderUnit.createMany({ data });
+    });
+    return this.findOne(tenantId, user, id);
+  }
+
+  async importCorporateUnits(
+    tenantId: string,
+    user: AuthenticatedUser,
+    id: string,
+    file?: { originalname: string; buffer: Buffer; size: number },
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException('Selecciona un archivo Excel .xlsx.');
+    const rows = await readSheet(file.buffer);
+    if (rows.length < 2)
+      throw new BadRequestException('El archivo debe incluir encabezados y destinatarios.');
+    if (rows.length > 1001)
+      throw new BadRequestException('El archivo admite hasta 1,000 destinatarios.');
+    const normalize = (value: unknown) =>
+      String(value ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+    const headers = rows[0].map(normalize);
+    const recipientIndex = headers.findIndex((header) =>
+      ['nombre', 'destinatario', 'recipient', 'recipient name'].includes(header),
+    );
+    const messageIndex = headers.findIndex((header) =>
+      ['mensaje', 'message', 'dedicatoria'].includes(header),
+    );
+    if (recipientIndex < 0) {
+      throw new BadRequestException('El Excel necesita una columna Nombre o Destinatario.');
+    }
+    const skuIndex = headers.findIndex((header) => ['sku', 'codigo', 'producto'].includes(header));
+    const corporateOrder = await this.prisma.salesOrder.findFirstOrThrow({
+      where: { id, tenantId, isCorporate: true },
+      include: { items: true },
+    });
+    const units = rows.slice(1).flatMap((row) => {
+      const recipientName = String(row[recipientIndex] ?? '').trim();
+      if (!recipientName) return [];
+      const message = messageIndex >= 0 ? String(row[messageIndex] ?? '').trim() : '';
+      const sku = skuIndex >= 0 ? String(row[skuIndex] ?? '').trim() : '';
+      const item = sku
+        ? corporateOrder.items.find((item) => item.sku === sku)
+        : corporateOrder.items.length === 1
+          ? corporateOrder.items[0]
+          : null;
+      if (!item)
+        throw new BadRequestException(
+          'Incluye el SKU para cada destinatario cuando la orden tiene varios productos.',
+        );
+      return [{ recipientName, salesOrderItemId: item.id, ...(message ? { message } : {}) }];
+    });
+    if (!units.length) throw new BadRequestException('El Excel no contiene destinatarios válidos.');
+    return this.addCorporateUnits(tenantId, user, id, { units });
+  }
+
+  async updateCorporateUnit(
+    tenantId: string,
+    user: AuthenticatedUser,
+    orderId: string,
+    unitId: string,
+    dto: UpdateCorporateOrderUnitDto,
+  ) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanManageProduction(membership);
+    if (
+      membership.role === Role.WAREHOUSE_KEEPER &&
+      (dto.delivered !== undefined ||
+        dto.recipientName !== undefined ||
+        dto.message !== undefined ||
+        dto.personalization !== undefined)
+    ) {
+      throw new ForbiddenException('Fábrica solo puede actualizar el avance de las unidades.');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, orderId);
+      const order = await tx.salesOrder.findFirstOrThrow({
+        where: { id: orderId, tenantId, isCorporate: true },
+        include: { invoice: true },
+      });
+      if (
+        membership.role === Role.WAREHOUSE_KEEPER &&
+        (!order.requiresProduction ||
+          (order.productionStage !== ProductionStage.WAITING &&
+            order.productionStage !== ProductionStage.FACTORY))
+      ) {
+        throw new ForbiddenException('Esta orden no está asignada a Fábrica.');
+      }
+      const unit = await tx.corporateOrderUnit.findFirst({
+        where: { id: unitId, tenantId, salesOrderId: orderId },
+      });
+      if (!unit) throw new NotFoundException('La unidad empresarial no existe.');
+      if (
+        order.status === SalesOrderStatus.CANCELLED ||
+        order.productionStage === ProductionStage.DELIVERED ||
+        order.exceptionStatus !== OrderExceptionStatus.NONE
+      )
+        throw new BadRequestException('La orden está cerrada o bloqueada.');
+      const nextStatus = dto.status ?? unit.status;
+      if (
+        dto.delivered === true &&
+        (nextStatus !== 'COMPLETED' ||
+          order.status !== SalesOrderStatus.COMPLETED ||
+          (order.requiresProduction && !order.qualityApprovedAt) ||
+          (order.paymentMode !== SalePaymentMode.CREDIT && order.invoice?.balance.gt(0)))
+      ) {
+        throw new BadRequestException(
+          'Termina y revisa la unidad y completa el balance antes de entregarla.',
+        );
+      }
+      if (dto.recipientName !== undefined && !dto.recipientName.trim())
+        throw new BadRequestException('Indica el destinatario.');
+      if (unit.deliveredAt && nextStatus !== 'COMPLETED')
+        throw new BadRequestException('Una unidad entregada no puede volver a producción.');
+      await tx.corporateOrderUnit.update({
+        where: { id: unitId },
+        data: {
+          status: dto.status,
+          recipientName: dto.recipientName?.trim(),
+          message: dto.message?.trim(),
+          personalization: dto.personalization,
+          updatedById: user.id,
+          ...(dto.delivered === undefined
+            ? {}
+            : {
+                deliveredAt: dto.delivered ? new Date() : null,
+                deliveredById: dto.delivered ? user.id : null,
+              }),
+        },
+      });
+      await tx.orderWorkflowEvent.create({
+        data: {
+          tenantId,
+          salesOrderId: orderId,
+          fromStage: order.productionStage,
+          toStage: order.productionStage,
+          changedById: user.id,
+          note: 'Unidad empresarial actualizada: ' + unit.recipientName,
+        },
+      });
+    });
+    return this.findOne(tenantId, user, orderId);
+  }
+
+  async removeCorporateUnit(
+    tenantId: string,
+    user: AuthenticatedUser,
+    orderId: string,
+    unitId: string,
+  ) {
+    const membership = this.getMembership(tenantId, user);
+    this.ensureCanManageProduction(membership);
+    if (membership.role === Role.WAREHOUSE_KEEPER) {
+      throw new ForbiddenException('Solo administración puede quitar destinatarios.');
+    }
+    const removed = await this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, orderId);
+      return tx.corporateOrderUnit.deleteMany({
+        where: {
+          id: unitId,
+          tenantId,
+          salesOrderId: orderId,
+          status: 'PENDING',
+          deliveredAt: null,
+          salesOrder: {
+            status: { not: SalesOrderStatus.CANCELLED },
+            productionStage: ProductionStage.WAITING,
+          },
+        },
+      });
+    });
+    if (!removed.count)
+      throw new BadRequestException(
+        'Solo puedes retirar destinatarios pendientes de una orden en espera.',
+      );
+    return this.findOne(tenantId, user, orderId);
   }
 
   async searchProducts(
@@ -130,28 +663,32 @@ export class OrdersService {
     inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
   ) {
     await this.ensureCanTakeOrders(tenantId, user);
+    if (inventorySource !== ProductInventoryDestination.SALES_INVENTORY) {
+      throw new BadRequestException('El stock físico de Fábrica ya no está disponible.');
+    }
     const query = q.trim();
 
-    return this.prisma.product.findMany({
-      where: {
-        tenantId,
-        inventoryDestination: inventorySource,
-        status: ProductStatus.ACTIVE,
-        ...(query
-          ? {
-              OR: [
-                { name: { contains: query, mode: 'insensitive' as const } },
-                { sku: { contains: query, mode: 'insensitive' as const } },
-                { barcode: { contains: query, mode: 'insensitive' as const } },
-                { brand: { contains: query, mode: 'insensitive' as const } },
-              ],
-            }
-          : {}),
-      },
-      include: { category: true },
-      orderBy: [{ stock: 'asc' }, { name: 'asc' }],
-      take: 30,
-    });
+    return this.prisma.product
+      .findMany({
+        where: {
+          tenantId,
+          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
+          status: ProductStatus.ACTIVE,
+          ...(query
+            ? {
+                OR: [
+                  { name: { contains: query, mode: 'insensitive' as const } },
+                  { sku: { contains: query, mode: 'insensitive' as const } },
+                  { barcode: { contains: query, mode: 'insensitive' as const } },
+                  { brand: { contains: query, mode: 'insensitive' as const } },
+                ],
+              }
+            : {}),
+        },
+        include: { category: true },
+        orderBy: [{ stock: 'asc' }, { name: 'asc' }],
+        take: 30,
+      });
   }
 
   async findProductByBarcode(
@@ -161,11 +698,14 @@ export class OrdersService {
     inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
   ) {
     await this.ensureCanTakeOrders(tenantId, user);
+    if (inventorySource !== ProductInventoryDestination.SALES_INVENTORY) {
+      throw new BadRequestException('El stock físico de Fábrica ya no está disponible.');
+    }
     const lookupCandidates = getBarcodeLookupCandidates(barcode);
     const product = await this.prisma.product.findFirst({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
+        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
@@ -184,8 +724,32 @@ export class OrdersService {
     return product;
   }
 
-  async create(tenantId: string, user: AuthenticatedUser, dto: CreateSalesOrderDto) {
+  async create(
+    tenantId: string,
+    user: AuthenticatedUser,
+    dto: CreateSalesOrderDto,
+    imported?: {
+      reference: string;
+      paidAmount: number;
+      inventoryAlreadyDeducted: boolean;
+      stage: ProductionStage;
+      source: OrderSource;
+      issuedAt?: Date;
+      invoiceNumber?: string;
+      designApproved: boolean;
+      qualityApproved: boolean;
+    },
+  ) {
     const membership = await this.ensureCanTakeOrders(tenantId, user);
+    if (dto.requiresProduction && !adminRoles.includes(membership.role)) {
+      throw new ForbiddenException('Solo administración puede asignar una orden normal a Fábrica.');
+    }
+    if (
+      dto.items.some((item) => item.unitPrice !== undefined) &&
+      !adminRoles.includes(membership.role) &&
+      !membership.canApplyDiscount
+    )
+      throw new ForbiddenException('No tienes permiso para cambiar precios.');
 
     if (!dto.items.length) {
       throw new BadRequestException('Sales order must include at least one item.');
@@ -202,11 +766,43 @@ export class OrdersService {
 
     if (destination === SalesOrderDestination.QUOTATION) {
       this.validateQuotationDetails(dto);
+    } else if (!dto.promisedDate && !dto.isExpress) {
+      throw new BadRequestException('Indica la fecha prometida de la orden.');
+    }
+
+    if (
+      dto.isExpress &&
+      (destination !== SalesOrderDestination.CASH_SALE ||
+        dto.requiresProduction === true ||
+        paymentMode === SalePaymentMode.CREDIT ||
+        dto.isCorporate ||
+        inventorySource !== ProductInventoryDestination.SALES_INVENTORY ||
+        (dto.deliveryMethod && dto.deliveryMethod !== DeliveryMethod.PICKUP))
+    ) {
+      throw new BadRequestException(
+        'La venta exprés requiere cobro de contado y recogida inmediata; no admite regalos empresariales ni trabajos de Fábrica.',
+      );
+    }
+
+    if (
+      destination === SalesOrderDestination.CASH_SALE &&
+      dto.deliveryMethod &&
+      dto.deliveryMethod !== DeliveryMethod.PICKUP &&
+      (!dto.deliveryAddress?.trim() || !dto.deliveryPhone?.trim())
+    ) {
+      throw new BadRequestException('La dirección y el teléfono son requeridos para el envío.');
     }
 
     this.validatePaymentModeFields(paymentMode, dto);
 
     return this.prisma.$transaction(async (tx) => {
+      if (imported) {
+        await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+        const duplicate = await tx.salesOrder.findFirst({
+          where: { tenantId, externalOrderId: 'IMPORT:' + imported.reference },
+        });
+        if (duplicate) throw new BadRequestException('Esta referencia histórica ya fue importada.');
+      }
       const ecfRecipientEmail = electronicInvoiceRequested
         ? dto.ecfRecipientEmail?.trim().toLowerCase() || null
         : null;
@@ -240,7 +836,23 @@ export class OrdersService {
         tx,
         priceLevel,
         inventorySource,
+        imported?.inventoryAlreadyDeducted ?? false,
       );
+      if (
+        dto.isExpress &&
+        computed.items.some((item) => item.product.kind === ProductKind.PERSONALIZED)
+      ) {
+        throw new BadRequestException(
+          'Los productos personalizados requieren el flujo normal de producción.',
+        );
+      }
+      if (
+        imported &&
+        (imported.paidAmount < 0 ||
+          !Number.isFinite(imported.paidAmount) ||
+          computed.total.lt(imported.paidAmount))
+      )
+        throw new BadRequestException('El importe pagado supera el total histórico.');
       const isQuotation = destination === SalesOrderDestination.QUOTATION;
       const isCredit = paymentMode === SalePaymentMode.CREDIT;
       const initialPaymentOption = isCredit ? dto.initialPaymentOption : undefined;
@@ -255,12 +867,8 @@ export class OrdersService {
           : null;
       const waitsForCreditApproval = isCredit && !isQuotation;
 
-      if (
-        !isQuotation &&
-        !isCredit &&
-        inventorySource === ProductInventoryDestination.SALES_INVENTORY
-      ) {
-        await this.reserveStockForOrder(tenantId, computed.items, tx);
+      if (!isQuotation && !isCredit && !imported?.inventoryAlreadyDeducted) {
+        await this.reserveStockForOrder(tenantId, computed.items, tx, inventorySource);
       }
 
       const now = new Date();
@@ -269,6 +877,25 @@ export class OrdersService {
           ? await this.getCustomerCreditBalance(tx, tenantId, customer.id)
           : new Prisma.Decimal(0);
       const financedAmount = computed.total.sub(initialPaymentAmount).toDecimalPlaces(2);
+      const orderNumber = imported
+        ? 'HIST-' + imported.reference
+        : this.generateOrderNumber(isQuotation);
+      const draftInvoice = isQuotation
+        ? null
+        : await this.createDraftInvoice(tx, {
+            tenantId,
+            customerId: customer?.id,
+            orderNumber,
+            paymentMode,
+            dueDate: creditTerms?.dueDate,
+            electronicInvoiceRequested,
+            items: computed.items,
+            subtotal: computed.subtotal,
+            taxTotal: computed.taxTotal,
+            discountTotal: computed.discountTotal,
+            total: computed.total,
+            userId: user.id,
+          });
       const order = await tx.salesOrder.create({
         data: {
           tenantId,
@@ -283,7 +910,15 @@ export class OrdersService {
               : undefined,
           electronicInvoiceRequested,
           ecfRecipientEmail,
-          orderNumber: this.generateOrderNumber(isQuotation),
+          orderNumber,
+          source: imported?.source,
+          externalOrderId: imported ? 'IMPORT:' + imported.reference : undefined,
+          productionStage: imported?.stage,
+          isExpress: dto.isExpress ?? false,
+          designApprovedAt: imported?.designApproved ? now : undefined,
+          designApprovedById: imported?.designApproved ? user.id : undefined,
+          qualityApprovedAt: imported?.qualityApproved ? now : undefined,
+          qualityApprovedById: imported?.qualityApproved ? user.id : undefined,
           status: isQuotation
             ? SalesOrderStatus.QUOTATION
             : waitsForCreditApproval
@@ -304,6 +939,18 @@ export class OrdersService {
           dueDate: creditTerms?.dueDate,
           creditRequestNote: isCredit ? dto.creditRequestNote?.trim() || null : null,
           notes: dto.notes?.trim() || undefined,
+          promisedAt: dto.promisedDate ? parseBusinessDate(dto.promisedDate) : null,
+          priority: dto.priority ?? OrderPriority.NORMAL,
+          isCorporate: dto.isCorporate ?? false,
+          deliveryMethod: dto.deliveryMethod,
+          dispatchLocation: dto.dispatchLocation,
+          deliveryAddress: dto.deliveryAddress?.trim() || null,
+          deliveryPhone: dto.deliveryPhone?.trim() || null,
+          notificationEmail: dto.notificationEmail?.trim().toLowerCase() || null,
+          invoiceId: draftInvoice?.id,
+          requiresProduction:
+            dto.requiresProduction === true ||
+            computed.items.some((item) => item.product.kind === ProductKind.PERSONALIZED),
           createdById: user.id,
           sentToCashierAt: isQuotation || waitsForCreditApproval ? undefined : now,
           items: {
@@ -312,8 +959,12 @@ export class OrdersService {
               sku: item.product.sku,
               barcode: item.product.barcode,
               description: item.product.name,
+              personalization: item.personalization,
               quantity: item.quantity,
-              reservedQuantity: isQuotation || isCredit ? 0 : item.reservedQuantity,
+              reservedQuantity:
+                isQuotation || isCredit || imported?.inventoryAlreadyDeducted
+                  ? 0
+                  : item.reservedQuantity,
               unitPrice: item.unitPrice,
               discountTotal: item.discountTotal,
               taxRate: item.product.taxRate,
@@ -373,7 +1024,101 @@ export class OrdersService {
       }
 
       await tx.employeeActivityLog.createMany({ data: activityLogs });
-
+      if (imported) {
+        if (imported.stage === ProductionStage.FACTORY && !imported.designApproved)
+          throw new BadRequestException(
+            'La orden en fábrica requiere aprobación de diseño histórica.',
+          );
+        if (
+          [ProductionStage.READY, ProductionStage.DELIVERED].includes(imported.stage as any) &&
+          order.requiresProduction &&
+          (!imported.designApproved || !imported.qualityApproved)
+        )
+          throw new BadRequestException(
+            'La orden lista requiere aprobaciones históricas de diseño y calidad.',
+          );
+        if (
+          !imported.inventoryAlreadyDeducted &&
+          (imported.paidAmount > 0 || imported.stage !== ProductionStage.WAITING)
+        )
+          throw new BadRequestException(
+            'Las órdenes históricas cobradas o avanzadas deben indicar inventario ya descontado.',
+          );
+        if (imported.inventoryAlreadyDeducted) {
+          let customerId = order.customerId;
+          if (!customerId && computed.total.gt(imported.paidAmount)) {
+            if (!clientName)
+              throw new BadRequestException('Indica el cliente del balance histórico.');
+            const customer = await tx.customer.create({
+              data: {
+                tenantId,
+                name: clientName,
+                documentType: DocumentType.OTHER,
+                phone: dto.deliveryPhone,
+              },
+            });
+            customerId = customer.id;
+          }
+          const balance = computed.total.sub(imported.paidAmount);
+          await tx.invoice.update({
+            where: { id: draftInvoice!.id },
+            data: {
+              customerId,
+              invoiceNumber: imported.invoiceNumber || 'HIST-' + imported.reference,
+              issuedAt: imported.issuedAt ?? now,
+              status: balance.isZero()
+                ? InvoiceStatus.PAID
+                : imported.paidAmount > 0
+                  ? InvoiceStatus.PARTIALLY_PAID
+                  : InvoiceStatus.ISSUED,
+              paidAmount: imported.paidAmount,
+              balance,
+              payments:
+                imported.paidAmount > 0
+                  ? {
+                      create: {
+                        tenantId,
+                        amount: imported.paidAmount,
+                        method: PaymentMethod.TRANSFER,
+                        status: PaymentStatus.COMPLETED,
+                        paidAt: imported.issuedAt ?? now,
+                        receiptNumber: 'HIST-' + imported.reference,
+                        userId: user.id,
+                      },
+                    }
+                  : undefined,
+            },
+          });
+          await tx.salesOrder.update({
+            where: { id: order.id },
+            data: {
+              customerId,
+              status: SalesOrderStatus.COMPLETED,
+              completedAt: imported.issuedAt ?? now,
+            },
+          });
+        }
+        await tx.orderWorkflowEvent.create({
+          data: {
+            tenantId,
+            salesOrderId: order.id,
+            fromStage: imported.stage,
+            toStage: imported.stage,
+            changedById: user.id,
+            note:
+              'Importación histórica: ' +
+              imported.reference +
+              '. Inventario ' +
+              (imported.inventoryAlreadyDeducted
+                ? 'previamente descontado; no se descuenta otra vez.'
+                : 'reservado al importar.'),
+          },
+        });
+        return tx.salesOrder.findUniqueOrThrow({
+          where: { id: order.id },
+          include: this.orderInclude(),
+        });
+      }
       return order;
     });
   }
@@ -391,16 +1136,16 @@ export class OrdersService {
           id,
           tenantId,
           destination: SalesOrderDestination.CASH_SALE,
-          invoiceId: null,
-          OR: [
-            { status: SalesOrderStatus.SENT_TO_CASHIER },
+          AND: [
             {
-              status: SalesOrderStatus.IN_CASHIER,
-              claimedById: user.id,
+              OR: [{ invoiceId: null }, { invoice: { is: { status: InvoiceStatus.DRAFT } } }],
             },
             {
-              status: SalesOrderStatus.IN_CASHIER,
-              claimExpiresAt: { lt: now },
+              OR: [
+                { status: SalesOrderStatus.SENT_TO_CASHIER },
+                { status: SalesOrderStatus.IN_CASHIER, claimedById: user.id },
+                { status: SalesOrderStatus.IN_CASHIER, claimExpiresAt: { lt: now } },
+              ],
             },
           ],
         },
@@ -555,6 +1300,7 @@ export class OrdersService {
 
   async cancel(tenantId: string, user: AuthenticatedUser, id: string, dto?: CancelSalesOrderDto) {
     return this.prisma.$transaction(async (tx) => {
+      await this.lockSalesOrder(tx, tenantId, id);
       const order = await tx.salesOrder.findFirst({
         where: { id, tenantId },
         include: this.orderInclude(),
@@ -586,15 +1332,26 @@ export class OrdersService {
 
       if (
         !openOrderStatuses.includes(order.status) &&
-        order.status !== SalesOrderStatus.QUOTATION
+        order.status !== SalesOrderStatus.QUOTATION &&
+        !(
+          order.status === SalesOrderStatus.COMPLETED &&
+          order.invoice?.status === InvoiceStatus.CREDITED
+        )
       ) {
-        throw new BadRequestException('Only pending sales orders can be cancelled.');
+        throw new BadRequestException(
+          'Una orden cobrada requiere registrar primero su devolución.',
+        );
       }
 
       const cancellableStatuses =
         order.status === SalesOrderStatus.QUOTATION
           ? [SalesOrderStatus.QUOTATION]
-          : openOrderStatuses;
+          : [
+              ...openOrderStatuses,
+              ...(order.invoice?.status === InvoiceStatus.CREDITED
+                ? [SalesOrderStatus.COMPLETED]
+                : []),
+            ];
 
       const cancelledRows = await tx.salesOrder.updateMany({
         where: {
@@ -604,6 +1361,7 @@ export class OrdersService {
         },
         data: {
           status: SalesOrderStatus.CANCELLED,
+          exceptionStatus: OrderExceptionStatus.CANCELLED,
           claimedById: null,
           claimedCashSessionId: null,
           claimExpiresAt: null,
@@ -616,7 +1374,13 @@ export class OrdersService {
         throw new BadRequestException('Only pending sales orders can be cancelled.');
       }
 
-      await this.releaseReservedStock(order.items, tx);
+      await this.releaseReservedStock(order.items, tx, tenantId, order.inventorySource);
+      if (order.invoiceId) {
+        await tx.invoice.updateMany({
+          where: { id: order.invoiceId, tenantId, status: InvoiceStatus.DRAFT },
+          data: { status: InvoiceStatus.CANCELLED },
+        });
+      }
       if (
         order.creditApproval &&
         (order.creditApproval.status === CreditApprovalStatus.PENDING ||
@@ -661,8 +1425,12 @@ export class OrdersService {
     });
   }
 
-  async accept(tenantId: string, user: AuthenticatedUser, id: string) {
+  async accept(tenantId: string, user: AuthenticatedUser, id: string, dto: AcceptSalesOrderDto) {
     await this.ensureCanTakeOrders(tenantId, user);
+    if (dto.promisedDate < businessDateKey(new Date())) {
+      throw new BadRequestException('La fecha prometida no puede estar en el pasado.');
+    }
+    const promisedAt = parseBusinessDate(dto.promisedDate);
 
     return this.prisma.$transaction(async (tx) => {
       await this.lockSalesOrder(tx, tenantId, id);
@@ -686,6 +1454,31 @@ export class OrdersService {
       if (order.status !== SalesOrderStatus.QUOTATION) {
         throw new BadRequestException('Only quotations can be accepted.');
       }
+
+      const draftInvoice = await this.createDraftInvoice(tx, {
+        tenantId,
+        customerId: order.customerId ?? undefined,
+        orderNumber: order.orderNumber,
+        paymentMode: order.paymentMode,
+        dueDate: order.dueDate ?? undefined,
+        electronicInvoiceRequested: order.electronicInvoiceRequested,
+        items: order.items.map((item) => ({
+          product: item.product!,
+          quantity: item.quantity,
+          reservedQuantity: 0,
+          unitPrice: item.unitPrice,
+          discountTotal: item.discountTotal,
+          subtotal: item.subtotal,
+          taxTotal: item.taxTotal,
+          total: item.total,
+          personalization: item.personalization as Prisma.InputJsonValue | undefined,
+        })),
+        subtotal: order.subtotal,
+        taxTotal: order.taxTotal,
+        discountTotal: order.discountTotal,
+        total: order.total,
+        userId: user.id,
+      });
 
       if (order.paymentMode === SalePaymentMode.CREDIT) {
         this.validateCreditCustomer(order.customer);
@@ -733,6 +1526,8 @@ export class OrdersService {
           data: {
             destination: SalesOrderDestination.CASH_SALE,
             status: SalesOrderStatus.CREATED,
+            promisedAt,
+            invoiceId: draftInvoice.id,
             initialPaymentAmount,
             creditTermDays: creditTerms.days,
             dueDate: creditTerms.dueDate,
@@ -777,9 +1572,7 @@ export class OrdersService {
       );
 
       // Reserve stock for the order
-      if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
-        await this.reserveStockForOrder(tenantId, computed.items, tx);
-      }
+      await this.reserveStockForOrder(tenantId, computed.items, tx, order.inventorySource);
 
       // Update the reservedQuantity of each item
       for (const item of order.items) {
@@ -787,10 +1580,7 @@ export class OrdersService {
         await tx.salesOrderItem.update({
           where: { id: item.id },
           data: {
-            reservedQuantity:
-              order.inventorySource === ProductInventoryDestination.SALES_INVENTORY
-                ? reservedQuantity
-                : 0,
+            reservedQuantity: item.product?.trackInventory ? reservedQuantity : 0,
           },
         });
       }
@@ -801,6 +1591,8 @@ export class OrdersService {
         data: {
           destination: SalesOrderDestination.CASH_SALE,
           status: SalesOrderStatus.SENT_TO_CASHIER,
+          promisedAt,
+          invoiceId: draftInvoice.id,
           sentToCashierAt: now,
         },
         include: this.orderInclude(),
@@ -834,6 +1626,11 @@ export class OrdersService {
     const membership = await this.ensureCanTakeOrders(tenantId, user);
 
     this.validateQuotationDetails(dto);
+    if (
+      dto.customerId &&
+      !(await this.prisma.customer.findFirst({ where: { id: dto.customerId, tenantId } }))
+    )
+      throw new BadRequestException('El cliente no pertenece al negocio.');
 
     return this.prisma.$transaction(async (tx) => {
       await this.lockSalesOrder(tx, tenantId, id);
@@ -923,13 +1720,30 @@ export class OrdersService {
             order.paymentMode === SalePaymentMode.CREDIT
               ? dto.creditRequestNote?.trim() || null
               : null,
+          requiresProduction: computed.items.some(
+            (item) => item.product.kind === ProductKind.PERSONALIZED,
+          ),
           notes: dto.notes?.trim() || null,
+          promisedAt: dto.promisedDate ? parseBusinessDate(dto.promisedDate) : undefined,
+          priority: dto.priority,
+          isCorporate: dto.isCorporate,
+          deliveryMethod: dto.deliveryMethod,
+          dispatchLocation: dto.dispatchLocation,
+          deliveryAddress:
+            dto.deliveryAddress === undefined ? undefined : dto.deliveryAddress.trim() || null,
+          deliveryPhone:
+            dto.deliveryPhone === undefined ? undefined : dto.deliveryPhone.trim() || null,
+          notificationEmail:
+            dto.notificationEmail === undefined
+              ? undefined
+              : dto.notificationEmail.trim().toLowerCase() || null,
           items: {
             create: computed.items.map((item) => ({
               productId: item.product.id,
               sku: item.product.sku,
               barcode: item.product.barcode,
               description: item.product.name,
+              personalization: item.personalization,
               quantity: item.quantity,
               reservedQuantity: 0,
               unitPrice: item.unitPrice,
@@ -973,9 +1787,13 @@ export class OrdersService {
     client: PrismaService | Prisma.TransactionClient = this.prisma,
     priceLevel: SalesOrderPriceLevel = SalesOrderPriceLevel.REGULAR,
     inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+    skipStockValidation = false,
   ) {
     if (!items.length) {
       throw new BadRequestException('Sales order must include at least one item.');
+    }
+    if (inventorySource !== ProductInventoryDestination.SALES_INVENTORY) {
+      throw new BadRequestException('El stock físico de Fábrica ya no está disponible.');
     }
 
     const quantitiesByProduct = new Map<string, number>();
@@ -989,7 +1807,7 @@ export class OrdersService {
     const products = await client.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
+        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         id: { in: Array.from(quantitiesByProduct.keys()) },
         status: ProductStatus.ACTIVE,
       },
@@ -1000,19 +1818,37 @@ export class OrdersService {
     }
 
     const discountRate = this.getDiscountRate(priceLevel);
-    const computedItems: ComputedOrderItem[] = products.map((product) => {
-      const quantity = new Prisma.Decimal(quantitiesByProduct.get(product.id) ?? 0);
+    const computedItems: ComputedOrderItem[] = items.map((sourceItem) => {
+      const product = products.find((candidate) => candidate.id === sourceItem.productId)!;
+      const quantity = new Prisma.Decimal(sourceItem.quantity);
       const regularUnitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
-      const unitPrice = regularUnitPrice
-        .mul(new Prisma.Decimal(1).sub(discountRate))
-        .toDecimalPlaces(2);
+      const unitPrice =
+        sourceItem.unitPrice === undefined
+          ? regularUnitPrice.mul(new Prisma.Decimal(1).sub(discountRate)).toDecimalPlaces(2)
+          : new Prisma.Decimal(sourceItem.unitPrice).toDecimalPlaces(2);
       const regularSubtotal = quantity.mul(regularUnitPrice).toDecimalPlaces(2);
       const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
-      const discountTotal = regularSubtotal.sub(subtotal).toDecimalPlaces(2);
+      const discountTotal = Prisma.Decimal.max(0, regularSubtotal.sub(subtotal)).toDecimalPlaces(2);
       const taxTotal = subtotal.mul(product.taxRate).toDecimalPlaces(2);
 
       return {
         product,
+        personalization: sourceItem?.personalization
+          ? {
+              ...(sourceItem.personalization.charms !== undefined
+                ? { charms: sourceItem.personalization.charms }
+                : {}),
+              ...(sourceItem.personalization.children !== undefined
+                ? { children: sourceItem.personalization.children }
+                : {}),
+              ...(sourceItem.personalization.material?.trim()
+                ? { material: sourceItem.personalization.material.trim() }
+                : {}),
+              ...(sourceItem.personalization.instructions?.trim()
+                ? { instructions: sourceItem.personalization.instructions.trim() }
+                : {}),
+            }
+          : undefined,
         quantity,
         reservedQuantity: product.trackInventory ? quantity.toNumber() : 0,
         unitPrice,
@@ -1024,7 +1860,7 @@ export class OrdersService {
     });
 
     for (const item of computedItems) {
-      const quantity = item.quantity.toNumber();
+      const quantity = quantitiesByProduct.get(item.product.id)!;
       const availableStock = item.product.stock - item.product.reservedStock;
 
       if (
@@ -1037,7 +1873,7 @@ export class OrdersService {
         );
       }
 
-      if (item.product.trackInventory && availableStock < quantity) {
+      if (!skipStockValidation && item.product.trackInventory && availableStock < quantity) {
         throw new BadRequestException(`Insufficient available stock for ${item.product.name}.`);
       }
     }
@@ -1181,6 +2017,7 @@ export class OrdersService {
         paymentMode: SalePaymentMode.CREDIT,
         status: {
           notIn: [
+            InvoiceStatus.DRAFT,
             // Cancelled and voided documents do not consume the credit line.
             InvoiceStatus.CANCELLED,
             InvoiceStatus.VOID,
@@ -1193,27 +2030,71 @@ export class OrdersService {
     return (aggregate._sum.balance ?? new Prisma.Decimal(0)).toDecimalPlaces(2);
   }
 
+  private createDraftInvoice(
+    tx: Prisma.TransactionClient,
+    input: {
+      tenantId: string;
+      customerId?: string;
+      orderNumber: string;
+      paymentMode: SalePaymentMode;
+      dueDate?: Date;
+      electronicInvoiceRequested: boolean;
+      items: ComputedOrderItem[];
+      subtotal: Prisma.Decimal;
+      taxTotal: Prisma.Decimal;
+      discountTotal: Prisma.Decimal;
+      total: Prisma.Decimal;
+      userId: string;
+    },
+  ) {
+    return tx.invoice.create({
+      data: {
+        tenantId: input.tenantId,
+        customerId: input.customerId,
+        documentType: input.electronicInvoiceRequested
+          ? InvoiceDocumentType.CONSUMER_ELECTRONIC_32
+          : InvoiceDocumentType.CONSUMER_02,
+        invoiceNumber: `PEND-${input.orderNumber}`,
+        status: InvoiceStatus.DRAFT,
+        subtotal: input.subtotal,
+        taxTotal: input.taxTotal,
+        discountTotal: input.discountTotal,
+        total: input.total,
+        paidAmount: 0,
+        balance: input.total,
+        paymentMode: input.paymentMode,
+        issuedById: input.userId,
+        issuedAt: new Date(),
+        dueDate: input.dueDate,
+        items: {
+          create: input.items.map((item) => ({
+            productId: item.product.id,
+            sku: item.product.sku,
+            barcode: item.product.barcode,
+            description: item.product.name,
+            personalization: item.personalization,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            discountTotal: item.discountTotal,
+            taxRate: item.product.taxRate,
+            taxTotal: item.taxTotal,
+            subtotal: item.subtotal,
+            total: item.total,
+          })),
+        },
+      },
+    });
+  }
+
   private async reserveStockForOrder(
     tenantId: string,
     items: ComputedOrderItem[],
     tx: Prisma.TransactionClient,
+    source: ProductInventoryDestination,
   ) {
     for (const item of [...items].sort((a, b) => a.product.id.localeCompare(b.product.id))) {
-      if (!item.product.trackInventory || item.reservedQuantity <= 0) {
-        continue;
-      }
-
-      const updated = await tx.$executeRaw`
-        UPDATE "Product"
-        SET "reservedStock" = "reservedStock" + ${item.reservedQuantity}
-        WHERE "id" = ${item.product.id}
-          AND "tenantId" = ${tenantId}
-          AND "trackInventory" = TRUE
-          AND ("stock" - "reservedStock") >= ${item.reservedQuantity}
-      `;
-
-      if (updated !== 1) {
-        throw new BadRequestException(`Insufficient available stock for ${item.product.name}.`);
+      if (item.product.trackInventory && item.reservedQuantity > 0) {
+        await changeReservation(tx, tenantId, item.product.id, source, item.reservedQuantity);
       }
     }
   }
@@ -1257,22 +2138,23 @@ export class OrdersService {
   }
 
   private async releaseReservedStock(
-    items: Array<{ productId: string | null; reservedQuantity: number }>,
+    items: Array<{ id?: string; productId: string | null; reservedQuantity: number }>,
     tx: Prisma.TransactionClient,
+    tenantId: string,
+    source: ProductInventoryDestination,
   ) {
     for (const item of [...items].sort((a, b) =>
       (a.productId ?? '').localeCompare(b.productId ?? ''),
     )) {
-      if (!item.productId || item.reservedQuantity <= 0) {
-        continue;
+      if (item.productId && item.reservedQuantity > 0) {
+        await changeReservation(tx, tenantId, item.productId, source, -item.reservedQuantity);
       }
-
-      await tx.$executeRaw`
-        UPDATE "Product"
-        SET "reservedStock" = GREATEST("reservedStock" - ${item.reservedQuantity}, 0)
-        WHERE "id" = ${item.productId}
-      `;
     }
+    if (items.length)
+      await tx.salesOrderItem.updateMany({
+        where: { id: { in: items.flatMap((item) => ('id' in item ? [String(item.id)] : [])) } },
+        data: { reservedQuantity: 0 },
+      });
   }
 
   private parseStatuses(status?: string) {
@@ -1314,10 +2196,21 @@ export class OrdersService {
       !membership.canUsePos &&
       !membership.canTakeOrders &&
       membership.role !== Role.CASHIER &&
-      membership.role !== Role.ORDER_TAKER
+      membership.role !== Role.ORDER_TAKER &&
+      membership.role !== Role.WAREHOUSE_KEEPER
     ) {
       throw new ForbiddenException('Employee does not have permission to view sales orders.');
     }
+  }
+
+  private ensureCanViewProduction(membership: AuthenticatedUser['memberships'][number]) {
+    if (!adminRoles.includes(membership.role) && membership.role !== Role.WAREHOUSE_KEEPER) {
+      throw new ForbiddenException('No tienes permiso para consultar producción.');
+    }
+  }
+
+  private ensureCanManageProduction(membership: AuthenticatedUser['memberships'][number]) {
+    this.ensureCanViewProduction(membership);
   }
 
   private async ensureCanTakeOrders(tenantId: string, user: AuthenticatedUser) {
@@ -1438,12 +2331,24 @@ export class OrdersService {
       createdBy: { select: { id: true, name: true, email: true } },
       completedBy: { select: { id: true, name: true, email: true } },
       claimedBy: { select: { id: true, name: true, email: true } },
+      designApprovedBy: { select: { id: true, name: true, email: true } },
+      qualityApprovedBy: { select: { id: true, name: true, email: true } },
+      deliveredBy: { select: { id: true, name: true, email: true } },
       claimedCashSession: {
         include: {
           cashRegister: true,
         },
       },
-      invoice: { select: { id: true, invoiceNumber: true, total: true } },
+      invoice: {
+        select: {
+          id: true,
+          invoiceNumber: true,
+          total: true,
+          status: true,
+          paidAmount: true,
+          balance: true,
+        },
+      },
       creditApproval: {
         include: {
           requestedBy: { select: { id: true, name: true, email: true } },
@@ -1456,6 +2361,14 @@ export class OrdersService {
           product: { include: { category: true } },
         },
         orderBy: { description: 'asc' as const },
+      },
+      workflowEvents: {
+        include: { changedBy: { select: { id: true, name: true, email: true } } },
+        orderBy: { createdAt: 'desc' as const },
+        take: 20,
+      },
+      corporateUnits: {
+        orderBy: { createdAt: 'asc' as const },
       },
     };
   }

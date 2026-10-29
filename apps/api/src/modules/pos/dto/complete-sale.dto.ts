@@ -23,6 +23,12 @@ export class PosSaleItemDto {
 
 export class CompleteSaleDto {
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  paymentAmount?: number;
+
+  @IsOptional()
   @IsString()
   customerId?: string;
 

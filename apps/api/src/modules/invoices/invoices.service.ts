@@ -52,7 +52,9 @@ export class InvoicesService {
     }
 
     if (dto.items.some((item) => !item.productId)) {
-      throw new BadRequestException('Invoice items must reference products so totals are recalculated from database.');
+      throw new BadRequestException(
+        'Invoice items must reference products so totals are recalculated from database.',
+      );
     }
 
     const productIds = dto.items.map((item) => item.productId!);
@@ -88,6 +90,10 @@ export class InvoicesService {
       .reduce((sum, item) => sum.add(item.total), new Prisma.Decimal(0))
       .toDecimalPlaces(2);
     const status = dto.status ?? InvoiceStatus.DRAFT;
+    if (status !== InvoiceStatus.DRAFT)
+      throw new BadRequestException(
+        'Emite y cobra la factura desde Toma de órdenes/POS para conciliar inventario y pagos.',
+      );
     const shouldAffectInventory = inventoryAffectingStatuses.includes(status);
 
     const invoice = await this.prisma.$transaction(async (tx) => {
@@ -109,13 +115,13 @@ export class InvoicesService {
         }
       }
 
-      const paidAmount = status === InvoiceStatus.PAID ? total : new Prisma.Decimal(0);
+      const paidAmount = new Prisma.Decimal(0);
       const createdInvoice = await tx.invoice.create({
         data: {
           tenantId,
           customerId: dto.customerId,
           documentType: dto.documentType ?? InvoiceDocumentType.CONSUMER_02,
-          invoiceNumber: dto.invoiceNumber ?? `RIV-MAN-${Date.now()}`,
+          invoiceNumber: dto.invoiceNumber ?? `UP-PEND-${Date.now()}`,
           status,
           fiscalStatus: InvoiceFiscalStatus.NOT_APPLICABLE,
           subtotal,
@@ -228,7 +234,11 @@ export class InvoicesService {
   }
 
   async update(tenantId: string, userId: string, id: string, dto: UpdateInvoiceDto) {
-    await this.findOne(tenantId, id);
+    const current = await this.findOne(tenantId, id);
+    if (dto.status && dto.status !== current.status)
+      throw new BadRequestException(
+        'Gestiona cancelaciones desde la orden o Devoluciones; el estado no puede alterarse manualmente.',
+      );
 
     const invoice = await this.prisma.invoice.update({
       where: { id },

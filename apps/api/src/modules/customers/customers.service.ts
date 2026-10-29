@@ -30,10 +30,7 @@ export class CustomersService {
   }
 
   async create(tenantId: string, userId: string, dto: CreateCustomerDto) {
-    const documentNumber = this.normalizeAndValidateDocument(
-      dto.documentType,
-      dto.documentNumber,
-    );
+    const documentNumber = this.normalizeAndValidateDocument(dto.documentType, dto.documentNumber);
 
     await this.ensureUniqueDocument(tenantId, dto.documentType, documentNumber);
 
@@ -75,8 +72,7 @@ export class CustomersService {
 
   async update(tenantId: string, userId: string, id: string, dto: UpdateCustomerDto) {
     const current = await this.findOne(tenantId, id);
-    const documentChanged =
-      dto.documentType !== undefined || dto.documentNumber !== undefined;
+    const documentChanged = dto.documentType !== undefined || dto.documentNumber !== undefined;
     const nextDocumentType = dto.documentType ?? current.documentType;
     const nextDocumentValue =
       dto.documentNumber !== undefined
@@ -175,10 +171,7 @@ export class CustomersService {
   }
 
   private rethrowDocumentConflict(error: unknown): never {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       throw new ConflictException(
         'Ya existe un cliente con este tipo y número de documento en la empresa.',
       );

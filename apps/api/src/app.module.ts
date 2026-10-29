@@ -12,7 +12,6 @@ import { EmployeesModule } from './modules/employees/employees.module';
 import { FiscalSequencesModule } from './modules/fiscal-sequences/fiscal-sequences.module';
 import { HealthModule } from './modules/health/health.module';
 import { ImportsModule } from './modules/imports/imports.module';
-import { InventoryModule } from './modules/inventory/inventory.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { PosModule } from './modules/pos/pos.module';
@@ -25,7 +24,9 @@ import { SupplierInvoicesModule } from './modules/supplier-invoices/supplier-inv
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
-import { WarehouseModule } from './modules/warehouse/warehouse.module';
+import { ChannelNotifierModule } from './modules/web-catalog/channel-notifier.module';
+import { WebCatalogModule } from './modules/web-catalog/web-catalog.module';
+import { ShopifyModule } from './modules/shopify/shopify.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -51,14 +52,15 @@ import { PrismaModule } from './prisma/prisma.module';
     SupplierInvoicesModule,
     ReceiptsModule,
     ReceivablesModule,
-    InventoryModule,
-    WarehouseModule,
     InvoicesModule,
     OrdersModule,
     PosModule,
     ReturnsModule,
     SuppliersModule,
     DashboardModule,
+    ShopifyModule,
+    ChannelNotifierModule,
+    WebCatalogModule,
     AuditModule,
   ],
 })

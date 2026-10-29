@@ -9,6 +9,7 @@ import {
   EmployeeLogAction,
   EmployeeStatus,
   MembershipStatus,
+  Prisma,
   Role,
   UserStatus,
 } from '@qorvex/database';
@@ -81,6 +82,10 @@ export class EmployeesService {
 
     if (existing?.memberships.some((membership) => membership.tenantId === tenantId)) {
       throw new ConflictException('This user already belongs to this tenant.');
+    }
+
+    if (dto.role === Role.WAREHOUSE_KEEPER && !dto.password?.trim() && !existing?.passwordHash) {
+      throw new BadRequestException('Indica una contraseña para el usuario de Fábrica.');
     }
 
     const passwordHash = await bcrypt.hash(dto.password ?? 'DemoPassword123!', 12);
@@ -232,7 +237,11 @@ export class EmployeesService {
       throw new NotFoundException('Employee membership not found.');
     }
 
-    if (dto.status && dto.status !== EmployeeStatus.ACTIVE) {
+    if (
+      membership.role === Role.ADMIN &&
+      ((dto.status && dto.status !== EmployeeStatus.ACTIVE) ||
+        (dto.role && dto.role !== Role.ADMIN))
+    ) {
       await this.ensureAnotherActiveAdmin(tenantId, employee.user.id);
     }
 
@@ -256,6 +265,12 @@ export class EmployeesService {
     const passwordHash = dto.password ? await bcrypt.hash(dto.password, 12) : undefined;
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+      if (
+        membership.role === Role.ADMIN &&
+        (nextRole !== Role.ADMIN || nextMembershipStatus !== MembershipStatus.ACTIVE)
+      )
+        await this.ensureAnotherActiveAdmin(tenantId, employee.user.id, tx);
       await tx.user.update({
         where: { id: employee.userId },
         data: {
@@ -446,8 +461,12 @@ export class EmployeesService {
     }
   }
 
-  private async ensureAnotherActiveAdmin(tenantId: string, userId: string) {
-    const adminCount = await this.prisma.membership.count({
+  private async ensureAnotherActiveAdmin(
+    tenantId: string,
+    userId: string,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const adminCount = await client.membership.count({
       where: {
         tenantId,
         role: Role.ADMIN,
@@ -476,6 +495,10 @@ export class EmployeesService {
     if (role === Role.ORDER_TAKER) {
       return {
         ...this.blankPermissions(),
+        canUsePos: true,
+        canOpenCashSession: true,
+        canCloseCashSession: true,
+        canReprintReceipt: true,
         canTakeOrders: true,
       };
     }

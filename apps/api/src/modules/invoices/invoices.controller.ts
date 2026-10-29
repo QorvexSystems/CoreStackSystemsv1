@@ -17,6 +17,14 @@ export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   @Get()
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findAll(@TenantId() tenantId: string) {
     return this.invoicesService.findAll(tenantId);
   }
@@ -32,6 +40,14 @@ export class InvoicesController {
   }
 
   @Get(':id')
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findOne(@TenantId() tenantId: string, @Param('id') id: string) {
     return this.invoicesService.findOne(tenantId, id);
   }

@@ -1,8 +1,8 @@
-import { createQorvexApiApp, listenQorvexApi } from './bootstrap';
+import { createCoreStackApiApp, listenCoreStackApi } from './bootstrap';
 
 async function bootstrap() {
-  const app = await createQorvexApiApp();
-  await listenQorvexApi(app);
+  const app = await createCoreStackApiApp();
+  await listenCoreStackApi(app);
 }
 
 void bootstrap();

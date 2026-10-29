@@ -21,6 +21,8 @@ import { getBarcodeLookupCandidates, normalizeBarcodeInput } from '../../common/
 import { AuditService } from '../audit/audit.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { ShopifyService } from '../shopify/shopify.service';
+import { ChannelNotifierService } from '../web-catalog/channel-notifier.service';
 
 const internalBarcodePrefix = 'QV';
 const defaultProductImageBucket = 'product-images';
@@ -40,6 +42,8 @@ export class ProductsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly config: ConfigService,
+    private readonly shopify: ShopifyService,
+    private readonly channelNotifier: ChannelNotifierService,
   ) {}
 
   findAll(tenantId: string, q?: string) {
@@ -147,6 +151,9 @@ export class ProductsService {
           description: dto.description,
           imageUrl: dto.imageUrl,
           brand: dto.brand,
+          kind: dto.kind,
+          material: dto.material?.trim() || null,
+          measurement: dto.measurement?.trim() || null,
           unit,
           price,
           salePrice: price,
@@ -208,6 +215,7 @@ export class ProductsService {
       entityId: product.id,
       metadata: { name: product.name, sku: product.sku, barcode: product.barcode },
     });
+    await this.shopify.syncProductIfConfigured(tenantId, product.id);
 
     return product;
   }
@@ -232,7 +240,7 @@ export class ProductsService {
   }
 
   async update(tenantId: string, userId: string, id: string, dto: UpdateProductDto) {
-    const currentProduct = await this.findOne(tenantId, id);
+    let currentProduct = await this.findOne(tenantId, id);
 
     if (dto.categoryId) {
       await this.ensureCategory(tenantId, dto.categoryId);
@@ -264,6 +272,22 @@ export class ProductsService {
     this.ensureQuantityMatchesUnit(nextUnit, nextMinStock, 'stock minimo');
 
     const product = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      currentProduct = {
+        ...currentProduct,
+        ...(await tx.product.findUniqueOrThrow({ where: { id } })),
+      };
+      if ((dto.stock ?? currentProduct.stock) < currentProduct.reservedStock) {
+        throw new BadRequestException(
+          'La existencia no puede ser menor que las unidades reservadas.',
+        );
+      }
+      if (
+        (dto.status === ProductStatus.INACTIVE || dto.trackInventory === false) &&
+        currentProduct.reservedStock > 0
+      ) {
+        throw new BadRequestException('El producto tiene reservas pendientes.');
+      }
       const updated = await tx.product.update({
         where: { id },
         data: {
@@ -275,6 +299,9 @@ export class ProductsService {
           description: dto.description,
           imageUrl: dto.imageUrl,
           brand: dto.brand,
+          kind: dto.kind,
+          material: dto.material === undefined ? undefined : dto.material.trim() || null,
+          measurement: dto.measurement === undefined ? undefined : dto.measurement.trim() || null,
           unit: nextUnit,
           price: nextPrice,
           salePrice: nextPrice,
@@ -295,7 +322,7 @@ export class ProductsService {
         },
       });
 
-      if (shouldCreateStockMovement) {
+      if (dto.stock !== undefined && dto.stock !== currentProduct.stock && shouldTrackInventory) {
         const difference = dto.stock! - currentProduct.stock;
         await tx.inventoryMovement.create({
           data: {
@@ -354,6 +381,11 @@ export class ProductsService {
       entityId: id,
       metadata: { fields: Object.keys(dto) },
     });
+    await this.shopify.syncProductIfConfigured(tenantId, product.id);
+    // Si la variante pertenece al catálogo web, avisa al e-commerce (mejor esfuerzo; la lectura periódica cubre el resto).
+    if (product.webProductId) {
+      await this.channelNotifier.notify('catalog.changed', [product.legacyEcommerceVariantId ?? product.id]);
+    }
 
     return product;
   }
@@ -462,8 +494,13 @@ export class ProductsService {
     const bucket =
       this.config.get<string>('SUPABASE_PRODUCT_IMAGE_BUCKET') || defaultProductImageBucket;
 
+    const useSupabase =
+      this.config.get<string>(
+        'PRODUCT_IMAGE_STORAGE',
+        process.env.NODE_ENV === 'production' ? 'supabase' : 'local',
+      ) === 'supabase';
     const uploadResult =
-      supabaseUrl && supabaseKey
+      useSupabase && supabaseUrl && supabaseKey
         ? await this.uploadImageToSupabase({
             tenantId,
             file: { ...file, mimetype },
@@ -543,35 +580,7 @@ export class ProductsService {
   }
 
   async remove(tenantId: string, userId: string, id: string) {
-    await this.findOne(tenantId, id);
-
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: {
-        status: ProductStatus.INACTIVE,
-      },
-    });
-
-    await this.audit.log({
-      tenantId,
-      userId,
-      action: 'PRODUCT_DEACTIVATED',
-      entity: 'Product',
-      entityId: id,
-    });
-
-    await this.prisma.employeeActivityLog.create({
-      data: {
-        tenantId,
-        userId,
-        action: EmployeeLogAction.DELETE_PRODUCT,
-        entity: 'Product',
-        entityId: id,
-        metadata: { name: product.name, sku: product.sku },
-      },
-    });
-
-    return product;
+    return this.update(tenantId, userId, id, { status: ProductStatus.INACTIVE });
   }
 
   private searchConditions(query: string): Prisma.ProductWhereInput[] {

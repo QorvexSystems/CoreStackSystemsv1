@@ -1,3 +1,4 @@
+import { markInventoryChanged } from '../../common/utils/stock-reservations';
 import {
   BadRequestException,
   ForbiddenException,
@@ -11,6 +12,8 @@ import {
   CreditApprovalStatus,
   CustomerCreditStatus,
   CustomerStatus,
+  DeliveryMethod,
+  DispatchLocation,
   DocumentType,
   ElectronicDocumentProvider,
   ElectronicDocumentStatus,
@@ -23,16 +26,18 @@ import {
   InvoiceStatus,
   PaymentMethod,
   PaymentStatus,
+  OrderSource,
   Prisma,
   Product,
   ProductInventoryDestination,
+  ProductKind,
   ProductStatus,
   ProductUnit,
+  ProductionStage,
   Role,
   SalePaymentMode,
   SalesOrderDestination,
   SalesOrderStatus,
-  WarehouseMovementType,
 } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
@@ -45,12 +50,14 @@ import {
 import { CompleteSaleDto, PosSaleItemDto } from './dto/complete-sale.dto';
 import { buildEcfSimulation } from './ecf-simulation';
 import { ResendService } from '../notifications/resend.service';
+import { ShopifyService } from '../shopify/shopify.service';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 const claimTtlMs = 30 * 60 * 1000;
 
 type ComputedSaleLine = {
   product: Product;
+  personalization?: Prisma.InputJsonValue;
   productId: string;
   sku: string | null;
   barcode: string | null;
@@ -70,6 +77,7 @@ export class PosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly resend: ResendService,
+    private readonly shopify: ShopifyService,
   ) {}
 
   async searchProducts(tenantId: string, user: AuthenticatedUser, q: string) {
@@ -81,6 +89,7 @@ export class PosService {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
+        kind: ProductKind.STANDARD,
         ...(query
           ? {
               OR: [
@@ -106,6 +115,7 @@ export class PosService {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
+        kind: ProductKind.STANDARD,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
       include: {
@@ -331,7 +341,12 @@ export class PosService {
             customerId: customer.id,
             paymentMode: SalePaymentMode.CREDIT,
             status: {
-              notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.VOIDED],
+              notIn: [
+                InvoiceStatus.DRAFT,
+                InvoiceStatus.CANCELLED,
+                InvoiceStatus.VOID,
+                InvoiceStatus.VOIDED,
+              ],
             },
           },
           _sum: { balance: true },
@@ -349,7 +364,28 @@ export class PosService {
 
       await this.lockOpenCashSessionForUser(tx, tenantId, user.id, cashSession.id);
       const sequence = await this.reserveFiscalSequence(tx, tenantId, documentType);
-      const requiredPayment = isCreditSale ? order.initialPaymentAmount : computed.total;
+      const requiredPayment = isCreditSale
+        ? order.initialPaymentAmount
+        : new Prisma.Decimal(dto.paymentAmount ?? computed.total);
+      if (requiredPayment.gt(computed.total))
+        throw new BadRequestException('El cobro no puede exceder el total.');
+      if (!isCreditSale && requiredPayment.lt(computed.total) && !customer) {
+        const name = order?.clientName?.trim();
+        if (!name)
+          throw new BadRequestException('Indica el cliente para registrar el balance pendiente.');
+        customer = await tx.customer.create({
+          data: {
+            tenantId,
+            name,
+            documentType: DocumentType.OTHER,
+            phone: order?.deliveryPhone,
+            email: order?.notificationEmail,
+            address: order?.deliveryAddress,
+          },
+        });
+        customerId = customer.id;
+        if (order) await tx.salesOrder.update({ where: { id: order.id }, data: { customerId } });
+      }
       const payment = this.getPaymentAmounts(
         dto.amountReceived,
         computed.total,
@@ -364,61 +400,66 @@ export class PosService {
       const isElectronicDocument =
         documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31 ||
         documentType === InvoiceDocumentType.CONSUMER_ELECTRONIC_32;
-      const invoiceNumber = `ALL-${fiscalNumber}`;
+      const invoiceNumber = `UP-${fiscalNumber}`;
       const eNcf = isElectronicDocument ? fiscalNumber : null;
       const tenant = isElectronicDocument
         ? await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })
         : null;
 
-      const invoice = await tx.invoice.create({
-        data: {
-          tenantId,
-          customerId: customer?.id,
-          documentType,
-          invoiceNumber,
-          ncf: isElectronicDocument ? null : fiscalNumber,
-          eNcf,
-          status,
-          fiscalStatus: isElectronicDocument
-            ? InvoiceFiscalStatus.PENDING_SIGNATURE
-            : InvoiceFiscalStatus.SIGNED,
-          subtotal: computed.subtotal,
-          taxTotal: computed.taxTotal,
-          discountTotal: computed.discountTotal,
-          total: computed.total,
-          paidAmount,
-          amountReceived: payment.amountReceived,
-          changeAmount: payment.changeAmount,
-          balance,
-          paymentMode: isCreditSale ? SalePaymentMode.CREDIT : SalePaymentMode.CASH,
-          paymentMethod: dto.paymentMethod,
-          issuedById: user.id,
-          cashSessionId: cashSession.id,
-          issuedAt,
-          dueDate: isCreditSale ? order.dueDate : issuedAt,
-          items: {
-            create: computed.items.map((item) => ({
-              productId: item.productId,
-              sku: item.sku,
-              barcode: item.barcode,
-              description: item.description,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              discountTotal: item.discountTotal,
-              taxRate: item.taxRate,
-              taxTotal: item.taxTotal,
-              subtotal: item.subtotal,
-              total: item.total,
-            })),
-          },
+      const invoiceData = {
+        tenantId,
+        customerId: customer?.id,
+        documentType,
+        invoiceNumber,
+        ncf: isElectronicDocument ? null : fiscalNumber,
+        eNcf,
+        status,
+        fiscalStatus: isElectronicDocument
+          ? InvoiceFiscalStatus.PENDING_SIGNATURE
+          : InvoiceFiscalStatus.SIGNED,
+        subtotal: computed.subtotal,
+        taxTotal: computed.taxTotal,
+        discountTotal: computed.discountTotal,
+        total: computed.total,
+        paidAmount,
+        amountReceived: payment.amountReceived,
+        changeAmount: payment.changeAmount,
+        balance,
+        paymentMode: isCreditSale ? SalePaymentMode.CREDIT : SalePaymentMode.CASH,
+        paymentMethod: dto.paymentMethod,
+        issuedById: user.id,
+        cashSessionId: cashSession.id,
+        issuedAt,
+        dueDate: isCreditSale ? order.dueDate : issuedAt,
+        items: {
+          create: computed.items.map((item) => ({
+            productId: item.productId,
+            sku: item.sku,
+            barcode: item.barcode,
+            description: item.description,
+            personalization: item.personalization,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            discountTotal: item.discountTotal,
+            taxRate: item.taxRate,
+            taxTotal: item.taxTotal,
+            subtotal: item.subtotal,
+            total: item.total,
+          })),
         },
-        include: {
-          customer: true,
-          items: true,
-          payments: true,
-          electronicDocument: true,
-        },
-      });
+      };
+      if (order?.invoice?.status === InvoiceStatus.DRAFT) {
+        await tx.invoiceItem.deleteMany({ where: { invoiceId: order.invoice.id } });
+      }
+      const invoice =
+        order?.invoice?.status === InvoiceStatus.DRAFT
+          ? await tx.invoice.update({
+              where: { id: order.invoice.id },
+              data: invoiceData,
+            })
+          : await tx.invoice.create({
+              data: invoiceData,
+            });
 
       for (const item of [...computed.items].sort((a, b) =>
         a.productId.localeCompare(b.productId),
@@ -431,6 +472,56 @@ export class PosService {
           userId: user.id,
           fromOrder: Boolean(order),
           inventorySource: order?.inventorySource ?? ProductInventoryDestination.SALES_INVENTORY,
+        });
+      }
+
+      if (!order) {
+        await tx.salesOrder.create({
+          data: {
+            tenantId,
+            customerId: customer?.id,
+            destination: SalesOrderDestination.CASH_SALE,
+            inventorySource: ProductInventoryDestination.SALES_INVENTORY,
+            clientName: customer?.name ?? 'Consumidor final',
+            orderNumber: this.generateDirectSaleOrderNumber(),
+            status: SalesOrderStatus.COMPLETED,
+            source: OrderSource.STORE,
+            isExpress: true,
+            productionStage: ProductionStage.DELIVERED,
+            promisedAt: issuedAt,
+            requiresProduction: false,
+            productionNotes: 'Venta inmediata en tienda',
+            deliveredAt: issuedAt,
+            deliveredById: user.id,
+
+            deliveryMethod: DeliveryMethod.PICKUP,
+            dispatchLocation: DispatchLocation.STORE,
+            subtotal: computed.subtotal,
+            taxTotal: computed.taxTotal,
+            discountTotal: computed.discountTotal,
+            total: computed.total,
+            paymentMode: SalePaymentMode.CASH,
+            createdById: user.id,
+            completedById: user.id,
+            completedAt: issuedAt,
+            invoiceId: invoice.id,
+            items: {
+              create: computed.items.map((item) => ({
+                productId: item.productId,
+                sku: item.sku,
+                barcode: item.barcode,
+                description: item.description,
+                quantity: item.quantity,
+                reservedQuantity: 0,
+                unitPrice: item.unitPrice,
+                discountTotal: item.discountTotal,
+                taxRate: item.taxRate,
+                taxTotal: item.taxTotal,
+                subtotal: item.subtotal,
+                total: item.total,
+              })),
+            },
+          },
         });
       }
 
@@ -533,16 +624,39 @@ export class PosService {
       });
 
       if (order) {
+        await tx.salesOrderItem.updateMany({
+          where: { salesOrderId: order.id },
+          data: { reservedQuantity: 0 },
+        });
         await tx.salesOrder.update({
           where: { id: order.id },
           data: {
             status: SalesOrderStatus.COMPLETED,
+            ...(order.isExpress
+              ? {
+                  productionStage: ProductionStage.DELIVERED,
+                  deliveredAt: issuedAt,
+                  deliveredById: user.id,
+                }
+              : {}),
             completedById: user.id,
             invoiceId: invoice.id,
             completedAt: issuedAt,
             claimExpiresAt: null,
           },
         });
+        if (order.isExpress) {
+          await tx.orderWorkflowEvent.create({
+            data: {
+              tenantId,
+              salesOrderId: order.id,
+              fromStage: order.productionStage,
+              toStage: ProductionStage.DELIVERED,
+              changedById: user.id,
+              note: 'Venta exprés cobrada y entregada en Caja',
+            },
+          });
+        }
       }
 
       if (isCreditSale && customer) {
@@ -552,7 +666,12 @@ export class PosService {
             customerId: customer.id,
             paymentMode: SalePaymentMode.CREDIT,
             status: {
-              notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.VOIDED],
+              notIn: [
+                InvoiceStatus.DRAFT,
+                InvoiceStatus.CANCELLED,
+                InvoiceStatus.VOID,
+                InvoiceStatus.VOIDED,
+              ],
             },
           },
           _sum: { balance: true },
@@ -639,6 +758,18 @@ export class PosService {
       const issuedInvoice = await tx.invoice.findUniqueOrThrow({
         where: { id: invoice.id },
         include: {
+          tenant: {
+            select: {
+              id: true,
+              name: true,
+              commercialName: true,
+              legalName: true,
+              rnc: true,
+              email: true,
+              phone: true,
+              address: true,
+            },
+          },
           customer: true,
           items: true,
           payments: true,
@@ -660,6 +791,7 @@ export class PosService {
 
       return {
         invoice: issuedInvoice,
+        productIds: Array.from(new Set(computed.items.map((item) => item.productId))),
         ecfCopy:
           eCfSimulation && eCfSimulation.recipientEmail
             ? {
@@ -682,6 +814,11 @@ export class PosService {
     if (completedSale.ecfCopy) {
       await this.resend.sendEcfCopy(completedSale.ecfCopy);
     }
+    await Promise.all(
+      completedSale.productIds.map((productId) =>
+        this.shopify.syncProductIfConfigured(tenantId, productId),
+      ),
+    );
 
     return completedSale.invoice;
   }
@@ -701,16 +838,16 @@ export class PosService {
         id: orderId,
         tenantId,
         destination: SalesOrderDestination.CASH_SALE,
-        invoiceId: null,
-        OR: [
-          { status: SalesOrderStatus.SENT_TO_CASHIER },
+        AND: [
           {
-            status: SalesOrderStatus.IN_CASHIER,
-            claimedById: userId,
+            OR: [{ invoiceId: null }, { invoice: { is: { status: InvoiceStatus.DRAFT } } }],
           },
           {
-            status: SalesOrderStatus.IN_CASHIER,
-            claimExpiresAt: { lt: now },
+            OR: [
+              { status: SalesOrderStatus.SENT_TO_CASHIER },
+              { status: SalesOrderStatus.IN_CASHIER, claimedById: userId },
+              { status: SalesOrderStatus.IN_CASHIER, claimExpiresAt: { lt: now } },
+            ],
           },
         ],
       },
@@ -732,6 +869,7 @@ export class PosService {
           status: true,
           claimedById: true,
           invoiceId: true,
+          invoice: { select: { status: true } },
         },
       });
 
@@ -739,7 +877,10 @@ export class PosService {
         throw new NotFoundException('Pending sales order not found for tenant.');
       }
 
-      if (existing.status === SalesOrderStatus.COMPLETED || existing.invoiceId) {
+      if (
+        existing.status === SalesOrderStatus.COMPLETED ||
+        (existing.invoiceId && existing.invoice?.status !== InvoiceStatus.DRAFT)
+      ) {
         throw new BadRequestException('Sales order has already been completed.');
       }
 
@@ -755,6 +896,7 @@ export class PosService {
       include: {
         customer: true,
         creditApproval: true,
+        invoice: true,
         items: {
           include: {
             product: true,
@@ -794,6 +936,12 @@ export class PosService {
 
     if (products.length !== quantitiesByProduct.size) {
       throw new NotFoundException('One or more POS products do not belong to tenant.');
+    }
+
+    if (products.some((product) => product.kind === ProductKind.PERSONALIZED)) {
+      throw new BadRequestException(
+        'Los productos personalizados deben registrarse desde Toma de órdenes.',
+      );
     }
 
     const computedItems: ComputedSaleLine[] = products.map((product) => {
@@ -872,6 +1020,7 @@ export class PosService {
       subtotal: Prisma.Decimal;
       total: Prisma.Decimal;
       product: Product | null;
+      personalization?: Prisma.JsonValue;
     }>;
   }) {
     const computedItems: ComputedSaleLine[] = order.items.map((item) => {
@@ -885,6 +1034,7 @@ export class PosService {
         sku: item.sku,
         barcode: item.barcode,
         description: item.description,
+        personalization: item.personalization ?? undefined,
         quantity: item.quantity,
         reservedQuantity: item.reservedQuantity,
         unitPrice: item.unitPrice,
@@ -915,7 +1065,10 @@ export class PosService {
         );
       }
 
-      if (item.product.trackInventory && item.product.stock < quantity) {
+      if (
+        item.product.trackInventory &&
+        item.product.stock < quantity
+      ) {
         throw new BadRequestException(`Insufficient stock for ${item.description}.`);
       }
     }
@@ -952,44 +1105,11 @@ export class PosService {
     const { tenantId, item, invoiceId, invoiceNumber, userId, fromOrder, inventorySource } = args;
 
     const quantity = item.quantity.toNumber();
-    if (inventorySource === ProductInventoryDestination.WAREHOUSE) {
-      if (requiresWholeQuantity(item.product.unit) && !Number.isInteger(quantity)) {
-        throw new BadRequestException(
-          `Warehouse product ${item.description} requires whole quantities.`,
-        );
-      }
-
-      const updated = await tx.$queryRaw<Array<{ quantity: number }>>`
-        UPDATE "WarehouseStock"
-        SET "quantity" = "quantity" - ${quantity}, "updatedAt" = NOW()
-        WHERE "tenantId" = ${tenantId}
-          AND "productId" = ${item.productId}
-          AND "quantity" >= ${quantity}
-        RETURNING "quantity"
-      `;
-
-      if (updated.length !== 1) {
-        throw new BadRequestException(`Insufficient warehouse stock for ${item.description}.`);
-      }
-
-      const newQuantity = updated[0].quantity;
-      await tx.warehouseMovement.create({
-        data: {
-          tenantId,
-          productId: item.productId,
-          type: WarehouseMovementType.SALE,
-          quantity,
-          previousQuantity: newQuantity + quantity,
-          newQuantity,
-          unitCost: item.product.cost,
-          reason: 'Venta B2B facturada desde toma de órdenes',
-          reference: invoiceNumber,
-          createdById: userId,
-        },
-      });
-      return;
+    if (!item.product.trackInventory) return;
+    if (inventorySource !== ProductInventoryDestination.SALES_INVENTORY) {
+      throw new BadRequestException('El stock físico de Fábrica ya no está disponible.');
     }
-
+    await markInventoryChanged(tx, tenantId, item.productId);
     if (!item.product.trackInventory) {
       return;
     }
@@ -1298,6 +1418,16 @@ export class PosService {
     if (!supportedMethods.includes(paymentMethod)) {
       throw new BadRequestException('POS payments only support cash, card, or transfer.');
     }
+  }
+
+  private generateDirectSaleOrderNumber() {
+    const date = new Date();
+    const stamp = date.toISOString().slice(0, 10).replace(/-/g, '');
+    const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
+      .map((value) => String(value).padStart(2, '0'))
+      .join('');
+    const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
+    return `POS-${stamp}-${time}-${suffix}`;
   }
 
   /**

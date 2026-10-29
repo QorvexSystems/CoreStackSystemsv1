@@ -18,7 +18,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { PaymentMethod, SupplierInvoiceStatus } from '@qorvex/database';
+import { PaymentMethod, SupplierInvoiceStatus, PurchaseOrderDestination } from '@qorvex/database';
 import { ReceiptItemDto } from '../../receipts/dto/receipt.dto';
 
 export class SupplierInvoiceItemDto {
@@ -84,6 +84,9 @@ export class SupplierInvoiceOcrReviewDto {
 }
 
 export class CreateSupplierInvoiceDto {
+  @IsOptional()
+  @IsEnum(PurchaseOrderDestination)
+  inventoryDestination?: PurchaseOrderDestination;
   @IsString()
   supplierId: string;
 
@@ -138,6 +141,9 @@ export class CreateSupplierInvoiceDto {
 }
 
 export class UpdateSupplierInvoiceDto {
+  @IsOptional()
+  @IsEnum(PurchaseOrderDestination)
+  inventoryDestination?: PurchaseOrderDestination;
   @IsOptional()
   @IsString()
   supplierId?: string;

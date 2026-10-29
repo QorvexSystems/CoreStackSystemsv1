@@ -1,7 +1,12 @@
+import { PaymentMethod } from '@qorvex/database';
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class CreateReceivablePaymentDto {
+  @IsOptional()
+  @IsIn([PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.TRANSFER])
+  method?: PaymentMethod;
+
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)

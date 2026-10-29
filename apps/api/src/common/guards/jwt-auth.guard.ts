@@ -1,9 +1,9 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { MembershipStatus, UserStatus } from '@qorvex/database';
+import { Prisma, UserStatus } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
-import { AuthenticatedRequest } from '../types/authenticated-request';
+import { AuthenticatedRequest, AuthenticatedUser } from '../types/authenticated-request';
 
 type JwtPayload = {
   sub: string;
@@ -12,6 +12,12 @@ type JwtPayload = {
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
+  // Share short lived lookups across modules while allowing role changes to refresh quickly.
+  private static readonly userCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<AuthenticatedUser | null> }
+  >();
+
   constructor(
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
@@ -36,49 +42,58 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid or expired token.');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: {
-        id: payload.sub,
-      },
-      include: {
-        memberships: true,
-      },
-    });
+    const user = await this.getUser(payload.sub);
 
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('User is not active.');
     }
 
-    request.user = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      status: user.status,
-      memberships: user.memberships
-        .filter((membership) => membership.status === MembershipStatus.ACTIVE)
-        .map((membership) => ({
-          id: membership.id,
-          tenantId: membership.tenantId,
-          role: membership.role,
-          status: membership.status,
-          canUsePos: membership.canUsePos,
-          canOpenCashSession: membership.canOpenCashSession,
-          canCloseCashSession: membership.canCloseCashSession,
-          canApplyDiscount: membership.canApplyDiscount,
-          canCancelInvoice: membership.canCancelInvoice,
-          canVoidInvoice: membership.canVoidInvoice,
-          canAdjustInventory: membership.canAdjustInventory,
-          canManageProducts: membership.canManageProducts,
-          canManageEmployees: membership.canManageEmployees,
-          canViewReports: membership.canViewReports,
-          canManageFiscalSequences: membership.canManageFiscalSequences,
-          canViewCashLogs: membership.canViewCashLogs,
-          canReprintReceipt: membership.canReprintReceipt,
-          canTakeOrders: membership.canTakeOrders,
-        })),
-    };
+    request.user = user;
 
     return true;
+  }
+
+  private async getUser(userId: string) {
+    const cached = JwtAuthGuard.userCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const value = this.prisma
+      .$queryRaw<AuthenticatedUser[]>(
+        Prisma.sql`
+      SELECT u.id, u.email, u.name, u.status,
+        COALESCE(
+          (SELECT jsonb_agg(jsonb_build_object(
+             'id', m.id, 'tenantId', m."tenantId", 'role', m.role, 'status', m.status,
+             'canUsePos', m."canUsePos",
+             'canOpenCashSession', m."canOpenCashSession",
+             'canCloseCashSession', m."canCloseCashSession",
+             'canApplyDiscount', m."canApplyDiscount",
+             'canCancelInvoice', m."canCancelInvoice",
+             'canVoidInvoice', m."canVoidInvoice",
+             'canAdjustInventory', m."canAdjustInventory",
+             'canManageProducts', m."canManageProducts",
+             'canManageEmployees', m."canManageEmployees",
+             'canViewReports', m."canViewReports",
+             'canManageFiscalSequences', m."canManageFiscalSequences",
+             'canViewCashLogs', m."canViewCashLogs",
+             'canReprintReceipt', m."canReprintReceipt",
+             'canTakeOrders', m."canTakeOrders"
+           ))
+           FROM "Membership" m
+           WHERE m."userId" = u.id AND m.status = 'ACTIVE'),
+          '[]'::jsonb
+        ) AS memberships
+      FROM "User" u
+      WHERE u.id = ${userId}
+    `,
+      )
+      .then((rows) => rows[0] ?? null);
+    JwtAuthGuard.userCache.set(userId, { expiresAt: Date.now() + 5000, value });
+    if (JwtAuthGuard.userCache.size > 1000) {
+      JwtAuthGuard.userCache.delete(JwtAuthGuard.userCache.keys().next().value!);
+    }
+    value.catch(() => JwtAuthGuard.userCache.delete(userId));
+    return value;
   }
 
   private extractBearerToken(request: AuthenticatedRequest) {

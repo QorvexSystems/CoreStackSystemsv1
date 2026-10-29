@@ -1,4 +1,4 @@
-import { PaymentMethod } from '@qorvex/database';
+import { PaymentMethod, ProductInventoryDestination } from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -45,6 +45,10 @@ export class CreateReturnRequestDto {
 }
 
 export class ApproveReturnRequestDto {
+  @IsOptional()
+  @IsEnum(ProductInventoryDestination)
+  restockDestination?: ProductInventoryDestination;
+
   @IsOptional()
   @IsString()
   cashSessionId?: string;

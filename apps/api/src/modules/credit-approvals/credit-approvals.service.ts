@@ -1,3 +1,4 @@
+import { changeReservation } from '../../common/utils/stock-reservations';
 import {
   BadRequestException,
   ConflictException,
@@ -114,6 +115,7 @@ export class CreditApprovalsService {
             },
             data: {
               status: SalesOrderStatus.CANCELLED,
+              exceptionStatus: 'CANCELLED',
               cancelledAt: now,
               cancelReason: 'Solicitud de crédito expirada',
             },
@@ -123,6 +125,14 @@ export class CreditApprovalsService {
               'Expired credit approval could not cancel its pending sales order.',
             );
           }
+          await tx.invoice.updateMany({
+            where: {
+              tenantId,
+              salesOrder: { is: { id: approval.salesOrderId } },
+              status: InvoiceStatus.DRAFT,
+            },
+            data: { status: InvoiceStatus.CANCELLED, balance: 0 },
+          });
           await tx.auditLog.create({
             data: {
               tenantId,
@@ -139,14 +149,18 @@ export class CreditApprovalsService {
           });
           return { expired: true as const };
         }
-
         const balanceAggregate = await tx.invoice.aggregate({
           where: {
             tenantId,
             customerId: approval.customerId,
             paymentMode: SalePaymentMode.CREDIT,
             status: {
-              notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.VOIDED],
+              notIn: [
+                InvoiceStatus.DRAFT,
+                InvoiceStatus.CANCELLED,
+                InvoiceStatus.VOID,
+                InvoiceStatus.VOIDED,
+              ],
             },
           },
           _sum: { balance: true },
@@ -191,16 +205,13 @@ export class CreditApprovalsService {
             continue;
           }
           const quantity = Number(item.quantity);
-          const changed = await tx.$executeRaw`
-            UPDATE "Product"
-            SET "reservedStock" = "reservedStock" + ${quantity}
-            WHERE "id" = ${item.productId}
-              AND "tenantId" = ${tenantId}
-              AND ("stock" - "reservedStock") >= ${quantity}
-          `;
-          if (changed !== 1) {
-            throw new BadRequestException(`Insufficient available stock for ${item.description}.`);
-          }
+          await changeReservation(
+            tx,
+            tenantId,
+            item.productId,
+            approval.salesOrder.inventorySource,
+            quantity,
+          );
           await tx.salesOrderItem.update({
             where: { id: item.id },
             data: { reservedQuantity: quantity },
@@ -310,6 +321,7 @@ export class CreditApprovalsService {
             },
             data: {
               status: SalesOrderStatus.CANCELLED,
+              exceptionStatus: 'CANCELLED',
               cancelledAt: now,
               cancelReason: 'Solicitud de crédito expirada',
             },
@@ -319,6 +331,14 @@ export class CreditApprovalsService {
               'Expired credit approval could not cancel its pending sales order.',
             );
           }
+          await tx.invoice.updateMany({
+            where: {
+              tenantId,
+              salesOrder: { is: { id: approval.salesOrderId } },
+              status: InvoiceStatus.DRAFT,
+            },
+            data: { status: InvoiceStatus.CANCELLED, balance: 0 },
+          });
           await tx.auditLog.create({
             data: {
               tenantId,
@@ -361,6 +381,7 @@ export class CreditApprovalsService {
           },
           data: {
             status: SalesOrderStatus.CANCELLED,
+            exceptionStatus: 'CANCELLED',
             cancelledAt: now,
             cancelReason: `Crédito rechazado: ${dto.reason.trim()}`,
           },
@@ -368,6 +389,14 @@ export class CreditApprovalsService {
         if (cancelledOrder.count !== 1) {
           throw new ConflictException('Credit sales order changed concurrently.');
         }
+        await tx.invoice.updateMany({
+          where: {
+            tenantId,
+            salesOrder: { is: { id: approval.salesOrderId } },
+            status: InvoiceStatus.DRAFT,
+          },
+          data: { status: InvoiceStatus.CANCELLED, balance: 0 },
+        });
         const rejectedResult = await tx.creditSaleApproval.findUniqueOrThrow({
           where: { id },
           include: approvalInclude,

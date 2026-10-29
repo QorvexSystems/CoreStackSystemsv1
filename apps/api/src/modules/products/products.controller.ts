@@ -31,16 +31,33 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findAll(@TenantId() tenantId: string, @Query('q') q?: string) {
     return this.productsService.findAll(tenantId, q);
   }
 
   @Get('search')
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   search(@TenantId() tenantId: string, @Query('q') q = '') {
     return this.productsService.search(tenantId, q);
   }
 
   @Get('barcode/:barcode')
+  @Roles(Role.CASHIER, Role.ORDER_TAKER, Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN)
   findByBarcode(@TenantId() tenantId: string, @Param('barcode') barcode: string) {
     return this.productsService.findByBarcode(tenantId, barcode);
   }
@@ -67,6 +84,14 @@ export class ProductsController {
   }
 
   @Get(':id')
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findOne(@TenantId() tenantId: string, @Param('id') id: string) {
     return this.productsService.findOne(tenantId, id);
   }

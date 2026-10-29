@@ -1,53 +1,28 @@
+import { loadDashboardSnapshot, loadProductSalesSnapshot } from './dashboard-snapshot';
 import { Injectable } from '@nestjs/common';
 import {
   CashMovementType,
-  CashSessionStatus,
-  CreditApprovalStatus,
-  CustomerStatus,
-  EmployeeStatus,
+  CorporateUnitStatus,
   FiscalSequenceStatus,
-  GoodsReceiptStatus,
-  InvoiceDocumentType,
   InvoiceStatus,
-  PaymentStatus,
+  Prisma,
+  OrderExceptionStatus,
+  OrderSource,
   PaymentMethod,
-  ProductInventoryDestination,
-  ProductStatus,
+  ProductionStage,
   PurchaseOrderStatus,
-  ReturnRequestStatus,
-  SalePaymentMode,
   SalesOrderDestination,
   SalesOrderStatus,
-  SupplierInvoiceStatus,
-  WarehouseMovementType,
 } from '@qorvex/database';
 import { addBusinessDays, businessDateKey } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
 
-const revenueStatuses = [
-  InvoiceStatus.ISSUED,
-  InvoiceStatus.PAID,
-  InvoiceStatus.PARTIALLY_PAID,
-  InvoiceStatus.PENDING_ECF,
-  InvoiceStatus.ACCEPTED,
-  InvoiceStatus.CREDITED,
-];
-const pendingInvoiceStatuses = [
+const pendingInvoiceStatuses: InvoiceStatus[] = [
   InvoiceStatus.ISSUED,
   InvoiceStatus.PARTIALLY_PAID,
   InvoiceStatus.PENDING_ECF,
 ];
-const excludedReceivableStatuses = [
-  InvoiceStatus.CANCELLED,
-  InvoiceStatus.VOIDED,
-  InvoiceStatus.VOID,
-  InvoiceStatus.REJECTED,
-];
-const payableInvoiceStatuses = [
-  SupplierInvoiceStatus.PENDING,
-  SupplierInvoiceStatus.PARTIALLY_PAID,
-  SupplierInvoiceStatus.PAID,
-];
+
 const terminalPurchaseOrderStatuses: PurchaseOrderStatus[] = [
   PurchaseOrderStatus.RECEIVED,
   PurchaseOrderStatus.CANCELLED,
@@ -59,17 +34,19 @@ export class DashboardService {
 
   async getSummary(tenantId: string) {
     const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
+    const dateKey = businessDateKey(now);
+    const [year, month] = dateKey.split('-').map(Number);
+    const todayStart = new Date(dateKey + 'T00:00:00-04:00');
+    const tomorrowStart = new Date(todayStart.getTime() + 86400000);
     const accountingTodayKey = businessDateKey(now);
     const accountingTomorrowKey = businessDateKey(addBusinessDays(1, now));
     const accountingDueSoonEndKey = businessDateKey(addBusinessDays(8, now));
 
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const seriesStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const monthStart = new Date(Date.UTC(year, month - 1, 1, 4));
+    const nextMonthStart = new Date(Date.UTC(year, month, 1, 4));
+    const seriesStart = new Date(Date.UTC(year, month - 6, 1, 4));
 
-    const [
+    const {
       paymentsForMonth,
       paymentsForToday,
       returnsMonth,
@@ -102,383 +79,19 @@ export class DashboardService {
       pendingCreditApprovals,
       creditApprovalsExceedingLimit,
       recentAuditActivity,
-      warehouseStocksForSummary,
       cashMovementsToday,
       invoicesToday,
-      completedWarehouseOrders,
-      warehouseDispatchReferences,
-    ] = await Promise.all([
-      this.prisma.payment.aggregate({
-        where: {
-          tenantId,
-          status: PaymentStatus.COMPLETED,
-          paidAt: {
-            gte: monthStart,
-            lt: nextMonthStart,
-          },
-        },
-        _sum: { amount: true },
-      }),
-      this.prisma.payment.aggregate({
-        where: {
-          tenantId,
-          status: PaymentStatus.COMPLETED,
-          paidAt: {
-            gte: todayStart,
-          },
-        },
-        _sum: { amount: true },
-      }),
-      this.prisma.returnRequest.aggregate({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.COMPLETED,
-          completedAt: {
-            gte: monthStart,
-            lt: nextMonthStart,
-          },
-        },
-        _sum: { refundAmount: true },
-      }),
-      this.prisma.returnRequest.aggregate({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.COMPLETED,
-          completedAt: {
-            gte: todayStart,
-          },
-        },
-        _sum: { refundAmount: true },
-      }),
-      this.prisma.returnRequest.aggregate({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.REQUESTED,
-        },
-        _sum: { refundAmount: true },
-      }),
-      this.prisma.invoice.groupBy({
-        by: ['status'],
-        where: { tenantId },
-        _count: { _all: true },
-      }),
-      this.prisma.customer.count({
-        where: {
-          tenantId,
-          status: CustomerStatus.ACTIVE,
-        },
-      }),
-      this.prisma.employeeProfile.count({
-        where: {
-          tenantId,
-          status: EmployeeStatus.ACTIVE,
-        },
-      }),
-      this.prisma.cashSession.findMany({
-        where: {
-          tenantId,
-          status: CashSessionStatus.OPEN,
-        },
-        include: {
-          cashRegister: true,
-          openedBy: { select: { id: true, name: true, email: true } },
-          movements: {
-            select: {
-              type: true,
-              amount: true,
-              method: true,
-            },
-          },
-        },
-        orderBy: { openedAt: 'desc' },
-      }),
-      this.prisma.salesOrder.groupBy({
-        by: ['status', 'destination'],
-        where: { tenantId },
-        _count: { _all: true },
-      }),
-      this.prisma.salesOrder.count({
-        where: {
-          tenantId,
-          status: SalesOrderStatus.COMPLETED,
-          completedAt: {
-            gte: todayStart,
-          },
-        },
-      }),
-      this.prisma.returnRequest.count({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.COMPLETED,
-        },
-      }),
-      this.prisma.returnRequest.count({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.REQUESTED,
-        },
-      }),
-      this.prisma.invoice.findMany({
-        where: { tenantId },
-        include: {
-          customer: true,
-          issuedBy: { select: { id: true, name: true, email: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      }),
-      this.prisma.returnRequest.findMany({
-        where: { tenantId },
-        include: {
-          invoice: { select: { id: true, invoiceNumber: true, total: true } },
-          requestedBy: { select: { id: true, name: true, email: true } },
-          approvedBy: { select: { id: true, name: true, email: true } },
-          rejectedBy: { select: { id: true, name: true, email: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 6,
-      }),
-      this.prisma.cashMovement.findMany({
-        where: { tenantId },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-          invoice: { select: { id: true, invoiceNumber: true } },
-          cashSession: { include: { cashRegister: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 8,
-      }),
-      this.prisma.employeeActivityLog.findMany({
-        where: { tenantId },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-          invoice: { select: { id: true, invoiceNumber: true, total: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 8,
-      }),
-      this.prisma.fiscalSequence.findMany({
-        where: {
-          tenantId,
-          documentType: {
-            in: [
-              InvoiceDocumentType.FISCAL_CREDIT_01,
-              InvoiceDocumentType.CONSUMER_02,
-            ],
-          },
-          status: {
-            in: [
-              FiscalSequenceStatus.ACTIVE,
-              FiscalSequenceStatus.EXHAUSTED,
-              FiscalSequenceStatus.EXPIRED,
-            ],
-          },
-        },
-        orderBy: [{ documentType: 'asc' }, { createdAt: 'desc' }],
-      }),
-      this.prisma.product.findMany({
-        where: {
-          tenantId,
-          status: ProductStatus.ACTIVE,
-          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
-        },
-        orderBy: {
-          stock: 'asc',
-        },
-        select: {
-          id: true,
-          name: true,
-          sku: true,
-          stock: true,
-          reservedStock: true,
-          minStock: true,
-          trackInventory: true,
-          category: { select: { name: true } },
-        },
-      }),
-      this.prisma.payment.findMany({
-        where: {
-          tenantId,
-          status: PaymentStatus.COMPLETED,
-          paidAt: {
-            gte: seriesStart,
-          },
-        },
-        select: {
-          paidAt: true,
-          amount: true,
-        },
-      }),
-      this.prisma.returnRequest.findMany({
-        where: {
-          tenantId,
-          status: ReturnRequestStatus.COMPLETED,
-          completedAt: {
-            gte: seriesStart,
-          },
-        },
-        select: {
-          completedAt: true,
-          refundAmount: true,
-        },
-      }),
-      this.prisma.salesOrder.findMany({
-        where: {
-          tenantId,
-          destination: SalesOrderDestination.CASH_SALE,
-          orderNumber: { startsWith: 'COT-' },
-          status: { in: [SalesOrderStatus.SENT_TO_CASHIER, SalesOrderStatus.IN_CASHIER] },
-        },
-        select: {
-          total: true,
-        },
-      }),
-      this.prisma.salesOrder.findMany({
-        where: {
-          tenantId,
-          orderNumber: { startsWith: 'COT-' },
-          status: SalesOrderStatus.COMPLETED,
-          completedAt: {
-            gte: todayStart,
-          },
-        },
-        select: {
-          total: true,
-        },
-      }),
-      this.prisma.invoice.findMany({
-        where: {
-          tenantId,
-          paymentMode: SalePaymentMode.CREDIT,
-          status: { notIn: excludedReceivableStatuses },
-          balance: { gt: 0 },
-        },
-        select: {
-          balance: true,
-          dueDate: true,
-        },
-      }),
-      this.prisma.supplierInvoice.findMany({
-        where: {
-          tenantId,
-          status: { in: payableInvoiceStatuses },
-          balance: { gt: 0 },
-        },
-        select: {
-          balance: true,
-          dueDate: true,
-        },
-      }),
-      this.prisma.purchaseOrder.findMany({
-        where: { tenantId },
-        select: {
-          status: true,
-          expectedDeliveryDate: true,
-          supplierInvoice: { select: { id: true } },
-        },
-      }),
-      this.prisma.supplierInvoice.count({
-        where: {
-          tenantId,
-          status: { in: payableInvoiceStatuses },
-          goodsReceipts: { none: { status: GoodsReceiptStatus.CONFIRMED } },
-        },
-      }),
-      this.prisma.goodsReceipt.count({
-        where: {
-          tenantId,
-          status: GoodsReceiptStatus.DRAFT,
-        },
-      }),
-      this.prisma.goodsReceiptItem.findMany({
-        where: {
-          tenantId,
-          differenceAccepted: false,
-          goodsReceipt: { status: GoodsReceiptStatus.DRAFT },
-        },
-        select: {
-          quantityInvoiced: true,
-          quantityReceived: true,
-        },
-      }),
-      this.prisma.creditSaleApproval.aggregate({
-        where: {
-          tenantId,
-          status: CreditApprovalStatus.PENDING,
-        },
-        _count: { _all: true },
-        _sum: { financedAmount: true },
-      }),
-      this.prisma.creditSaleApproval.count({
-        where: {
-          tenantId,
-          status: CreditApprovalStatus.PENDING,
-          exceedsCreditLimit: true,
-        },
-      }),
-      this.prisma.auditLog.findMany({
-        where: { tenantId },
-        select: {
-          id: true,
-          action: true,
-          entity: true,
-          entityId: true,
-          createdAt: true,
-          user: { select: { name: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 6,
-      }),
-      this.prisma.warehouseStock.findMany({
-        where: {
-          tenantId,
-          product: {
-            status: ProductStatus.ACTIVE,
-            inventoryDestination: ProductInventoryDestination.WAREHOUSE,
-          },
-        },
-        select: {
-          quantity: true,
-          product: { select: { minStock: true } },
-        },
-      }),
-      this.prisma.cashMovement.findMany({
-        where: {
-          tenantId,
-          createdAt: { gte: todayStart },
-        },
-        select: {
-          type: true,
-          amount: true,
-          method: true,
-        },
-      }),
-      this.prisma.invoice.count({
-        where: {
-          tenantId,
-          status: { in: revenueStatuses },
-          issuedAt: { gte: todayStart },
-        },
-      }),
-      this.prisma.salesOrder.findMany({
-        where: {
-          tenantId,
-          inventorySource: ProductInventoryDestination.WAREHOUSE,
-          status: SalesOrderStatus.COMPLETED,
-          invoiceId: { not: null },
-        },
-        select: { orderNumber: true },
-      }),
-      this.prisma.warehouseMovement.findMany({
-        where: {
-          tenantId,
-          type: WarehouseMovementType.DISPATCH,
-          reference: { not: null },
-        },
-        select: { reference: true },
-        distinct: ['reference'],
-      }),
-    ]);
+      productionOrders,
+      channelInvoicesThisMonth,
+      collections,
+      channelReturns,
+    } = await loadDashboardSnapshot(this.prisma, tenantId, {
+      todayStart,
+      tomorrowStart,
+      monthStart,
+      nextMonthStart,
+      seriesStart,
+    });
 
     const activeProducts = productsForStock.length;
     const lowStockProductsList = productsForStock.filter(
@@ -496,8 +109,8 @@ export class DashboardService {
       .sort((first, second) => second.count - first.count || first.name.localeCompare(second.name))
       .slice(0, 5);
     const recentInventoryAlerts = lowStockProductsList.slice(0, 5);
-    const grossSalesMonth = this.decimalToNumber(paymentsForMonth._sum.amount);
-    const grossSalesToday = this.decimalToNumber(paymentsForToday._sum.amount);
+    const grossSalesMonth = this.decimalToNumber(paymentsForMonth._sum.total);
+    const grossSalesToday = this.decimalToNumber(paymentsForToday._sum.total);
     const refundsMonth = this.decimalToNumber(returnsMonth._sum.refundAmount);
     const refundsToday = this.decimalToNumber(returnsToday._sum.refundAmount);
     const netSalesMonth = grossSalesMonth - refundsMonth;
@@ -506,23 +119,16 @@ export class DashboardService {
     const countOrders = (status: SalesOrderStatus, destination?: SalesOrderDestination) =>
       orderStatusCounts
         .filter(
-          (entry) =>
-            entry.status === status && (!destination || entry.destination === destination),
+          (entry) => entry.status === status && (!destination || entry.destination === destination),
         )
-        .reduce((total, entry) => total + entry._count._all, 0);
-    const totalOrders = orderStatusCounts.reduce(
-      (total, entry) => total + entry._count._all,
-      0,
-    );
+        .reduce((total, entry) => total + groupedCount(entry), 0);
+    const totalOrders = orderStatusCounts.reduce((total, entry) => total + groupedCount(entry), 0);
     const completedOrders = countOrders(SalesOrderStatus.COMPLETED);
     const pendingOrders = countOrders(
       SalesOrderStatus.SENT_TO_CASHIER,
       SalesOrderDestination.CASH_SALE,
     );
-    const claimedOrders = countOrders(
-      SalesOrderStatus.IN_CASHIER,
-      SalesOrderDestination.CASH_SALE,
-    );
+    const claimedOrders = countOrders(SalesOrderStatus.IN_CASHIER, SalesOrderDestination.CASH_SALE);
     const pendingQuotations = countOrders(
       SalesOrderStatus.QUOTATION,
       SalesOrderDestination.QUOTATION,
@@ -534,7 +140,7 @@ export class DashboardService {
     const countInvoicesByStatus = (...statuses: InvoiceStatus[]) =>
       invoiceStatusCounts
         .filter((entry) => statuses.includes(entry.status))
-        .reduce((total, entry) => total + entry._count._all, 0);
+        .reduce((total, entry) => total + groupedCount(entry), 0);
     const pendingInvoices = countInvoicesByStatus(...pendingInvoiceStatuses);
     const paidInvoices = countInvoicesByStatus(InvoiceStatus.PAID, InvoiceStatus.ACCEPTED);
     const draftInvoices = countInvoicesByStatus(InvoiceStatus.DRAFT);
@@ -585,21 +191,6 @@ export class DashboardService {
           this.decimalToNumber(item.quantityReceived) - this.decimalToNumber(item.quantityInvoiced),
         ) > 0.000001,
     ).length;
-    const dispatchedWarehouseOrders = new Set(
-      warehouseDispatchReferences.flatMap((movement) =>
-        movement.reference ? [movement.reference] : [],
-      ),
-    );
-    const warehouseUnits = warehouseStocksForSummary.reduce(
-      (total, stock) => total + stock.quantity,
-      0,
-    );
-    const warehouseLowStockProducts = warehouseStocksForSummary.filter(
-      (stock) => stock.quantity <= stock.product.minStock,
-    ).length;
-    const pendingWarehouseDispatches = completedWarehouseOrders.filter(
-      (order) => !dispatchedWarehouseOrders.has(order.orderNumber),
-    ).length;
     const cashInTypes: CashMovementType[] = [
       CashMovementType.SALE_PAYMENT,
       CashMovementType.CREDIT_PAYMENT,
@@ -615,10 +206,79 @@ export class DashboardService {
     );
     const cashEntries = cashMovements.filter((movement) => cashInTypes.includes(movement.type));
     const cashExits = cashMovements.filter((movement) => cashOutTypes.includes(movement.type));
-    const salesSeries = this.buildSalesSeries(paymentsForSeries, returnsForSeries, now);
+    const salesEntries = paymentsForSeries.map((invoice) => ({
+      paidAt: invoice.issuedAt,
+      amount: invoice.total,
+    }));
+    const salesSeries = this.buildSalesSeries(salesEntries, returnsForSeries, now);
     const previousMonthNetSales = salesSeries.at(-2)?.total ?? 0;
+    const operationalOrders = productionOrders.filter(
+      (order) => order.exceptionStatus !== OrderExceptionStatus.CANCELLED,
+    );
+    const openOperationalOrders = operationalOrders.filter(
+      (order) => order.productionStage !== ProductionStage.DELIVERED,
+    );
+    const readyOrders = openOperationalOrders.filter(
+      (order) => order.productionStage === ProductionStage.READY,
+    );
+    const attentionOrders = openOperationalOrders
+      .map((order) => {
+        const reasons: string[] = [];
+        if (order.promisedAt && businessDateKey(order.promisedAt) < dateKey)
+          reasons.push('Atrasada');
+        if (order.priority === 'URGENT') reasons.push('Urgente');
+        if (order.exceptionStatus === OrderExceptionStatus.PROBLEM) reasons.push('Con problema');
+        if (order.exceptionStatus === OrderExceptionStatus.PAUSED) reasons.push('Pausada');
+        if (order.requiresProduction && !order.designApprovedAt) reasons.push('Diseño pendiente');
+        if (
+          order.requiresProduction &&
+          order.productionStage === ProductionStage.FACTORY &&
+          !order.qualityApprovedAt
+        )
+          reasons.push('Calidad pendiente');
+        return { order, reasons };
+      })
+      .filter((entry) => entry.reasons.length)
+      .sort((first, second) => {
+        const firstLate = first.reasons.includes('Atrasada') ? 0 : 1;
+        const secondLate = second.reasons.includes('Atrasada') ? 0 : 1;
+        if (firstLate !== secondLate) return firstLate - secondLate;
+        return (
+          (first.order.promisedAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+          (second.order.promisedAt?.getTime() ?? Number.MAX_SAFE_INTEGER)
+        );
+      })
+      .slice(0, 8)
+      .map(({ order, reasons }) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        clientName: order.clientName ?? 'Cliente general',
+        invoiceId: order.invoiceId,
+        productionStage: order.productionStage,
+        promisedAt: order.promisedAt,
+        source: order.source,
+        reasons,
+      }));
+    const activeCorporateOrders = openOperationalOrders.filter((order) => order.isCorporate);
+    const activeCorporateUnits = activeCorporateOrders.flatMap((order) => order.corporateUnits);
+    const storeRefunds = channelReturns
+      .filter((row) => row.invoice.salesOrder?.source !== OrderSource.SHOPIFY)
+      .reduce((sum, row) => sum + Number(row.refundAmount), 0);
+    const shopifyRefunds = channelReturns
+      .filter((row) => row.invoice.salesOrder?.source === OrderSource.SHOPIFY)
+      .reduce((sum, row) => sum + Number(row.refundAmount), 0);
+    const storeSalesMonth =
+      channelInvoicesThisMonth
+        .filter((invoice) => invoice.salesOrder?.source !== OrderSource.SHOPIFY)
+        .reduce((total, invoice) => total + this.decimalToNumber(invoice.total), 0) - storeRefunds;
+    const shopifySalesMonth =
+      channelInvoicesThisMonth
+        .filter((invoice) => invoice.salesOrder?.source === OrderSource.SHOPIFY)
+        .reduce((total, invoice) => total + this.decimalToNumber(invoice.total), 0) -
+      shopifyRefunds;
 
     return {
+      collectionsMonth: this.decimalToNumber(collections._sum.amount),
       totalBilledMonth: netSalesMonth,
       totalBilledToday: netSalesToday,
       grossSalesMonth,
@@ -678,11 +338,67 @@ export class DashboardService {
         exitsCount: cashExits.length,
       },
       previousMonthNetSales,
-      warehouse: {
-        productCount: warehouseStocksForSummary.length,
-        unitCount: warehouseUnits,
-        lowStockProducts: warehouseLowStockProducts,
-        pendingDispatches: pendingWarehouseDispatches,
+      production: {
+        waiting: operationalOrders.filter(
+          (order) => order.productionStage === ProductionStage.WAITING,
+        ).length,
+        factory: operationalOrders.filter(
+          (order) => order.productionStage === ProductionStage.FACTORY,
+        ).length,
+        ready: operationalOrders.filter((order) => order.productionStage === ProductionStage.READY)
+          .length,
+        delivered: operationalOrders.filter(
+          (order) => order.productionStage === ProductionStage.DELIVERED,
+        ).length,
+        deliveredToday: operationalOrders.filter(
+          (order) => order.deliveredAt !== null && order.deliveredAt >= todayStart,
+        ).length,
+        late: openOperationalOrders.filter(
+          (order) => order.promisedAt !== null && businessDateKey(order.promisedAt) < dateKey,
+        ).length,
+        urgent: openOperationalOrders.filter((order) => order.priority === 'URGENT').length,
+        problems: openOperationalOrders.filter(
+          (order) =>
+            order.exceptionStatus === OrderExceptionStatus.PROBLEM ||
+            order.exceptionStatus === OrderExceptionStatus.PAUSED,
+        ).length,
+        shopify: openOperationalOrders.filter((order) => order.source === OrderSource.SHOPIFY)
+          .length,
+      },
+      attentionOrders,
+      salesByChannel: {
+        store: storeSalesMonth,
+        shopify: shopifySalesMonth,
+      },
+      delivery: {
+        pickupReady: readyOrders.filter((order) => order.deliveryMethod === 'PICKUP').length,
+        deliveryReady: readyOrders.filter((order) => order.deliveryMethod === 'DELIVERY').length,
+        provinceReady: readyOrders.filter((order) => order.deliveryMethod === 'PROVINCE_SHIPPING')
+          .length,
+        promisedToday: openOperationalOrders.filter(
+          (order) =>
+            order.promisedAt !== null &&
+            order.promisedAt >= todayStart &&
+            order.promisedAt < tomorrowStart,
+        ).length,
+        overdue: openOperationalOrders.filter(
+          (order) => order.promisedAt !== null && order.promisedAt < now,
+        ).length,
+      },
+      corporate: {
+        activeOrders: activeCorporateOrders.length,
+        pendingUnits: activeCorporateUnits.filter(
+          (unit) => unit.status === CorporateUnitStatus.PENDING,
+        ).length,
+        inProgressUnits: activeCorporateUnits.filter(
+          (unit) => unit.status === CorporateUnitStatus.IN_PROGRESS,
+        ).length,
+        completedUnits: activeCorporateUnits.filter(
+          (unit) => unit.status === CorporateUnitStatus.COMPLETED,
+        ).length,
+        pendingPartialDeliveries: activeCorporateUnits.filter(
+          (unit) => unit.status === CorporateUnitStatus.COMPLETED && unit.deliveredAt === null,
+        ).length,
       },
       openCashSessionDetails: openCashSessionDetails.map((session) => ({
         id: session.id,
@@ -737,16 +453,17 @@ export class DashboardService {
         createdAt: log.createdAt,
       })),
       fiscalSequenceAlerts: fiscalSequences
-        .filter((sequence, index, allSequences) =>
-          sequence.status === FiscalSequenceStatus.ACTIVE ||
-          !allSequences.some(
-            (candidate) =>
-              candidate.documentType === sequence.documentType &&
-              candidate.status === FiscalSequenceStatus.ACTIVE,
-          ) &&
-            allSequences.findIndex(
-              (candidate) => candidate.documentType === sequence.documentType,
-            ) === index,
+        .filter(
+          (sequence, index, allSequences) =>
+            sequence.status === FiscalSequenceStatus.ACTIVE ||
+            (!allSequences.some(
+              (candidate) =>
+                candidate.documentType === sequence.documentType &&
+                candidate.status === FiscalSequenceStatus.ACTIVE,
+            ) &&
+              allSequences.findIndex(
+                (candidate) => candidate.documentType === sequence.documentType,
+              ) === index),
         )
         .map((sequence) => {
           const total = sequence.endNumber - sequence.startNumber + 1;
@@ -767,14 +484,18 @@ export class DashboardService {
             threshold,
             validUntil: sequence.validUntil,
             status: sequence.status,
-            severity: expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
-              ? 'critical'
-              : 'warning',
+            severity:
+              expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
+                ? 'critical'
+                : 'warning',
             expired,
             exhausted,
           };
         })
-        .filter((sequence) => sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold),
+        .filter(
+          (sequence) =>
+            sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold,
+        ),
       employeeSummary: {
         activeEmployees,
         openCashSessions,
@@ -803,58 +524,49 @@ export class DashboardService {
       })),
       recentInventoryAlerts,
       salesSeries,
-      dailySalesSeries: this.buildDailySalesSeries(paymentsForSeries, returnsForSeries, now),
+      dailySalesSeries: this.buildDailySalesSeries(salesEntries, returnsForSeries, now),
     };
   }
 
   async getProductSales(tenantId: string) {
     const now = new Date();
-    const salesSince = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-    const [products, invoiceItems] = await Promise.all([
-      this.prisma.product.findMany({
-        where: {
-          tenantId,
-          status: ProductStatus.ACTIVE,
-          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
-        },
-        include: {
-          category: { select: { id: true, name: true } },
-        },
-        orderBy: { name: 'asc' },
-      }),
-      this.prisma.invoiceItem.findMany({
-        where: {
-          invoice: {
-            tenantId,
-            status: { in: revenueStatuses },
-            issuedAt: { gte: salesSince },
-          },
-        },
-        select: {
-          invoiceId: true,
-          productId: true,
-          sku: true,
-          barcode: true,
-          quantity: true,
-          total: true,
-          invoice: {
-            select: {
-              issuedAt: true,
-              createdAt: true,
-            },
-          },
-        },
-      }),
-    ]);
+    const [year, month] = businessDateKey(now).split('-').map(Number);
+    const salesSince = new Date(Date.UTC(year, month - 12, 1, 4));
+    const { products, invoiceItems } = await loadProductSalesSnapshot(
+      this.prisma,
+      tenantId,
+      salesSince,
+    );
 
-    const ranking = this.buildProductSalesRanking(products, invoiceItems);
+    const ranking = this.buildProductSalesRanking(
+      products,
+      invoiceItems.map((item) => ({
+        ...item,
+        quantity: Prisma.Decimal.max(
+          0,
+          item.quantity.sub(
+            item.returnRequestItems.reduce(
+              (sum, row) => sum.add(row.quantity),
+              new Prisma.Decimal(0),
+            ),
+          ),
+        ),
+        total: Prisma.Decimal.max(
+          0,
+          item.total.sub(
+            item.returnRequestItems.reduce((sum, row) => sum.add(row.total), new Prisma.Decimal(0)),
+          ),
+        ),
+      })),
+    );
 
     return {
       generatedAt: new Date(),
       periodStart: salesSince,
       productCount: products.length,
       productsWithSales: ranking.mostSold.filter((product) => product.quantitySold > 0).length,
-      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0).length,
+      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0)
+        .length,
       mostSold: ranking.mostSold,
       leastSold: ranking.leastSold,
     };
@@ -874,7 +586,8 @@ export class DashboardService {
     const buckets = new Map<string, number>();
 
     for (let index = 5; index >= 0; index -= 1) {
-      const date = new Date(now.getFullYear(), now.getMonth() - index, 1);
+      const [year, month] = businessDateKey(now).split('-').map(Number);
+      const date = new Date(Date.UTC(year, month - index - 1, 1, 4));
       buckets.set(this.monthKey(date), 0);
     }
 
@@ -913,7 +626,8 @@ export class DashboardService {
     }>,
     now: Date,
   ) {
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const [businessYear, businessMonth] = businessDateKey(now).split('-').map(Number);
+    const daysInMonth = new Date(Date.UTC(businessYear, businessMonth, 0)).getUTCDate();
     const buckets = new Map<number, number>(
       Array.from({ length: daysInMonth }, (_, index) => [index + 1, 0]),
     );
@@ -921,30 +635,25 @@ export class DashboardService {
     for (const payment of payments) {
       if (
         !payment.paidAt ||
-        payment.paidAt.getFullYear() !== now.getFullYear() ||
-        payment.paidAt.getMonth() !== now.getMonth()
+        businessDateKey(payment.paidAt).slice(0, 7) !== businessDateKey(now).slice(0, 7)
       ) {
         continue;
       }
 
-      const day = payment.paidAt.getDate();
+      const day = Number(businessDateKey(payment.paidAt).slice(8));
       buckets.set(day, (buckets.get(day) ?? 0) + this.decimalToNumber(payment.amount));
     }
 
     for (const returnRequest of returns) {
       if (
         !returnRequest.completedAt ||
-        returnRequest.completedAt.getFullYear() !== now.getFullYear() ||
-        returnRequest.completedAt.getMonth() !== now.getMonth()
+        businessDateKey(returnRequest.completedAt).slice(0, 7) !== businessDateKey(now).slice(0, 7)
       ) {
         continue;
       }
 
-      const day = returnRequest.completedAt.getDate();
-      buckets.set(
-        day,
-        (buckets.get(day) ?? 0) - this.decimalToNumber(returnRequest.refundAmount),
-      );
+      const day = Number(businessDateKey(returnRequest.completedAt).slice(8));
+      buckets.set(day, (buckets.get(day) ?? 0) - this.decimalToNumber(returnRequest.refundAmount));
     }
 
     return Array.from(buckets.entries()).map(([day, total]) => ({ day, total }));
@@ -953,6 +662,7 @@ export class DashboardService {
   private monthKey(date: Date) {
     return new Intl.DateTimeFormat('es-DO', {
       month: 'short',
+      timeZone: 'America/Santo_Domingo',
     }).format(date);
   }
 
@@ -1043,11 +753,19 @@ export class DashboardService {
     return {
       mostSold: [...ranking].sort((first, second) => {
         const quantityDiff = second.quantitySold - first.quantitySold;
-        return quantityDiff || second.grossAmount - first.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          second.grossAmount - first.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
       leastSold: [...ranking].sort((first, second) => {
         const quantityDiff = first.quantitySold - second.quantitySold;
-        return quantityDiff || first.grossAmount - second.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          first.grossAmount - second.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
     };
   }
@@ -1115,10 +833,7 @@ export class DashboardService {
         overdueBalance += balance;
       } else if (dueDateKey === boundaries.todayKey) {
         dueTodayCount += 1;
-      } else if (
-        dueDateKey >= boundaries.tomorrowKey &&
-        dueDateKey < boundaries.dueSoonEndKey
-      ) {
+      } else if (dueDateKey >= boundaries.tomorrowKey && dueDateKey < boundaries.dueSoonEndKey) {
         dueSoonCount += 1;
       }
     }
@@ -1172,4 +887,8 @@ export class DashboardService {
       return negativeMovementTypes.includes(movement.type) ? sum - amount : sum + amount;
     }, this.decimalToNumber(session.openingAmount));
   }
+}
+
+function groupedCount(entry: { _count?: true | { _all?: number } }) {
+  return typeof entry._count === 'object' ? (entry._count._all ?? 0) : 0;
 }

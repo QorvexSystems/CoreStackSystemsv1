@@ -34,6 +34,7 @@ const receivableRoles: Role[] = [
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 const dueSoonDays = 7;
 const excludedReceivableStatuses: InvoiceStatus[] = [
+  InvoiceStatus.DRAFT,
   InvoiceStatus.CANCELLED,
   InvoiceStatus.VOID,
   InvoiceStatus.VOIDED,
@@ -88,7 +89,6 @@ export class ReceivablesService {
     const invoices = await this.prisma.invoice.findMany({
       where: {
         tenantId,
-        paymentMode: SalePaymentMode.CREDIT,
         status: { notIn: excludedReceivableStatuses },
         ...(query
           ? {
@@ -129,7 +129,6 @@ export class ReceivablesService {
       include: {
         invoices: {
           where: {
-            paymentMode: SalePaymentMode.CREDIT,
             status: { notIn: excludedReceivableStatuses },
           },
           select: {
@@ -189,7 +188,6 @@ export class ReceivablesService {
       where: {
         tenantId,
         customerId,
-        paymentMode: SalePaymentMode.CREDIT,
         status: { notIn: excludedReceivableStatuses },
       },
       include: receivableInclude,
@@ -221,7 +219,7 @@ export class ReceivablesService {
         id: paymentId,
         tenantId,
         receiptNumber: { not: null },
-        invoice: { paymentMode: SalePaymentMode.CREDIT },
+        invoice: { tenantId },
       },
       include: {
         invoice: {
@@ -264,7 +262,14 @@ export class ReceivablesService {
     if (dto.idempotencyKey) {
       const existing = await this.findIdempotentPayment(tenantId, receiptNumber);
       if (existing) {
-        this.validateIdempotentPayment(existing, invoiceId, user.id, dto.cashSessionId, amount);
+        this.validateIdempotentPayment(
+          existing,
+          invoiceId,
+          user.id,
+          dto.cashSessionId,
+          amount,
+          dto.method ?? PaymentMethod.CASH,
+        );
         return this.getPayment(tenantId, existing.id);
       }
     }
@@ -277,7 +282,7 @@ export class ReceivablesService {
       result = await this.prisma.$transaction(async (tx) => {
         await this.lockInvoice(tx, tenantId, invoiceId);
         const invoice = await tx.invoice.findFirst({
-          where: { id: invoiceId, tenantId, paymentMode: SalePaymentMode.CREDIT },
+          where: { id: invoiceId, tenantId },
           include: { customer: true },
         });
         if (!invoice) {
@@ -319,7 +324,7 @@ export class ReceivablesService {
           data: {
             tenantId,
             invoiceId,
-            method: PaymentMethod.CASH,
+            method: dto.method ?? PaymentMethod.CASH,
             amount,
             status: PaymentStatus.COMPLETED,
             receiptNumber,
@@ -335,7 +340,7 @@ export class ReceivablesService {
             userId: user.id,
             type: CashMovementType.CREDIT_PAYMENT,
             amount,
-            method: PaymentMethod.CASH,
+            method: dto.method ?? PaymentMethod.CASH,
             reason: 'Abono de cuenta por cobrar',
             reference: receiptNumber,
             invoiceId,
@@ -368,7 +373,14 @@ export class ReceivablesService {
       if (dto.idempotencyKey) {
         const existing = await this.findIdempotentPayment(tenantId, receiptNumber);
         if (existing) {
-          this.validateIdempotentPayment(existing, invoiceId, user.id, dto.cashSessionId, amount);
+          this.validateIdempotentPayment(
+            existing,
+            invoiceId,
+            user.id,
+            dto.cashSessionId,
+            amount,
+            dto.method ?? PaymentMethod.CASH,
+          );
           return this.getPayment(tenantId, existing.id);
         }
       }
@@ -396,7 +408,6 @@ export class ReceivablesService {
           id: paymentId,
           tenantId,
           receiptNumber: { not: null },
-          invoice: { paymentMode: SalePaymentMode.CREDIT },
         },
         select: { invoiceId: true, status: true },
       });
@@ -415,7 +426,7 @@ export class ReceivablesService {
           id: paymentId,
           tenantId,
           receiptNumber: { not: null },
-          invoice: { paymentMode: SalePaymentMode.CREDIT },
+          invoice: { tenantId },
         },
         include: { invoice: true },
       });
@@ -469,7 +480,7 @@ export class ReceivablesService {
           userId: user.id,
           type: CashMovementType.CASH_OUT,
           amount: payment.amount,
-          method: PaymentMethod.CASH,
+          method: payment.method,
           reason: 'Anulación de abono de cuenta por cobrar',
           reference: payment.receiptNumber,
           invoiceId: payment.invoiceId,
@@ -524,12 +535,13 @@ export class ReceivablesService {
     userId: string,
     cashSessionId: string,
     amount: Prisma.Decimal,
+    method: PaymentMethod,
   ) {
     if (
       payment.invoiceId !== invoiceId ||
       payment.userId !== userId ||
       payment.cashSessionId !== cashSessionId ||
-      payment.method !== PaymentMethod.CASH ||
+      payment.method !== method ||
       !payment.amount.eq(amount)
     ) {
       throw new ConflictException('Idempotency key was already used for a different payment.');
@@ -660,7 +672,11 @@ export class ReceivablesService {
 
   private requireAccess(tenantId: string, user: AuthenticatedUser) {
     const role = this.getRole(tenantId, user);
-    if (!role || !receivableRoles.includes(role)) {
+    const membership = user.memberships.find((row) => row.tenantId === tenantId);
+    if (
+      !role ||
+      (!receivableRoles.includes(role) && !(role === Role.ORDER_TAKER && membership?.canUsePos))
+    ) {
       throw new ForbiddenException('Accounts receivable access is required.');
     }
   }

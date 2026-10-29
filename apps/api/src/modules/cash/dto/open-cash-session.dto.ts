@@ -7,6 +7,6 @@ export class OpenCashSessionDto {
 
   @Type(() => Number)
   @IsNumber()
-  @Min(0.01, { message: 'Opening amount must be greater than zero.' })
+  @Min(0, { message: 'El fondo inicial no puede ser negativo.' })
   openingAmount: number;
 }

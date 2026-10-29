@@ -285,7 +285,7 @@ ${xmlTaxTotals(tax)}
         dateStyle: 'medium',
         timeStyle: 'short',
       }),
-      CASH_REGISTER: input.cashRegisterName ?? 'Caja principal - ALLPA',
+      CASH_REGISTER: input.cashRegisterName ?? 'Caja principal - Unique Personalizado',
       PAYMENT_METHOD: paymentMethodLabel,
       PAYMENT_MODE: paymentModeLabel,
       ITEMS_HTML: emailItems,

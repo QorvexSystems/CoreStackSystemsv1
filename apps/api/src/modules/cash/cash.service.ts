@@ -119,7 +119,7 @@ export class CashService {
   async openSession(tenantId: string, user: AuthenticatedUser, dto: OpenCashSessionDto) {
     this.requireOpenCashSessionPermission(tenantId, user);
 
-    if (dto.openingAmount <= 0) {
+    if (dto.openingAmount < 0) {
       throw new BadRequestException('Opening amount must be greater than zero.');
     }
 
@@ -147,6 +147,13 @@ export class CashService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "CashRegister" WHERE "id" = ${dto.cashRegisterId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      if (
+        await tx.cashSession.findFirst({
+          where: { tenantId, cashRegisterId: dto.cashRegisterId, status: CashSessionStatus.OPEN },
+        })
+      )
+        throw new BadRequestException('La caja ya está abierta.');
       const session = await tx.cashSession.create({
         data: {
           tenantId,
@@ -197,6 +204,16 @@ export class CashService {
     dto: CloseCashSessionDto,
   ) {
     this.requirePermission(tenantId, user, 'canCloseCashSession');
+    const membership = user.memberships.find((m) => m.tenantId === tenantId);
+    const ownSession = await this.prisma.cashSession.findFirst({
+      where: { id: cashSessionId, tenantId },
+    });
+    if (
+      ownSession &&
+      ownSession.openedById !== user.id &&
+      ![Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN].includes(membership?.role as any)
+    )
+      throw new ForbiddenException('Solo administración puede cerrar la caja de otra persona.');
 
     return this.prisma.$transaction(async (tx) => {
       const openSession = await tx.$queryRaw<Array<{ id: string }>>`

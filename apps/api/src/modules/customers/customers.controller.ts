@@ -18,12 +18,20 @@ export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Get()
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findAll(@TenantId() tenantId: string) {
     return this.customersService.findAll(tenantId);
   }
 
   @Post()
-  @Roles(Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
+  @Roles(Role.ORDER_TAKER, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
   create(
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -33,6 +41,14 @@ export class CustomersController {
   }
 
   @Get(':id')
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
   findOne(@TenantId() tenantId: string, @Param('id') id: string) {
     return this.customersService.findOne(tenantId, id);
   }

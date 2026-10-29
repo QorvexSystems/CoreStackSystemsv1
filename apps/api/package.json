@@ -7,7 +7,14 @@
     "dev": "dotenv -e ../../.env -- nest start --watch",
     "start": "dotenv -e ../../.env -- node dist/main.js",
     "build": "nest build",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && node --test test/flows.test.cjs test/dashboard-snapshot.test.cjs test/auth-cache.test.cjs test/production-board.test.cjs",
+    "test:demo": "pnpm build && dotenv -e ../../.env -- node test/demo-integration.cjs",
+    "test:stock": "pnpm build && dotenv -e ../../.env -- node test/store-stock-integration.cjs",
+    "test:http": "pnpm build && dotenv -e ../../.env -- node test/http-smoke.cjs",
+    "test:dashboard-performance": "pnpm build && dotenv -e ../../.env -- node test/dashboard-performance.cjs",
+    "test:module-performance": "pnpm build && dotenv -e ../../.env -- node test/module-performance.cjs",
+    "test:web-catalog": "node ../../packages/database/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json --test src/modules/web-catalog/web-catalog.spec.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.3",

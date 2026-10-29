@@ -339,9 +339,7 @@ export class SupplierInvoicesService {
     const ncf = normalizeNcf(dto.ncf);
     const issueDate = parseSupplierBusinessDate(dto.issueDate);
     const dueDate = dto.dueDate ? parseSupplierBusinessDate(dto.dueDate) : null;
-    const ncfValidUntil = dto.ncfValidUntil
-      ? parseSupplierBusinessDate(dto.ncfValidUntil)
-      : null;
+    const ncfValidUntil = dto.ncfValidUntil ? parseSupplierBusinessDate(dto.ncfValidUntil) : null;
     const paymentCondition = normalizeOptionalText(dto.paymentCondition) ?? null;
     this.validateDates(issueDate, dueDate);
     this.validateNcfValidUntil(issueDate, ncfValidUntil);
@@ -355,6 +353,7 @@ export class SupplierInvoicesService {
             tenantId,
             supplierId: supplier.id,
             purchaseOrderId: purchaseOrder?.id,
+            inventoryDestination: purchaseOrder?.destination ?? dto.inventoryDestination,
             invoiceNumber,
             ncf,
             issueDate,
@@ -451,7 +450,7 @@ export class SupplierInvoicesService {
     const paymentCondition =
       dto.paymentCondition === undefined
         ? current.paymentCondition
-        : normalizeOptionalText(dto.paymentCondition) ?? null;
+        : (normalizeOptionalText(dto.paymentCondition) ?? null);
     this.validateDates(issueDate, dueDate);
     this.validateNcfValidUntil(issueDate, ncfValidUntil);
     await this.ensureUniqueIdentifiers(tenantId, supplier.id, invoiceNumber, ncf, current.id);
@@ -496,6 +495,10 @@ export class SupplierInvoicesService {
             data: {
               supplierId: supplier.id,
               purchaseOrderId: nextPurchaseOrderId,
+              inventoryDestination:
+                purchaseOrder?.destination ??
+                dto.inventoryDestination ??
+                current.inventoryDestination,
               invoiceNumber,
               ncf,
               issueDate,
@@ -585,13 +588,7 @@ export class SupplierInvoicesService {
           // debe pasar de borrador sin que una persona revise explícitamente
           // las diferencias frente a la orden de compra. Esto también protege
           // las llamadas directas a la API, no solo la pantalla web.
-          await this.assertOrderReconciliationAccepted(
-            tx,
-            tenantId,
-            userId,
-            id,
-            dto,
-          );
+          await this.assertOrderReconciliationAccepted(tx, tenantId, userId, id, dto);
 
           const receiptId = await this.receiptsService.createAndConfirmInTransaction(
             tx,
@@ -684,9 +681,7 @@ export class SupplierInvoicesService {
     }
     if (!invoice.purchaseOrder) return;
 
-    const orderItemsById = new Map(
-      invoice.purchaseOrder.items.map((item) => [item.id, item]),
-    );
+    const orderItemsById = new Map(invoice.purchaseOrder.items.map((item) => [item.id, item]));
     const linkedOrderItemIds = new Set<string>();
     const malformedLines: string[] = [];
     const quantityDifferences: Array<Record<string, string>> = [];

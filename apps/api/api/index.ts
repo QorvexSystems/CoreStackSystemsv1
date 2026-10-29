@@ -1,11 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
-import { createQorvexApiApp } from '../src/bootstrap';
+import { createCoreStackApiApp } from '../src/bootstrap';
 
 let cachedApp: INestApplication | null = null;
 
 async function getServer() {
   if (!cachedApp) {
-    cachedApp = await createQorvexApiApp();
+    cachedApp = await createCoreStackApiApp();
     await cachedApp.init();
   }
 

@@ -9,7 +9,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
-export async function createQorvexApiApp() {
+export async function createCoreStackApiApp() {
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
   });
@@ -81,6 +81,22 @@ export async function createQorvexApiApp() {
     publicMobileOcrCaptureRateLimiter(request, response, next);
   });
 
+  // Límite propio del canal e-commerce (por IP de origen), además del general. Cubre firmas inválidas y ráfagas.
+  const channelRateLimiter = rateLimit({
+    windowMs: getNumberConfig(config, 'CHANNEL_RATE_LIMIT_WINDOW_MS', 60 * 1000),
+    limit: getNumberConfig(config, 'CHANNEL_RATE_LIMIT_MAX', 120),
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { statusCode: 429, message: 'Demasiadas solicitudes al canal.' },
+  });
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    if (!isChannelRequest(request)) {
+      next();
+      return;
+    }
+    channelRateLimiter(request, response, next);
+  });
+
   app.use(
     rateLimit({
       windowMs: getNumberConfig(config, 'API_RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000),
@@ -110,7 +126,16 @@ export async function createQorvexApiApp() {
     }),
   );
 
-  app.use(json({ limit: getStringConfig(config, 'API_JSON_BODY_LIMIT', '1mb') }));
+  app.use(
+    json({
+      limit: getStringConfig(config, 'API_JSON_BODY_LIMIT', '1mb'),
+      verify: (request: Request & { rawBody?: Buffer }, _response, buffer) => {
+        if (request.path.startsWith('/integrations/shopify/webhooks/') || isChannelRequest(request)) {
+          request.rawBody = Buffer.from(buffer);
+        }
+      },
+    }),
+  );
   app.use(
     urlencoded({ extended: false, limit: getStringConfig(config, 'API_FORM_BODY_LIMIT', '1mb') }),
   );
@@ -194,7 +219,7 @@ function createInternalAccessMiddleware(config: ConfigService) {
   const rules = parseAllowedIpRules(config.get<string>('INTERNAL_ALLOWED_IPS', ''));
 
   return (request: Request, response: Response, next: NextFunction) => {
-    if (isPublicMobileOcrCaptureRequest(request)) {
+    if (isPublicMobileOcrCaptureRequest(request) || isShopifyWebhookRequest(request) || isChannelRequest(request)) {
       next();
       return;
     }
@@ -227,6 +252,20 @@ function isPublicMobileOcrCaptureRequest(request: Request) {
   return (
     (request.method === 'GET' || request.method === 'POST' || request.method === 'OPTIONS') &&
     publicMobileOcrCapturePath.test(request.path)
+  );
+}
+
+// El e-commerce llama desde infraestructura sin IP fija. /channel/* queda fuera del filtro de IP, pero cada
+// solicitud exige firma HMAC con marca de tiempo y nonce (ChannelAuthGuard), el canal está apagado sin
+// CHANNEL_* configurado y comparte el límite de solicitudes general. No hay ninguna otra ruta exceptuada.
+function isChannelRequest(request: Request) {
+  return (request.method === 'GET' || request.method === 'POST') && request.path.startsWith('/channel/');
+}
+
+function isShopifyWebhookRequest(request: Request) {
+  return (
+    (request.method === 'POST' || request.method === 'OPTIONS') &&
+    request.path.startsWith('/integrations/shopify/webhooks/')
   );
 }
 
@@ -362,7 +401,7 @@ function ipv4ToNumber(value: string) {
   return (((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]) >>> 0;
 }
 
-export async function listenQorvexApi(app: INestApplication) {
+export async function listenCoreStackApi(app: INestApplication) {
   const config = app.get(ConfigService);
   const port = config.get<number>('API_PORT', 4000);
   await app.listen(port);

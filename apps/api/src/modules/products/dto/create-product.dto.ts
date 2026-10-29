@@ -1,4 +1,10 @@
-import { BarcodeType, ProductStatus, ProductUnit, TaxCategory } from '@qorvex/database';
+import {
+  BarcodeType,
+  ProductKind,
+  ProductStatus,
+  ProductUnit,
+  TaxCategory,
+} from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -39,6 +45,20 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(80)
   brand?: string;
+
+  @IsOptional()
+  @IsEnum(ProductKind)
+  kind?: ProductKind;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  material?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  measurement?: string;
 
   @IsOptional()
   @IsEnum(ProductUnit)

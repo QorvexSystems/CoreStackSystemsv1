@@ -1,3 +1,4 @@
+import { markInventoryChanged } from '../../common/utils/stock-reservations';
 import {
   BadRequestException,
   ForbiddenException,
@@ -12,6 +13,7 @@ import {
   InventoryMovementType,
   InvoiceStatus,
   PaymentMethod,
+  ProductInventoryDestination,
   Prisma,
   ProductUnit,
   ReturnRequestStatus,
@@ -20,6 +22,7 @@ import {
 } from '@qorvex/database';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ShopifyService } from '../shopify/shopify.service';
 import {
   ApproveReturnRequestDto,
   CreateReturnRequestDto,
@@ -27,7 +30,7 @@ import {
 } from './dto/create-return-request.dto';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
-const requestRoles: Role[] = [Role.CASHIER, ...adminRoles];
+const requestRoles: Role[] = [Role.ORDER_TAKER, Role.CASHIER, ...adminRoles];
 const requestBlockingStatuses: ReturnRequestStatus[] = [
   ReturnRequestStatus.REQUESTED,
   ReturnRequestStatus.APPROVED,
@@ -47,7 +50,10 @@ const transactionOptions = {
 
 @Injectable()
 export class ReturnsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shopify: ShopifyService,
+  ) {}
 
   async findAll(tenantId: string, user: AuthenticatedUser, status?: string) {
     const membership = this.getMembership(tenantId, user);
@@ -76,7 +82,7 @@ export class ReturnsService {
       throw new BadRequestException('Invoice number is required for return lookup.');
     }
 
-    const invoice = await this.prisma.invoice.findFirst({
+    const invoices = await this.prisma.invoice.findMany({
       where: {
         tenantId,
         OR: [
@@ -87,17 +93,31 @@ export class ReturnsService {
           { eNcf: { equals: query, mode: 'insensitive' } },
           { salesOrder: { is: { orderNumber: { equals: query, mode: 'insensitive' } } } },
           { salesOrder: { is: { orderNumber: { contains: query, mode: 'insensitive' } } } },
+          { customer: { is: { name: { contains: query, mode: 'insensitive' } } } },
+          { salesOrder: { is: { clientName: { contains: query, mode: 'insensitive' } } } },
+          { customer: { is: { documentNumber: { equals: query, mode: 'insensitive' } } } },
+          { customer: { is: { documentNumber: { contains: query, mode: 'insensitive' } } } },
         ],
       },
       include: this.invoiceLookupInclude(),
       orderBy: { createdAt: 'desc' },
+      take: 30,
     });
-
+    const invoice = invoices[0];
     if (!invoice) {
       throw new NotFoundException('Invoice not found for return lookup.');
     }
 
-    return this.attachReturnAvailability(tenantId, invoice);
+    return {
+      ...(await this.attachReturnAvailability(tenantId, invoice)),
+      matches: invoices.map((row) => ({
+        id: row.id,
+        invoiceNumber: row.invoiceNumber,
+        total: row.total.toString(),
+        createdAt: row.createdAt.toISOString(),
+        clientName: row.customer?.name ?? 'Consumidor final',
+      })),
+    };
   }
 
   async create(tenantId: string, user: AuthenticatedUser, dto: CreateReturnRequestDto) {
@@ -194,7 +214,7 @@ export class ReturnsService {
     const membership = this.getMembership(tenantId, user);
     this.ensureCanApproveReturn(membership);
 
-    return this.prisma.$transaction(async (tx) => {
+    const completedReturn = await this.prisma.$transaction(async (tx) => {
       await this.lockReturnRequest(tx, tenantId, returnRequestId);
       const requestHeader = await tx.returnRequest.findFirst({
         where: {
@@ -222,8 +242,16 @@ export class ReturnsService {
 
       await this.ensureRequestCanStillBeCompleted(tx, tenantId, request);
 
+      if (
+        dto.restockDestination &&
+        dto.restockDestination !== ProductInventoryDestination.SALES_INVENTORY
+      ) {
+        throw new BadRequestException('Las devoluciones ya no ingresan stock físico en Fábrica.');
+      }
+      const restockDestination = ProductInventoryDestination.SALES_INVENTORY;
       const refundMethod = dto.refundMethod ?? request.refundMethod ?? PaymentMethod.CASH;
-      const isCreditReturn = request.invoice.paymentMode === SalePaymentMode.CREDIT;
+      const isCreditReturn =
+        request.invoice.paymentMode === SalePaymentMode.CREDIT || request.invoice.balance.gt(0);
       if (isCreditReturn && request.invoice.customerId) {
         await this.lockCustomer(tx, tenantId, request.invoice.customerId);
       }
@@ -282,6 +310,7 @@ export class ReturnsService {
           );
         }
 
+        await markInventoryChanged(tx, tenantId, product.id);
         const updated = await tx.$queryRaw<Array<{ stock: number }>>`
           UPDATE "Product"
           SET "stock" = "stock" + ${quantity}
@@ -340,6 +369,7 @@ export class ReturnsService {
           status: ReturnRequestStatus.COMPLETED,
           cashSessionId: cashSession?.id,
           refundMethod,
+          restockDestination,
           creditAppliedAmount,
           cashRefundAmount,
           adminNote: dto.adminNote?.trim() || undefined,
@@ -350,7 +380,7 @@ export class ReturnsService {
         throw new BadRequestException('Return request could not be completed.');
       }
 
-      if (isCreditReturn && request.invoice.customerId) {
+      {
         const nextBalance = request.invoice.balance.sub(creditAppliedAmount).toDecimalPlaces(2);
         const nextPaidAmount = request.invoice.paidAmount.sub(cashRefundAmount).toDecimalPlaces(2);
         if (nextPaidAmount.lt(0)) {
@@ -371,21 +401,28 @@ export class ReturnsService {
             status: nextStatus,
           },
         });
-        const creditBalance = await tx.invoice.aggregate({
-          where: {
-            tenantId,
-            customerId: request.invoice.customerId,
-            paymentMode: SalePaymentMode.CREDIT,
-            status: {
-              notIn: [InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.VOIDED],
+        if (request.invoice.customerId) {
+          const creditBalance = await tx.invoice.aggregate({
+            where: {
+              tenantId,
+              customerId: request.invoice.customerId,
+              paymentMode: SalePaymentMode.CREDIT,
+              status: {
+                notIn: [
+                  InvoiceStatus.DRAFT,
+                  InvoiceStatus.CANCELLED,
+                  InvoiceStatus.VOID,
+                  InvoiceStatus.VOIDED,
+                ],
+              },
             },
-          },
-          _sum: { balance: true },
-        });
-        await tx.customer.update({
-          where: { id: request.invoice.customerId },
-          data: { creditBalance: creditBalance._sum.balance ?? new Prisma.Decimal(0) },
-        });
+            _sum: { balance: true },
+          });
+          await tx.customer.update({
+            where: { id: request.invoice.customerId },
+            data: { creditBalance: creditBalance._sum.balance ?? new Prisma.Decimal(0) },
+          });
+        }
       }
 
       await this.creditInvoiceIfFullyReturned(tx, tenantId, request.invoiceId);
@@ -433,6 +470,14 @@ export class ReturnsService {
         include: this.returnRequestInclude(),
       });
     }, transactionOptions);
+    await Promise.all(
+      completedReturn.items.flatMap((item) =>
+        item.restock && item.productId
+          ? [this.shopify.syncProductIfConfigured(tenantId, item.productId)]
+          : [],
+      ),
+    );
+    return completedReturn;
   }
 
   async reject(
