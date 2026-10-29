@@ -1,183 +1,163 @@
-# CoreStack
+# CoreStack · Unique Personalizado
 
-CoreStack is a custom SaaS/ERP foundation for multi-company business management in the Dominican Republic. This repository intentionally does not use Odoo, Supabase, fake DGII logic, microservices, or premature infrastructure complexity.
+ERP interno de Unique Personalizado, desarrollado sobre la plataforma CoreStack. Centraliza catálogo, inventario, ventas, facturación y la cola de producción entre la tienda, Shopify y la fábrica.
 
-## Stack
+## Alcance
 
-- Monorepo with pnpm workspaces.
-- Frontend: Next.js, TypeScript, Tailwind CSS, shadcn/ui style components, React Hook Form, Zod, TanStack Query, Recharts.
-- Backend: NestJS, TypeScript, REST API, Prisma, DTO validation, tenant-aware modules.
-- Database: PostgreSQL 16 through Docker Compose.
-- ORM and migrations: Prisma in `packages/database`.
+- Catálogo e inventario administrados desde CoreStack.
+- Inventario separado para tienda y fábrica.
+- Órdenes unificadas de Shopify y POS.
+- Kanban de producción: en espera, en fábrica, lista para entregar y entregada.
+- Productos normales, personalizados y órdenes empresariales.
+- Cotizaciones, anticipos, balances, crédito y devoluciones.
+- NCF/e-CF preparado para integrar un proveedor autorizado.
+- Notificaciones por correo.
+- Operación multiusuario con permisos por rol.
 
-## Architecture
+## Arquitectura
 
-The first foundation uses a modular monolith backend and a separated frontend:
+- `apps/web`: Next.js 15 y React 19.
+- `apps/api`: NestJS.
+- `packages/database`: Prisma y PostgreSQL administrado en Supabase.
+- `packages/types`, `packages/utils`, `packages/config`: paquetes compartidos.
 
-```text
-apps/
-  api/        NestJS REST API
-  web/        Next.js frontend
-packages/
-  database/   Prisma schema, migrations, seed and generated client
-  config/     Shared configuration placeholder
-  types/      Shared domain types placeholder
-  utils/      Shared utility placeholder
-```
+La aplicación mantiene separación por tenant. `Unique Personalizado` es el tenant operativo y `CoreStack` conserva acceso de soporte de plataforma.
 
-Turborepo is not included in this first phase. pnpm workspaces are enough for a clean start and keep the team focused on the product foundation.
+## Requisitos
 
-## Requirements
+- Node.js 20 o superior.
+- pnpm 10.12.4.
+- Acceso al proyecto Supabase de Unique Personalizado.
+- Archivo `.env` basado en `.env.example`.
 
-- Node.js 22+ recommended.
-- pnpm 10+. If pnpm is not installed, run `corepack enable`.
-- Docker Desktop or Docker Engine.
-
-On Windows, if `corepack enable` cannot write the global pnpm shim, use `corepack pnpm <command>` for the first install. After dependencies are installed, this repo also has pnpm available locally for workspace scripts.
-
-## Local Setup
+## Instalación local
 
 ```bash
-corepack enable
-pnpm install
-Copy-Item .env.example .env
+pnpm install --frozen-lockfile
 pnpm db:generate
-docker compose up -d
-pnpm db:migrate
-pnpm db:seed
+pnpm --filter @qorvex/database build
 pnpm dev
 ```
 
-On macOS/Linux, replace `Copy-Item .env.example .env` with `cp .env.example .env`.
+Servicios locales:
 
-## Commands
+- Web: `http://localhost:3000`
+- API: `http://localhost:4000`
+- Salud de API: `http://localhost:4000/health`
 
-- `pnpm dev`: starts API and web.
-- `pnpm dev:api`: starts NestJS on port `4000`.
-- `pnpm dev:web`: starts Next.js on port `3000`.
-- `pnpm build`: builds API and web.
-- `pnpm lint`: runs TypeScript checks for API and web.
-- `pnpm format`: formats source files.
-- `pnpm db:generate`: generates Prisma client.
-- `pnpm db:migrate`: creates/applies local migrations.
-- `pnpm db:migrate:deploy`: applies committed migrations.
-- `pnpm db:seed`: loads demo development data.
-- `pnpm db:studio`: opens Prisma Studio.
+## Base de datos
 
-## Environment
-
-Use `.env.example` as the template. Do not commit `.env` or real secrets.
-
-The initial API uses `x-tenant-id` as a temporary development tenant context. This is deliberate and must be replaced by real authentication plus membership checks in the next phase.
-
-For the temporary Supabase PostgreSQL and Vercel deployment flow, see `docs/DEPLOYMENT_SUPABASE_VERCEL.md`.
-
-## API Validation
-
-After running migrations and seed:
+Aplicar migraciones existentes:
 
 ```bash
-curl http://localhost:4000/health
+pnpm db:migrate:deploy
 ```
 
-Demo credentials:
-
-```text
-RIVNU admin: admin@rivnu.local / DemoPassword123!
-RIVNU cashier: cajero@rivnu.local / DemoPassword123!
-CoreStack platform: superadmin@corestack.local / DemoPassword123!
-```
-
-Login and call protected endpoints:
+Crear o actualizar los tenants y accesos administrativos iniciales:
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:4000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@rivnu.local","password":"DemoPassword123!"}' | jq -r .accessToken)
-
-TENANT_ID=$(curl -s -X POST http://localhost:4000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@rivnu.local","password":"DemoPassword123!"}' | jq -r '.memberships[0].tenantId')
-
-curl -H "Authorization: Bearer $TOKEN" \
-  -H "x-tenant-id: $TENANT_ID" \
-  http://localhost:4000/dashboard/summary
+pnpm db:seed
 ```
 
-Tenant-scoped business endpoints require both `Authorization: Bearer <token>` and `x-tenant-id`.
+El seed es idempotente. No elimina información operativa ni crea productos, clientes, facturas o secuencias fiscales ficticias. Las contraseñas se leen de las variables `SEED_*` del `.env` y nunca se imprimen.
 
-## Frontend Validation
+### Datos de prueba
 
-- Open `http://localhost:3000/login` for the visual login.
-- Open `http://localhost:3000/dashboard` for the main dashboard.
-- The dashboard stores the demo JWT in local storage and fetches real summary data from the API.
-- Operational modules for dashboard, POS, products, customers, invoices, employees, cash logs, cash sessions, imports and fiscal sequences read/write through the API using PostgreSQL data.
+Para crear o actualizar el conjunto demo reducido y verificarlo:
 
-## RIVNU Data And CoreStack Core
+```bash
+pnpm db:seed:demo
+pnpm db:verify:demo
+```
 
-The current seed creates the operational tenant `Ferreteria RIVNU` and a separate internal provider tenant `CoreStack`.
+El conjunto incluye tres productos con existencia separada entre tienda y fábrica, un cliente empresarial con crédito, secuencias B01/B02 y estos accesos:
 
-RIVNU users only operate RIVNU tenant data: POS, invoices, customers, products, inventory, employees, cash sessions, cash movements and fiscal sequences all require tenant context. CoreStack is the platform/core provider and appears in the UI as a secondary "Powered by CoreStack" brand, not as the customer business.
+- `admin@uniquepersonalizado.com`: administración.
+- `contabilidad@uniquepersonalizado.com`: contabilidad.
+- `ordenes@uniquepersonalizado.com`: toma de órdenes y POS.
+- `fabrica@uniquepersonalizado.com`: producción y despacho.
 
-The seed data is persisted in PostgreSQL and is not hardcoded in the frontend. It is a development starting dataset for RIVNU operations: hardware-store products, barcodes, opening stock, customers, cash session, fiscal sequences, paid/pending/cancelled invoices, payments and employee logs. It is not RIVNU's historical production data. When the client provides real catalog/customers/opening inventory, it should be loaded through the API or the prepared import module.
+Las tres cuentas operativas usan `SEED_UNIQUE_DEMO_PASSWORD`; si esa variable no está definida, el seed demo local usa `UniqueDemo#2026!`. El administrador conserva `SEED_UNIQUE_ADMIN_PASSWORD`. Estos accesos deben cambiarse antes de producción.
 
-## Multitenancy
+### Recorrido de prueba
 
-This foundation uses one PostgreSQL database with shared tables and `tenantId` on business records. Backend modules must filter by tenant. Never return operational data without tenant context.
+1. Ingresa como toma de órdenes, abre la caja y crea una orden con `Collar Personalizado Niños`, fecha prometida y datos de personalización.
+2. Cobra la orden en el POS. La factura pendiente creada junto con la orden se completa sin duplicarse.
+3. Ingresa como fábrica: aprueba el diseño, mueve la tarjeta a fábrica, registra control de calidad y márcala lista.
+4. Confirma que fábrica no vea precios ni pagos y que el correo de orden lista quede registrado.
+5. Entrega la orden desde tienda o fábrica y verifica el historial de la tarjeta.
+6. Busca la factura en Devoluciones por número, nombre, RNC o cédula y genera una solicitud.
+7. Crea una cotización empresarial para `Empresa Demo SRL`, agrega sus unidades y comprueba el contador pendiente/en progreso/terminado dentro de una sola tarjeta.
+8. Prueba inventario de tienda y de fábrica por separado y confirma el descuento desde el origen elegido.
 
-## DGII / e-CF
+La pantalla Importaciones también acepta órdenes abiertas en Excel. Cada fila representa un producto y las filas con el mismo `numero orden` se agrupan en una sola orden. El archivo [ordenes-abiertas-ejemplo.csv](examples/ordenes-abiertas-ejemplo.csv) documenta las columnas; ábrelo en Excel y guárdalo como `.xlsx` antes de cargarlo.
 
-The schema includes `ElectronicDocument` with provider/status fields so future DGII/e-CF integration has a place to evolve. This foundation does not implement real DGII XML, digital signatures, submission, or fiscal validation.
+## Variables sensibles
 
-## Supabase
+`.env` está excluido de Git. Nunca deben versionarse:
 
-Supabase is used only as an optional temporary managed PostgreSQL target for deployment. It does not replace NestJS, JWT auth, tenant guards, Prisma, or backend-owned business logic. Do not use Supabase Auth, Supabase REST, or direct frontend table access in this phase; follow `docs/DEPLOYMENT_SUPABASE_VERCEL.md`.
+- contraseñas de PostgreSQL;
+- claves secretas de Supabase;
+- `JWT_SECRET`;
+- credenciales de Shopify, AZUL o correo;
+- contraseñas administrativas del seed.
 
-## Auth Strategy
+Las variables y ejemplos seguros están documentados en `.env.example`.
 
-The foundation now includes backend-owned auth with email/password, bcrypt hash verification, JWT access tokens, active membership validation, tenant guards, and role guards.
+## Comandos de validación
 
-Still pending for production hardening: refresh token rotation, password recovery, MFA-ready login events, rate limiting, and secure cookie/session strategy.
+```bash
+pnpm lint
+pnpm build
+git diff --check
+```
 
-## Authorization
+Validaciones individuales:
 
-Business modules are protected by tenant membership. Write operations also require appropriate roles:
+```bash
+pnpm --filter @qorvex/database lint
+pnpm --filter @qorvex/api build
+pnpm --filter @qorvex/web build
+```
 
-- Customers: company admin, manager, accountant.
-- Products: company admin, manager, inventory.
-- Inventory movements: company admin, manager, inventory.
-- Invoices: company admin, manager, accountant, cashier depending on action.
-- Audit logs: company admin or manager.
+## Identidad visual
 
-`SUPER_ADMIN` / `QORVEX_SUPER_ADMIN` are platform-level roles. RIVNU tenant employees use roles such as `ADMIN`, `CASHIER`, `INVENTORY` and permission booleans like `canUsePos`, `canOpenCashSession`, `canManageProducts`, and `canManageEmployees`.
+Los recursos de Unique Personalizado se encuentran en `apps/web/public/brand`. El recurso principal fue convertido en los iconos de navegador, Apple Home Screen y PWA. CoreStack permanece visible como proveedor tecnológico.
 
-## Audit
+## Flujo operativo objetivo
 
-Write actions for customers, products, inventory movements, invoices, POS sales, cash sessions and employee administration create either `AuditLog` or `EmployeeActivityLog` records with tenant, user, action, entity, entity id, and small metadata.
-
-POS-created invoices recalculate totals in the backend, reserve a fiscal sequence, create invoice items, payments, cash movements, inventory `SALE` movements, electronic-document placeholders and employee activity logs in the same backend transaction.
-
-## Billing Provider
-
-The backend includes a `BillingProvider` abstraction and a `MockBillingProvider`. This is only a future integration seam; it does not implement real DGII XML, signatures, fiscal validation, submission, or cancellation.
-
-## Development Flow
-
-- `main`: stable.
-- `development`: integration.
-- `feature/*`: task branches.
-
-Recommended foundation commit:
+Orden normal:
 
 ```text
-feat: initialize CoreStack custom SaaS foundation
+Orden creada → En espera → Lista para entregar → Entregada
 ```
 
-## Next Modules
+Orden personalizada:
 
-- Real authentication and membership-aware tenant selection.
-- Role and permission guards.
-- Invoice creation workflow.
-- Inventory adjustment workflows.
-- Audit events for write operations.
-- Billing provider abstraction for future e-CF work.
+```text
+Orden creada → Aprobación manual → En espera → En fábrica → Control de calidad → Lista para entregar → Entregada
+```
+
+Orden empresarial:
+
+```text
+Cotización → Aprobada → Orden → Producción agrupada → Entrega
+```
+
+Las órdenes empresariales mantienen una sola tarjeta y muestran unidades pendientes, en progreso y terminadas. Solamente este tipo de orden admite entregas parciales.
+
+## Decisiones de producto
+
+- CoreStack será la fuente principal de catálogo, precios e inventario.
+- Shopify enviará órdenes y pagos al ERP y recibirá catálogo e inventario.
+- Toda orden tendrá fecha prometida y reservará inventario al crearse.
+- Las órdenes normales también aparecerán en el Kanban, pero omitirán fábrica.
+- La fábrica no verá precios ni información financiera.
+- La primera versión notificará por correo; WhatsApp queda fuera del alcance.
+- La selección del proveedor e-CF se mantiene pendiente.
+
+
+
+## Mejoras y pruebas de la demo
+
+Ver [mejoras implementadas, comandos y pendientes](MEJORAS_DEMO.md). Los cambios de seguridad de Supabase/cuentas entre empresas están fuera de esta iteración. Correo real y proveedor e-CF permanecen pendientes.

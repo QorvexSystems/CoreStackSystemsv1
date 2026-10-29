@@ -12,6 +12,7 @@ coverage
 .turbo
 .tmp
 .dev-logs/
+supabase/.temp/
 /AbarrotesPDV/
 /docs/
 .DS_Store

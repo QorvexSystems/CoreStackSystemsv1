@@ -14,9 +14,9 @@
     "db:generate": "pnpm --filter @qorvex/database generate",
     "db:migrate": "pnpm --filter @qorvex/database migrate",
     "db:migrate:deploy": "pnpm --filter @qorvex/database migrate:deploy",
-    "db:cleanup:rivnu": "pnpm --filter @qorvex/database cleanup:rivnu",
-    "db:cleanup:rivnu:operational": "pnpm --filter @qorvex/database cleanup:rivnu:operational",
     "db:seed": "pnpm --filter @qorvex/database seed",
+    "db:seed:demo": "pnpm --filter @qorvex/database seed:demo",
+    "db:verify:demo": "pnpm --filter @qorvex/database verify:demo",
     "db:studio": "pnpm --filter @qorvex/database studio"
   },
   "devDependencies": {

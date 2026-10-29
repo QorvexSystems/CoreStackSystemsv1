@@ -1,0 +1,4 @@
+numero orden,cliente,documento cliente,sku,cantidad,precio unitario,fecha prometida,urgente,empresarial,entrega,despacho,inventario,canal,pagado,inventario descontado,etapa,diseno aprobado,calidad aprobada,dijes,ninos,material,personalizacion,correo,telefono,direccion,notas
+DEMO-HIST-001,Cliente de prueba,,UP-COL-NIN,1,2950,2026-10-23,si,no,recogida,fabrica,fabrica,tienda,0,no,WAITING,no,no,2,1,Plata 925,Nombre Ana,cliente@example.com,,,Pendiente: reserva al importar
+DEMO-HIST-002,Empresa Demo SRL,131999991,UP-PUL-DIJ,2,2450,2026-10-30,no,si,delivery,tienda,tienda,tienda,0,no,WAITING,no,no,1,0,Baño de oro,Dedicatorias,compras@empresa-demo.test,809-555-0101,Santo Domingo,Una sola orden empresarial
+DEMO-HIST-002,Empresa Demo SRL,131999991,UP-CAD-001,2,1750,2026-10-30,no,si,delivery,tienda,tienda,tienda,0,no,WAITING,no,no,,,,,compras@empresa-demo.test,809-555-0101,Santo Domingo,Segunda línea de la misma orden
