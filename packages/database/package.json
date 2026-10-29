@@ -27,6 +27,7 @@
     "studio": "dotenv -e ../../.env -- prisma studio --schema prisma/schema.prisma",
     "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "import:web-catalog": "tsx src/web-catalog-import/cli.ts",
+    "import:web-catalog:remote": "dotenv -e ../../.env -- tsx src/web-catalog-import/remote-cli.ts",
     "test:web-catalog": "tsx --test src/web-catalog-import/importer.test.ts",
     "test:web-catalog:integration": "tsx --test src/web-catalog-import/integration.test.ts",
     "test:security-hardening": "node security/supabase-hardening/test-local.mjs"

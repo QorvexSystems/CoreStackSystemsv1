@@ -46,7 +46,7 @@ export interface ImportStore {
 }
 
 export type Conflict = { kind: 'GROUP' | 'VARIANT'; id: string; reason: string };
-export type ImportMode = 'dry-run' | 'isolated';
+export type ImportMode = 'dry-run' | 'isolated' | 'remote-authorized';
 export type ImportStatus = 'INVALID_INPUT' | 'DRY_RUN_OK' | 'ABORTED_CONFLICTS' | 'NO_CHANGES' | 'APPLIED' | 'FAILED';
 
 export type ImportReport = {
@@ -106,7 +106,7 @@ export type RunOptions = {
 export async function runImport(plan: ImportPlan, options: RunOptions): Promise<ImportReport> {
   const report = baseReport(plan, options.mode, options.sourceSha256, options.tenantSlug);
   if (plan.errors.length) return { ...report, status: 'INVALID_INPUT' };
-  if (options.mode === 'isolated' && !options.store) throw new Error('El modo isolated requiere un almacén de datos');
+  if (options.mode !== 'dry-run' && !options.store) throw new Error(`El modo ${options.mode} requiere un almacén de datos`);
 
   const store = options.store;
   let tenantId: string | null = null;
