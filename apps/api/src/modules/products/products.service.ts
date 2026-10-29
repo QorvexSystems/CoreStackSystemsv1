@@ -51,6 +51,8 @@ export class ProductsService {
       where: {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
+        // Los productos retirados (DISCONTINUED) conservan su historial pero salen del listado operativo.
+        status: { not: ProductStatus.DISCONTINUED },
         ...(q ? { OR: this.searchConditions(q) } : {}),
       },
       include: {
