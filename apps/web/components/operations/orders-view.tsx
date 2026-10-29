@@ -1037,9 +1037,9 @@ export function OrdersView() {
         </Button>
       </div>
 
-      <section className="xl:h-[calc(100vh-9rem)] xl:overflow-hidden">
-        <div className="space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:space-y-3">
-          <Card className="overflow-hidden border-zinc-200 bg-white xl:shrink-0">
+      <section>
+        <div className="space-y-4">
+          <Card className="overflow-hidden border-zinc-200 bg-white">
             <CardHeader className="border-b border-zinc-100 bg-zinc-50/70 pb-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -1108,7 +1108,7 @@ export function OrdersView() {
             </CardContent>
           </Card>
 
-          <div className="surface-scrollbar xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-2">
+          <div>
             <PosProductGrid
               products={filteredProducts}
               quantitiesByProduct={quantitiesByProduct}

@@ -89,10 +89,10 @@ export function PosProductGrid({
                         : `En stock · ${formatQuantity(availableStock)}`
                       : 'Servicio'}
                 </Badge>
-                <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">
+                <h3 className="break-words text-sm font-semibold leading-5 text-zinc-950">
                   {product.name}
                 </h3>
-                <p className="mt-1 truncate text-xs text-muted-foreground">
+                <p className="mt-1 break-all text-xs text-muted-foreground">
                   SKU: {product.sku ?? product.barcode ?? 'Sin código'}
                 </p>
               </div>
@@ -100,7 +100,7 @@ export function PosProductGrid({
 
             <div className="mt-auto flex items-end justify-between gap-3 pt-3">
               <div className="min-w-0">
-                <p className="truncate text-xs text-muted-foreground">
+                <p className="text-xs leading-4 text-muted-foreground">
                   {product.category?.name ?? 'Sin categoría'} ·{' '}
                   {product.material ?? product.brand ?? 'Sin material'}
                 </p>
