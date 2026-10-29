@@ -3,7 +3,6 @@
 import {
   Activity,
   BadgeDollarSign,
-  Barcode,
   Boxes,
   ChevronDown,
   ChevronRight,
@@ -15,6 +14,7 @@ import {
   LayoutDashboard,
   MoreHorizontal,
   Package,
+  PanelsTopLeft,
   PanelLeftClose,
   PanelLeftOpen,
   RotateCcw,
@@ -37,8 +37,8 @@ import {
 import { brand, platform } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 
-type NavigationSectionId = 'main' | 'accounting' | 'secondary' | 'logs' | 'settings';
-type NavigationGroupId = 'accounting' | 'logs';
+type NavigationSectionId = 'main' | 'finance' | 'purchases' | 'administration';
+type NavigationGroupId = Exclude<NavigationSectionId, 'main'>;
 
 export type NavigationItem = {
   name: string;
@@ -57,10 +57,9 @@ type NavigationSection = {
 
 const sectionDefinitions: Array<Pick<NavigationSection, 'id' | 'label' | 'icon'>> = [
   { id: 'main' },
-  { id: 'accounting', label: 'Contable', icon: Landmark },
-  { id: 'secondary' },
-  { id: 'logs', label: 'Logs', icon: ScrollText },
-  { id: 'settings' },
+  { id: 'finance', label: 'Finanzas', icon: Landmark },
+  { id: 'purchases', label: 'Compras y suplidores', icon: ClipboardList },
+  { id: 'administration', label: 'Administración', icon: Settings },
 ];
 
 export const navigation: NavigationItem[] = [
@@ -73,48 +72,65 @@ export const navigation: NavigationItem[] = [
     primary: true,
     section: 'main',
   },
-  { name: 'Cotizaciones', href: '/quotations', icon: FileText, section: 'main' },
+  {
+    name: 'Producción y despacho',
+    href: '/production',
+    icon: PanelsTopLeft,
+    primary: true,
+    section: 'main',
+  },
   { name: 'Productos', href: '/products', icon: Package, section: 'main' },
-  { name: 'Códigos de barras', href: '/barcodes', icon: Barcode, section: 'main' },
+  { name: 'Fábrica', href: '/warehouse', icon: Boxes, section: 'main' },
+  { name: 'Cotizaciones', href: '/quotations', icon: FileText, section: 'main' },
   { name: 'Clientes', href: '/customers', icon: Users, section: 'main' },
   { name: 'Facturas', href: '/invoices', icon: FileText, primary: true, section: 'main' },
   { name: 'Devoluciones', href: '/returns', icon: RotateCcw, primary: true, section: 'main' },
+  { name: 'Cuentas por cobrar', href: '/receivables', icon: FileText, section: 'finance' },
+  {
+    name: 'Aprobaciones de crédito',
+    href: '/credit-approvals',
+    icon: BadgeDollarSign,
+    section: 'finance',
+  },
+  {
+    name: 'Secuencias fiscales',
+    href: '/settings/fiscal-sequences',
+    icon: ScrollText,
+    section: 'finance',
+  },
+  { name: 'Movimientos de caja', href: '/cash/logs', icon: ClipboardList, section: 'finance' },
+  { name: 'Sesiones de caja', href: '/cash/sessions', icon: ScrollText, section: 'finance' },
+  { name: 'Cajas', href: '/cash/registers', icon: Landmark, section: 'finance' },
+  { name: 'Suplidores', href: '/suppliers', icon: Users, section: 'purchases' },
   {
     name: 'Órdenes de compra',
     href: '/purchase-orders',
     icon: ClipboardList,
-    section: 'accounting',
+    section: 'purchases',
   },
   {
     name: 'Facturas de suplidores',
     href: '/supplier-invoices',
     icon: FileText,
-    section: 'accounting',
+    section: 'purchases',
   },
-  { name: 'Cuentas por pagar', href: '/payables', icon: ScrollText, section: 'accounting' },
-  { name: 'Cuentas por cobrar', href: '/receivables', icon: FileText, section: 'accounting' },
+  { name: 'Cuentas por pagar', href: '/payables', icon: ScrollText, section: 'purchases' },
+  { name: 'Empleados', href: '/employees', icon: Users, section: 'administration' },
+  { name: 'Importaciones', href: '/settings/imports', icon: FileUp, section: 'administration' },
   {
-    name: 'Secuencias fiscales',
-    href: '/settings/fiscal-sequences',
-    icon: ScrollText,
-    section: 'accounting',
+    name: 'Historial operativo',
+    href: '/operations/logs',
+    icon: Activity,
+    section: 'administration',
   },
-  { name: 'Suplidores', href: '/suppliers', icon: Users, section: 'secondary' },
-  { name: 'Almacén', href: '/warehouse', icon: Boxes, section: 'secondary' },
-  {
-    name: 'Aprobaciones de crédito',
-    href: '/credit-approvals',
-    icon: BadgeDollarSign,
-    section: 'secondary',
-  },
-  { name: 'Empleados', href: '/employees', icon: Users, section: 'secondary' },
-  { name: 'Logs operativos', href: '/operations/logs', icon: Activity, section: 'logs' },
-  { name: 'Movimiento de caja', href: '/cash/logs', icon: ClipboardList, section: 'logs' },
-  { name: 'Sesiones', href: '/cash/sessions', icon: ScrollText, section: 'logs' },
-  { name: 'Cajas', href: '/cash/registers', icon: Landmark, section: 'settings' },
-  { name: 'Importaciones', href: '/settings/imports', icon: FileUp, section: 'settings' },
-  { name: 'Configuración', href: '/settings', icon: Settings, section: 'settings' },
 ];
+
+const warehouseNavigationItem: NavigationItem = {
+  name: 'Fábrica',
+  href: '/warehouse',
+  icon: Boxes,
+  section: 'main',
+};
 
 export function Sidebar({
   collapsed = false,
@@ -128,7 +144,7 @@ export function Sidebar({
   return (
     <aside
       className={cn(
-        'fixed inset-y-0 left-0 z-30 hidden border-r border-slate-800 bg-slate-950 text-slate-100 transition-[width] duration-200 print:hidden lg:block',
+        'fixed inset-y-0 left-0 z-30 hidden border-r border-border bg-card font-sans text-foreground transition-[width] duration-200 print:hidden lg:block',
         collapsed ? 'w-[4.5rem]' : 'w-72',
       )}
     >
@@ -151,8 +167,9 @@ export function SidebarContent({
   const sections = getNavigationSections(session);
   const [activeGroup, setActiveGroup] = useState<NavigationGroupId | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<NavigationGroupId, boolean>>({
-    accounting: false,
-    logs: false,
+    finance: false,
+    purchases: false,
+    administration: false,
   });
 
   useEffect(() => {
@@ -162,7 +179,7 @@ export function SidebarContent({
   useEffect(() => {
     const activeSection = sections.find(
       (section) =>
-        (section.id === 'accounting' || section.id === 'logs') &&
+        section.id !== 'main' &&
         section.items.some((item) => isNavigationItemActive(pathname, item)),
     );
 
@@ -173,20 +190,26 @@ export function SidebarContent({
   }, [pathname]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col font-sans">
       <div
         className={cn(
-          'flex h-16 items-center gap-3 border-b border-slate-800 px-4',
+          'flex h-16 items-center gap-3 border-b border-border px-4',
           collapsed && 'justify-center px-2',
         )}
       >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm">
-          <img src={brand.logoPath} alt="" className="h-full w-full object-contain p-1" />
-        </div>
-        <div className={cn('min-w-0', collapsed && 'hidden')}>
-          <p className="truncate text-sm font-semibold">{brand.name}</p>
-          <p className="truncate text-xs text-slate-400">{brand.tagline}</p>
-        </div>
+        {collapsed ? (
+          <img
+            src={brand.logoPath}
+            alt={brand.name}
+            className="h-10 w-10 shrink-0 rounded-md object-contain"
+          />
+        ) : (
+          <img
+            src={brand.horizontalLogoPath}
+            alt={brand.name}
+            className="h-11 w-full object-contain object-left"
+          />
+        )}
       </div>
 
       {onToggle ? (
@@ -195,7 +218,7 @@ export function SidebarContent({
             type="button"
             onClick={onToggle}
             className={cn(
-              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               collapsed && 'justify-center px-2',
             )}
             aria-label={collapsed ? 'Desplegar menú' : 'Contraer menú'}
@@ -256,10 +279,10 @@ export function SidebarContent({
         })}
       </nav>
 
-      <div className={cn('shrink-0 border-t border-slate-800 p-4', collapsed && 'px-3')}>
+      <div className={cn('shrink-0 border-t border-border p-4', collapsed && 'px-3')}>
         <div
           className={cn(
-            'rounded-lg border border-slate-800 bg-slate-900/80 p-3',
+            'rounded-lg border border-border bg-surface-muted/60 p-3',
             collapsed && 'px-2.5',
           )}
         >
@@ -272,7 +295,7 @@ export function SidebarContent({
             <img src={platform.logoPath} alt="" className="h-5 w-5 rounded object-cover" />
             <span className={cn(collapsed && 'hidden')}>{platform.name}</span>
           </div>
-          <p className={cn('mt-2 text-xs leading-5 text-slate-400', collapsed && 'hidden')}>
+          <p className={cn('mt-2 text-xs leading-5 text-muted-foreground', collapsed && 'hidden')}>
             {platform.description} para {brand.name}.
           </p>
         </div>
@@ -310,13 +333,13 @@ function SidebarNavigationGroup({
           type="button"
           onClick={() => onExpandedChange(!isExpanded)}
           className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
-            (isActive || isExpanded) && 'bg-white/[0.08] text-white',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            (isActive || isExpanded) && 'text-gold-deep',
           )}
           aria-expanded={isExpanded}
           aria-controls={`sidebar-section-${section.id}`}
         >
-          <Icon className={cn('h-5 w-5', isActive && 'text-white')} />
+          <Icon className={cn('h-5 w-5', isActive && 'text-gold-deep')} />
           <span className="flex-1 text-left">{section.label}</span>
           <ChevronDown
             className={cn('h-4 w-4 transition-transform duration-200', !isExpanded && '-rotate-90')}
@@ -368,21 +391,21 @@ function SidebarNavigationGroup({
         type="button"
         onClick={() => onOpenChange(!isOpen)}
         className={cn(
-          'flex w-full items-center justify-center rounded-lg p-2.5 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
-          isActive && 'bg-white/[0.12] text-white shadow-sm',
+          'flex w-full items-center justify-center rounded-lg p-2.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          isActive && 'bg-gold-light/25 text-gold-deep shadow-sm',
         )}
         aria-expanded={isOpen}
         aria-label={`${section.label}: mostrar opciones`}
         title={section.label}
       >
-        <Icon className={cn('h-5 w-5', isActive && 'text-white')} />
+        <Icon className={cn('h-5 w-5', isActive && 'text-gold-deep')} />
       </button>
 
       {isOpen ? (
-        <div className="absolute left-[calc(100%+0.75rem)] top-0 z-50 w-60 overflow-hidden rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-[0_18px_40px_-16px_rgb(0_0_0_/_0.8)]">
-          <div className="mb-1 flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+        <div className="absolute left-[calc(100%+0.75rem)] top-0 z-50 w-60 overflow-hidden rounded-xl border border-border bg-background p-2 shadow-xl">
+          <div className="mb-1 flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             <span>{section.label}</span>
-            <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <div className="space-y-1">
             {section.items.map((item) => (
@@ -421,16 +444,16 @@ function SidebarNavigationLink({
       href={item.href}
       onClick={onNavigate}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+        'relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         collapsed && 'justify-center px-2.5',
         isActive
-          ? 'bg-white/[0.13] text-white shadow-sm'
-          : 'text-slate-300 hover:bg-white/[0.08] hover:text-white',
+          ? 'bg-[#F6E6BE] text-[#704800] shadow-[inset_3px_0_0_#996B00]'
+          : 'text-foreground hover:bg-surface-muted',
       )}
       title={collapsed ? item.name : undefined}
       aria-current={isActive ? 'page' : undefined}
     >
-      <Icon className={cn('h-5 w-5 shrink-0', isActive && 'text-white')} />
+      <Icon className={cn('h-5 w-5 shrink-0', isActive && 'text-gold-deep')} />
       <span className={cn('min-w-0 truncate', collapsed && 'hidden')}>{item.name}</span>
     </Link>
   );
@@ -442,15 +465,11 @@ export function MobileNavigation() {
   const sections = getNavigationSections(session);
   const visibleNavigation = sections.flatMap((section) => section.items);
   const quickNavigation = getMobileQuickNavigation(visibleNavigation);
-  const accountingSection = sections.find((section) => section.id === 'accounting');
-  const logsSection = sections.find((section) => section.id === 'logs');
+  const groupedSections = sections.filter((section) => section.id !== 'main');
   const [activePopover, setActivePopover] = useState<NavigationGroupId | 'more' | null>(null);
   const quickNavigationIds = new Set(quickNavigation.map((item) => item.href));
   const moreNavigation = visibleNavigation.filter(
-    (item) =>
-      !quickNavigationIds.has(item.href) &&
-      item.section !== 'accounting' &&
-      item.section !== 'logs',
+    (item) => !quickNavigationIds.has(item.href) && item.section === 'main',
   );
   const popoverItems =
     activePopover === 'more'
@@ -493,10 +512,10 @@ export function MobileNavigation() {
         aria-label="Accesos rápidos"
       >
         {activePopover && popoverItems.length ? (
-          <div className="absolute inset-x-2 bottom-[calc(100%+0.75rem)] overflow-hidden rounded-2xl border border-slate-700/90 bg-slate-950 p-2 text-slate-100 shadow-[0_18px_42px_-18px_rgb(15_23_42_/_0.8)]">
+          <div className="absolute inset-x-2 bottom-[calc(100%+0.75rem)] overflow-hidden rounded-2xl border border-border bg-background p-2 text-foreground shadow-xl">
             <div className="sidebar-scrollbar max-h-[min(42vh,19rem)] overflow-y-auto">
               <div className="flex items-center gap-2 px-2 pb-2 pt-1">
-                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   {popoverTitle}
                 </span>
               </div>
@@ -511,14 +530,14 @@ export function MobileNavigation() {
                       href={item.href}
                       onClick={() => setActivePopover(null)}
                       className={cn(
-                        'flex min-h-12 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+                        'flex min-h-12 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         isActive
-                          ? 'bg-white/[0.14] text-white'
-                          : 'text-slate-200 hover:bg-white/[0.08] hover:text-white',
+                          ? 'bg-gold-light/30 text-gold-deep'
+                          : 'text-foreground hover:bg-muted',
                       )}
                       aria-current={isActive ? 'page' : undefined}
                     >
-                      <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-white')} />
+                      <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-gold-deep')} />
                       <span className="min-w-0 truncate">{item.name}</span>
                     </Link>
                   );
@@ -539,8 +558,8 @@ export function MobileNavigation() {
                 href={item.href}
                 onClick={() => setActivePopover(null)}
                 className={cn(
-                  'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[0.64rem] font-medium text-muted-foreground transition-colors',
-                  isActive ? 'bg-slate-950 text-white shadow-sm ring-1 ring-white/70' : '',
+                  'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[11px] font-medium text-muted-foreground transition-colors',
+                  isActive ? 'bg-gold-light/30 text-gold-deep shadow-sm' : '',
                 )}
                 aria-current={isActive ? 'page' : undefined}
               >
@@ -549,28 +568,20 @@ export function MobileNavigation() {
               </Link>
             );
           })}
-          {accountingSection ? (
+          {groupedSections.map((section) => (
             <MobilePopoverTrigger
-              label={accountingSection.label ?? 'Contable'}
-              icon={accountingSection.icon ?? Landmark}
-              active={accountingSection.items.some((item) =>
-                isNavigationItemActive(pathname, item),
-              )}
-              open={activePopover === 'accounting'}
+              key={section.id}
+              label={section.label ?? section.id}
+              icon={section.icon ?? ScrollText}
+              active={section.items.some((item) => isNavigationItemActive(pathname, item))}
+              open={activePopover === section.id}
               onClick={() =>
-                setActivePopover((current) => (current === 'accounting' ? null : 'accounting'))
+                setActivePopover((current) =>
+                  current === section.id ? null : (section.id as NavigationGroupId),
+                )
               }
             />
-          ) : null}
-          {logsSection ? (
-            <MobilePopoverTrigger
-              label={logsSection.label ?? 'Logs'}
-              icon={logsSection.icon ?? ScrollText}
-              active={logsSection.items.some((item) => isNavigationItemActive(pathname, item))}
-              open={activePopover === 'logs'}
-              onClick={() => setActivePopover((current) => (current === 'logs' ? null : 'logs'))}
-            />
-          ) : null}
+          ))}
           {moreNavigation.length ? (
             <MobilePopoverTrigger
               label="Más"
@@ -604,8 +615,8 @@ function MobilePopoverTrigger({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[0.64rem] font-medium text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        (active || open) && 'bg-slate-950 text-white shadow-sm ring-1 ring-white/70',
+        'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        (active || open) && 'bg-gold-light/30 text-gold-deep shadow-sm',
       )}
       aria-expanded={open}
       aria-label={`${label}: mostrar opciones`}
@@ -627,7 +638,7 @@ export function getNavigationSections(session: AuthSession | null): NavigationSe
 
 export function getVisibleNavigation(session: AuthSession | null) {
   if (session?.role === 'WAREHOUSE_KEEPER') {
-    return navigation.filter((item) => item.href === '/warehouse');
+    return [warehouseNavigationItem];
   }
 
   if (isAccountantSession(session)) {
@@ -637,7 +648,6 @@ export function getVisibleNavigation(session: AuthSession | null) {
       '/customers',
       '/invoices',
       '/suppliers',
-      '/warehouse',
       '/purchase-orders',
       '/supplier-invoices',
       '/payables',
@@ -645,6 +655,8 @@ export function getVisibleNavigation(session: AuthSession | null) {
       '/credit-approvals',
       '/cash/logs',
       '/cash/sessions',
+      '/cash/registers',
+      '/settings/fiscal-sequences',
       '/operations/logs',
     ]);
 
@@ -656,8 +668,17 @@ export function getVisibleNavigation(session: AuthSession | null) {
   }
 
   if (canTakeOrders(session) && canUsePosSession(session)) {
-    return navigation.filter(
-      (item) => item.href === '/orders' || item.href === '/pos' || item.href === '/returns',
+    return navigation.filter((item) =>
+      [
+        '/orders',
+        '/pos',
+        '/returns',
+        '/products',
+        '/customers',
+        '/invoices',
+        '/quotations',
+        '/receivables',
+      ].includes(item.href),
     );
   }
 

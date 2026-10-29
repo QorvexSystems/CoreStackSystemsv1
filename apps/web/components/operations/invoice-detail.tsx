@@ -28,6 +28,8 @@ export function InvoiceDetail({
     queryKey: ['invoice', invoiceId, session?.tenantId],
     queryFn: () => getInvoice(session?.tenantId ?? '', session?.accessToken ?? '', invoiceId),
     enabled: Boolean(session),
+    staleTime: printMode && autoPrint ? 30_000 : 0,
+    refetchOnWindowFocus: !printMode,
   });
   const invoice = invoiceQuery.data;
   const autoPrintTriggeredRef = useRef(false);
@@ -48,7 +50,12 @@ export function InvoiceDetail({
       <Card>
         <CardHeader>
           <CardTitle>Factura</CardTitle>
-          <CardDescription>Cargando datos desde PostgreSQL.</CardDescription>
+          <CardDescription>
+            {invoiceQuery.isError ? 'No se pudo cargar la factura. El cobro no se repetirá.' : 'Cargando factura…'}
+          </CardDescription>
+          {invoiceQuery.isError ? (
+            <Button variant="outline" onClick={() => void invoiceQuery.refetch()}>Reintentar carga</Button>
+          ) : null}
         </CardHeader>
       </Card>
     );
@@ -58,8 +65,6 @@ export function InvoiceDetail({
     return (
       <main className="mx-auto w-[80mm] max-w-full bg-white p-3 text-zinc-950 print:w-[80mm] print:p-0">
         <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" />
-        <div className="my-4 border-t-2 border-dashed border-zinc-500" />
-        <Receipt invoice={invoice} copyLabel="COPIA: VENDEDOR" />
         <div className="mt-4 print:hidden">
           <Button className="w-full" onClick={() => window.print()}>
             <Printer className="h-4 w-4" />
@@ -145,7 +150,9 @@ function Receipt({
       </header>
 
       <div className="border-y border-dashed border-zinc-400 py-2">
-        <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
+        <h2 className="mb-1 text-center text-sm font-bold uppercase">
+          {invoice.status === 'DRAFT' ? 'Factura pendiente / borrador' : documentTitle}
+        </h2>
         <ReceiptRow
           label={invoice.eNcf ? 'e-NCF' : 'NCF'}
           value={fiscalNumber}
@@ -167,7 +174,25 @@ function Receipt({
             className="border-b border-dashed border-zinc-300 pb-2 last:border-b-0"
           >
             <div className="flex justify-between gap-3">
-              <span className="font-medium">{item.description}</span>
+              <span className="font-medium">
+                {item.description}
+                {item.personalization ? (
+                  <span className="block text-[11px] font-normal">
+                    {[
+                      item.personalization.charms === undefined
+                        ? null
+                        : item.personalization.charms + ' dije(s)',
+                      item.personalization.children === undefined
+                        ? null
+                        : item.personalization.children + ' niño(s)',
+                      item.personalization.material,
+                      item.personalization.instructions,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                ) : null}
+              </span>
               <span className="shrink-0 font-medium">{formatCurrency(Number(item.total))}</span>
             </div>
             {item.sku || item.barcode ? (

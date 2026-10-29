@@ -111,8 +111,8 @@ const roleLabels: Record<string, string> = {
   ADMIN: 'Administrador',
   ACCOUNTANT: 'Contador',
   CASHIER: 'Cajero',
-  ORDER_TAKER: 'Ordenanza',
-  WAREHOUSE_KEEPER: 'Almacenista',
+  ORDER_TAKER: 'Toma de órdenes',
+  WAREHOUSE_KEEPER: 'Fábrica',
 };
 
 const documentTypeLabels: Record<string, string> = {
@@ -251,6 +251,7 @@ const importTypeLabels: Record<string, string> = {
   PRODUCTS: 'Productos',
   CATEGORIES: 'Categorias',
   CUSTOMERS: 'Clientes',
+  OPEN_ORDERS: 'Órdenes abiertas',
   INITIAL_INVENTORY: 'Inventario inicial',
   FISCAL_SEQUENCES: 'Secuencias fiscales',
   HISTORICAL_INVOICES: 'Facturas historicas',

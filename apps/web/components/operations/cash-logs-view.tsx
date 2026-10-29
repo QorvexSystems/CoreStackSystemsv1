@@ -81,7 +81,9 @@ export function CashLogsView() {
                       <TableRow key={movement.id}>
                         <TableCell>{formatDateTime(movement.createdAt)}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{translateCashMovementType(movement.type)}</Badge>
+                          <Badge variant="outline">
+                            {translateCashMovementType(movement.type)}
+                          </Badge>
                         </TableCell>
                         <TableCell>
                           {movement.user?.name ?? movement.cashierName ?? 'Empleado'}

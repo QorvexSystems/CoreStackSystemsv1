@@ -60,7 +60,7 @@ export function PosCart({
 
             return (
               <div
-                key={item.product.id}
+                key={item.lineId ?? item.product.id}
                 className="rounded-lg border border-zinc-200 bg-zinc-50 p-3"
               >
                 <div className="flex items-start justify-between gap-3">
@@ -91,7 +91,7 @@ export function PosCart({
                         variant="ghost"
                         size="icon"
                         className="h-11 w-11"
-                        onClick={() => onUpdateQuantity(item.product.id, 0)}
+                        onClick={() => onUpdateQuantity(item.lineId ?? item.product.id, 0)}
                         aria-label="Quitar producto"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -108,7 +108,7 @@ export function PosCart({
                       size="icon"
                       className="h-11 w-11"
                       onClick={() =>
-                        onUpdateQuantity(item.product.id, item.quantity - quantityStep)
+                        onUpdateQuantity(item.lineId ?? item.product.id, item.quantity - quantityStep)
                       }
                       aria-label="Reducir cantidad"
                     >
@@ -126,7 +126,7 @@ export function PosCart({
                       step={quantityStep}
                       value={item.quantity}
                       onChange={(event) =>
-                        onUpdateQuantity(item.product.id, Number(event.target.value || 0))
+                        onUpdateQuantity(item.lineId ?? item.product.id, Number(event.target.value || 0))
                       }
                       onFocus={(event) => event.currentTarget.select()}
                       aria-label={`Cantidad de ${item.product.name}`}
@@ -140,7 +140,7 @@ export function PosCart({
                       size="icon"
                       className="h-11 w-11"
                       onClick={() =>
-                        onUpdateQuantity(item.product.id, item.quantity + quantityStep)
+                        onUpdateQuantity(item.lineId ?? item.product.id, item.quantity + quantityStep)
                       }
                       disabled={
                         item.product.trackInventory && item.quantity + quantityStep > availableStock

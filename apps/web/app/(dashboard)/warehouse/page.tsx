@@ -1,5 +1,5 @@
-import { WarehouseView } from '@/components/operations/warehouse-view';
+import { FactoryWorkQueue } from '@/components/operations/factory-work-queue';
 
 export default function WarehousePage() {
-  return <WarehouseView />;
+  return <FactoryWorkQueue />;
 }

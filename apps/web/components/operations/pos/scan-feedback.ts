@@ -12,7 +12,8 @@ export function playScanFeedback(kind: ScanFeedbackKind) {
     return;
   }
 
-  const AudioContextConstructor = window.AudioContext ?? (window as WindowWithWebkitAudio).webkitAudioContext;
+  const AudioContextConstructor =
+    window.AudioContext ?? (window as WindowWithWebkitAudio).webkitAudioContext;
 
   try {
     if (AudioContextConstructor) {

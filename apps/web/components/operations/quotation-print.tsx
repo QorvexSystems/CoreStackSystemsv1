@@ -139,7 +139,27 @@ export function QuotationPrint({
           <tbody>
             {order.items.map((item) => (
               <tr key={item.id} className="border-b border-zinc-100">
-                <td className="py-2">{item.description}</td>
+                <td className="py-2">
+                  <span>{item.description}</span>
+                  {item.personalization ? (
+                    <span className="mt-1 block text-xs text-zinc-500">
+                      {[
+                        item.personalization.charms !== undefined
+                          ? `${item.personalization.charms} dije(s)`
+                          : null,
+                        item.personalization.children !== undefined
+                          ? `${item.personalization.children} niño(s)`
+                          : null,
+                        item.personalization.material
+                          ? `Material: ${item.personalization.material}`
+                          : null,
+                        item.personalization.instructions || null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  ) : null}
+                </td>
                 <td className="py-2 text-right">{formatQuantity(item.quantity)}</td>
                 <td className="py-2 text-right">{formatCurrency(Number(item.unitPrice))}</td>
                 <td className="py-2 text-right">{formatCurrency(Number(item.total))}</td>

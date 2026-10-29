@@ -38,7 +38,7 @@ const toneStyles: Record<
   default: {
     icon: 'bg-primary text-primary-foreground',
     border: 'border-primary/15',
-    accent: 'from-primary/[0.09] via-card to-accent/[0.10]',
+    accent: 'from-gold-light/20 via-card to-card',
     button: '',
   },
   warning: {
@@ -151,7 +151,7 @@ export function ActionDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-primary/65 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-navy/55 p-4 backdrop-blur-sm"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !isPending) onClose();
       }}
@@ -163,7 +163,7 @@ export function ActionDialog({
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          'w-full overflow-hidden rounded-xl border bg-card shadow-[0_24px_70px_-24px_rgb(15_23_42/0.55)]',
+          'w-full overflow-hidden rounded-xl border bg-card shadow-[0_20px_60px_-24px_rgb(16_26_48/0.35)]',
           styles.border,
           size === 'sm' && 'max-w-md',
           size === 'md' && 'max-w-lg',

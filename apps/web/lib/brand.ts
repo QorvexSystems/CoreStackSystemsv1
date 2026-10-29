@@ -1,10 +1,15 @@
 export const brand = {
-  name: 'ALLPA',
-  tagline: 'Ama, vive y crea',
-  descriptor: 'Exhibidores, empaques y tips',
-  logoPath: '/brand/allpa-logo.png',
+  name: 'Unique Personalizado',
+  shortName: 'Unique',
+  tagline: 'Detalles únicos para momentos inolvidables',
+  descriptor: 'Joyas y regalos personalizados',
+  logoPath: '/brand/logo-brand.png',
+  horizontalLogoPath: '/brand/unique-logo-horizontal.png',
+  stackedLogoPath: '/brand/logo-brand.png',
+  wordmarkPath: '/brand/unique-wordmark.png',
   faviconPath: '/icon.png',
-  loginEmailPlaceholder: 'usuario@allpa.local',
+  appleTouchIconPath: '/apple-icon.png',
+  loginEmailPlaceholder: 'usuario@uniquepersonalizado.com',
 } as const;
 
 export const platform = {
@@ -15,5 +20,5 @@ export const platform = {
 
 export const brandCopy = {
   operationalDescription: `Operación diaria de ${brand.name}.`,
-  catalogDescription: `Catálogo, precios e inventario de ${brand.name}.`,
+  catalogDescription: `Catálogo, personalización, precios e inventario de ${brand.name}.`,
 } as const;

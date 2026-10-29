@@ -49,5 +49,8 @@ function formatMinorUnitsInput(value: string) {
 }
 
 function getMinorUnitDigits(value: string) {
-  return value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 12);
+  return value
+    .replace(/\D/g, '')
+    .replace(/^0+(?=\d)/, '')
+    .slice(0, 12);
 }

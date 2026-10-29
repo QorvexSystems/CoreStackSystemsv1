@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { getCustomers, getInvoices, getProducts } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
-import { isAccountantSession, isAdminSession } from '@/lib/authorization';
+import { canUsePosSession, isAccountantSession, isAdminSession } from '@/lib/authorization';
 import { translateDocumentType, translateStatus } from '@/lib/display-labels';
 import { formatCurrency, formatDate } from '@/lib/utils';
 
@@ -27,7 +27,7 @@ const resultIcons = {
   invoice: FileText,
 };
 
-export function GlobalSearch({ session }: { session: AuthSession }) {
+export function GlobalSearch({ session, mobile = false }: { session: AuthSession; mobile?: boolean }) {
   const router = useRouter();
   const canSearchGlobally = isAdminSession(session) || isAccountantSession(session);
   const [search, setSearch] = useState('');
@@ -146,10 +146,11 @@ export function GlobalSearch({ session }: { session: AuthSession }) {
   }
 
   if (!canSearchGlobally) {
+    if (!canUsePosSession(session)) return null;
     return (
       <Link
         href="/pos"
-        className="hidden min-w-0 max-w-md flex-1 items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-muted-foreground md:flex"
+        className={mobile ? 'flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground md:hidden' : 'hidden min-w-0 max-w-xl flex-1 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground md:flex'}
       >
         <Search className="h-4 w-4" />
         <span>Buscar productos desde la caja</span>
@@ -160,8 +161,8 @@ export function GlobalSearch({ session }: { session: AuthSession }) {
   const loading = productsQuery.isLoading || customersQuery.isLoading || invoicesQuery.isLoading;
 
   return (
-    <form className="relative hidden min-w-0 max-w-md flex-1 md:block" onSubmit={handleSubmit}>
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    <form className={mobile ? 'relative block min-w-0 w-full md:hidden' : 'relative hidden min-w-0 max-w-xl flex-1 md:block'} onSubmit={handleSubmit}>
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gold-deep" />
       <Input
         value={search}
         onChange={(event) => {
@@ -170,7 +171,7 @@ export function GlobalSearch({ session }: { session: AuthSession }) {
         }}
         onFocus={() => setOpen(true)}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        className="h-10 bg-zinc-50 pl-9 pr-10"
+        className="h-10 border-border bg-background pl-9 pr-10"
         placeholder="Buscar cliente, producto o factura"
         autoComplete="off"
       />
@@ -188,7 +189,7 @@ export function GlobalSearch({ session }: { session: AuthSession }) {
       ) : null}
 
       {open && searchReady ? (
-        <div className="absolute left-0 right-0 top-12 z-50 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-xl">
+        <div className="absolute left-0 right-0 top-12 z-50 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
           {loading ? (
             <p className="px-3 py-3 text-sm text-muted-foreground">Buscando...</p>
           ) : results.length ? (
@@ -200,10 +201,10 @@ export function GlobalSearch({ session }: { session: AuthSession }) {
                   <Link
                     key={result.id}
                     href={result.href}
-                    className="flex items-center gap-3 rounded-md px-3 py-2 text-sm transition hover:bg-zinc-50"
+                    className="flex items-center gap-3 rounded-md px-3 py-2 text-sm transition hover:bg-muted"
                     onClick={clearSearch}
                   >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-600">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-gold-deep">
                       <Icon className="h-4 w-4" />
                     </span>
                     <span className="min-w-0">

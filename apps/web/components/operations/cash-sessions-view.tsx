@@ -619,7 +619,7 @@ function CashSessionReport({
                   <th className="px-3 py-2">Orden</th>
                   <th className="px-3 py-2">Cliente</th>
                   <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2">Ordenanza</th>
+                  <th className="px-3 py-2">Responsable</th>
                   <th className="px-3 py-2">Factura</th>
                   <th className="px-3 py-2 text-right">Total</th>
                 </tr>

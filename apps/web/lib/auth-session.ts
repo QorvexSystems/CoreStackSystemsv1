@@ -28,6 +28,7 @@ export function saveSession(login: LoginResponse) {
     expiresAt: Date.now() + parseExpiresInSeconds(login.expiresIn) * 1000,
   };
 
+  window.dispatchEvent(new Event('corestack-session-change'));
   window.localStorage.setItem(sessionKey, JSON.stringify(session));
   setSessionCookie(parseExpiresInSeconds(login.expiresIn));
   return session;
@@ -69,6 +70,7 @@ export function clearSession() {
     return;
   }
 
+  window.dispatchEvent(new Event('corestack-session-change'));
   window.localStorage.removeItem(sessionKey);
   document.cookie = `${sessionCookieName}=; Path=/; Max-Age=0; SameSite=Strict${getSecureCookieAttribute()}`;
 }

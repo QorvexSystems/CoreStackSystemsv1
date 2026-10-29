@@ -1,5 +1,5 @@
-import { BarcodeGeneratorView } from '@/components/operations/barcode-generator-view';
+import { redirect } from 'next/navigation';
 
 export default function BarcodesPage() {
-  return <BarcodeGeneratorView />;
+  redirect('/products');
 }

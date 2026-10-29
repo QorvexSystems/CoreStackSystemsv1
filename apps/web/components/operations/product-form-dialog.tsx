@@ -83,7 +83,7 @@ export function ProductFormDialog({ open, productId, onClose, onSaved }: Product
               <p className="mt-1 text-sm text-muted-foreground">
                 {editing
                   ? 'Actualiza la ficha del producto y guarda los cambios.'
-                  : 'Completa la ficha para agregarlo al catálogo de ALLPA.'}
+                  : 'Completa la ficha para agregarlo al catálogo de Unique Personalizado.'}
               </p>
             </div>
           </div>
@@ -99,7 +99,13 @@ export function ProductFormDialog({ open, productId, onClose, onSaved }: Product
         </header>
 
         <div className="surface-scrollbar min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-          <ProductForm key={productId ?? 'new'} productId={productId} embedded onSaved={onSaved} onCancel={onClose} />
+          <ProductForm
+            key={productId ?? 'new'}
+            productId={productId}
+            embedded
+            onSaved={onSaved}
+            onCancel={onClose}
+          />
         </div>
       </div>
     </div>,

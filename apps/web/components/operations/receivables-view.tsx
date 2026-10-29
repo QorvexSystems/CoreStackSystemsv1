@@ -22,6 +22,7 @@ import {
   cancelReceivablePayment,
   createReceivablePayment,
   getCashSessions,
+  getCurrentCashSession,
   getReceivableCustomerSummary,
   getReceivables,
   type CashSession,
@@ -48,6 +49,7 @@ type PaymentTarget = {
   amount: string;
   cashSessionId: string;
   idempotencyKey: string;
+  method?: string;
 };
 
 type CancellationTarget = {
@@ -84,7 +86,13 @@ export function ReceivablesView() {
   });
   const cashSessionsQuery = useQuery({
     queryKey: ['cash-sessions', session?.tenantId, 'receivables'],
-    queryFn: () => getCashSessions(session?.tenantId ?? '', session?.accessToken ?? ''),
+    queryFn: async () => {
+      if (session?.role === 'ORDER_TAKER') {
+        const current = await getCurrentCashSession(session.tenantId, session.accessToken);
+        return current ? [current] : [];
+      }
+      return getCashSessions(session?.tenantId ?? '', session?.accessToken ?? '');
+    },
     enabled: Boolean(session),
   });
 
@@ -126,6 +134,7 @@ export function ReceivablesView() {
         paymentTarget.invoice.id,
         {
           amount,
+          method: paymentTarget.method ?? 'CASH',
           cashSessionId: paymentTarget.cashSessionId,
           idempotencyKey: paymentTarget.idempotencyKey,
         },
@@ -198,7 +207,7 @@ export function ReceivablesView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Cuentas por cobrar"
-        description="Facturas fiadas ordenadas por vencimiento, abonos en efectivo y estados de cuenta."
+        description="Balances de anticipos y crédito, abonos y estados de cuenta."
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -508,10 +517,22 @@ function PaymentForm({
       <CardHeader>
         <CardTitle>Registrar abono · {target.invoice.invoiceNumber}</CardTitle>
         <CardDescription>
-          Solo efectivo. El monto aumentará el esperado de la caja seleccionada.
+          Registra el medio recibido; solo el efectivo afecta el dinero esperado en caja.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label>Medio de pago</Label>
+          <select
+            className="h-10 w-full rounded-md border px-3"
+            value={target.method ?? 'CASH'}
+            onChange={(event) => onChange({ ...target, method: event.target.value })}
+          >
+            <option value="CASH">Efectivo</option>
+            <option value="TRANSFER">Transferencia</option>
+            <option value="CARD">Tarjeta</option>
+          </select>
+        </div>
         <div className="space-y-2">
           <Label htmlFor="receivableAmount">Monto</Label>
           <Input

@@ -9,6 +9,14 @@ const config: Config = {
         sans: ['var(--font-inter)', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       colors: {
+        gold: {
+          light: '#E4C77C',
+          DEFAULT: '#C6A45E',
+          dark: '#996B00',
+          deep: '#8A651E',
+        },
+        navy: '#101A30',
+        'surface-muted': '#F5F1E9',
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
@@ -35,9 +43,9 @@ const config: Config = {
         danger: 'hsl(var(--danger))',
       },
       borderRadius: {
-        lg: '0.5rem',
-        md: '0.375rem',
-        sm: '0.25rem',
+        lg: '0.875rem',
+        md: '0.625rem',
+        sm: '0.5rem',
       },
     },
   },

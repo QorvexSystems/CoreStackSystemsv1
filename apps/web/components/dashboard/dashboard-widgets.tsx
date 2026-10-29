@@ -10,11 +10,15 @@ import {
   CircleDollarSign,
   ClipboardList,
   FileText,
+  Factory,
+  Gift,
   Landmark,
   Package,
   PackageCheck,
   ReceiptText,
   ShoppingCart,
+  Store,
+  Truck,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -38,7 +42,7 @@ import type { DashboardSummary, ProductSalesRanking } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
 import { canAccessPath } from '@/lib/authorization';
 import { translateEmployeeAction, translateEntity } from '@/lib/display-labels';
-import { cn, formatCurrency, formatDateTime } from '@/lib/utils';
+import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 
 export type DashboardTone = 'blue' | 'green' | 'orange' | 'violet' | 'red';
 
@@ -200,7 +204,7 @@ export function MonthlySalesChart({ summary }: { summary: DashboardSummary }) {
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={summary.dailySalesSeries} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>
-                <linearGradient id="allpa-daily-sales" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="unique-daily-sales" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={chartColors.blue} stopOpacity={0.24} />
                   <stop offset="95%" stopColor={chartColors.blue} stopOpacity={0.02} />
                 </linearGradient>
@@ -227,7 +231,7 @@ export function MonthlySalesChart({ summary }: { summary: DashboardSummary }) {
                 dataKey="total"
                 stroke={chartColors.blue}
                 strokeWidth={2.25}
-                fill="url(#allpa-daily-sales)"
+                fill="url(#unique-daily-sales)"
                 activeDot={{ r: 4, fill: chartColors.blue, stroke: '#fff', strokeWidth: 2 }}
               />
             </AreaChart>
@@ -445,12 +449,12 @@ export function InventorySummaryCard({ summary, session }: { summary: DashboardS
     <>
       <PanelHeader
         icon={Package}
-        title="Inventario general"
+        title="Existencias de productos"
         tone="violet"
         action={
-          canAccessPath(session, '/inventory') ? (
+          canAccessPath(session, '/products') ? (
             <span className="flex items-center gap-1 text-[11px] font-medium text-blue-600">
-              Ver inventario <ArrowRight className="h-3.5 w-3.5" />
+              Ver productos <ArrowRight className="h-3.5 w-3.5" />
             </span>
           ) : null
         }
@@ -459,7 +463,7 @@ export function InventorySummaryCard({ summary, session }: { summary: DashboardS
         <div className="grid grid-cols-3 divide-x divide-slate-200">
           <InventoryMetric value={summary.activeProducts} label="Productos activos" />
           <InventoryMetric value={summary.lowStockProducts} label="Bajo mínimo" danger />
-          <InventoryMetric value={summary.activeProducts + summary.warehouse.productCount} label="Total productos" />
+          <InventoryMetric value={summary.inventorySummary.productsInStock} label="Con stock" />
         </div>
         <div className="mt-5 flex items-center gap-3">
           <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-100">
@@ -477,8 +481,8 @@ export function InventorySummaryCard({ summary, session }: { summary: DashboardS
     </>
   );
 
-  return canAccessPath(session, '/inventory') ? (
-    <Link href="/inventory" className="block rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+  return canAccessPath(session, '/products') ? (
+    <Link href="/products" className="block rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
       <DashboardCard className="min-h-[178px] transition hover:border-blue-200 hover:shadow-md">{content}</DashboardCard>
     </Link>
   ) : (
@@ -498,10 +502,10 @@ function InventoryMetric({ value, label, danger = false }: { value: number; labe
 const quickActions: Array<{ label: string; href: string; icon: LucideIcon; tone: DashboardTone }> = [
   { label: 'Toma de órdenes', href: '/orders', icon: ShoppingCart, tone: 'blue' },
   { label: 'Caja POS', href: '/pos', icon: Landmark, tone: 'green' },
-  { label: 'Productos', href: '/products', icon: Package, tone: 'orange' },
+  { label: 'Producción', href: '/production', icon: Factory, tone: 'orange' },
   { label: 'Cotizaciones', href: '/quotations', icon: FileText, tone: 'blue' },
-  { label: 'Clientes', href: '/customers', icon: Users, tone: 'violet' },
-  { label: 'Almacén', href: '/warehouse', icon: Boxes, tone: 'green' },
+  { label: 'Crear producto', href: '/products', icon: Package, tone: 'violet' },
+  { label: 'Registrar cliente', href: '/customers', icon: Users, tone: 'green' },
 ];
 
 export function QuickActions({ session }: { session: AuthSession }) {
@@ -589,8 +593,214 @@ function activityIcon(entity: string): LucideIcon {
   return Activity;
 }
 
+export function ProductionOverview({ summary }: { summary: DashboardSummary }) {
+  const stages = [
+    { label: 'En espera', value: summary.production.waiting, color: 'bg-amber-400' },
+    { label: 'En fábrica', value: summary.production.factory, color: 'bg-blue-500' },
+    { label: 'Listas', value: summary.production.ready, color: 'bg-emerald-500' },
+    { label: 'Entregadas hoy', value: summary.production.deliveredToday, color: 'bg-violet-500' },
+  ];
+  return (
+    <Link href="/production" className="block rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+      <DashboardCard className="h-full min-h-[280px] transition hover:border-blue-200 hover:shadow-md">
+        <PanelHeader
+          icon={Factory}
+          title="Estado de producción"
+          subtitle="Flujo operativo de las órdenes"
+          tone="orange"
+          action={<span className="flex items-center gap-1 text-[11px] font-medium text-blue-600">Abrir Kanban <ArrowRight className="h-3.5 w-3.5" /></span>}
+        />
+        <div className="grid gap-2 px-4 pb-4 pt-2 sm:grid-cols-2">
+          {stages.map((stage, index) => (
+            <div key={stage.label} className="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+              <span className={cn('absolute inset-y-0 left-0 w-1', stage.color)} />
+              <p className="text-xs font-medium text-slate-500">{stage.label}</p>
+              <p className="mt-2 text-3xl font-bold tracking-tight text-slate-950">{stage.value}</p>
+              {index < 3 ? <ArrowRight className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" /> : null}
+            </div>
+          ))}
+        </div>
+      </DashboardCard>
+    </Link>
+  );
+}
+
+export function AttentionOrdersPanel({ summary }: { summary: DashboardSummary }) {
+  return (
+    <DashboardCard className="h-full min-h-[280px]">
+      <PanelHeader
+        icon={AlertTriangle}
+        title="Órdenes que requieren atención"
+        subtitle="Atrasos, urgencias y aprobaciones pendientes"
+        tone="red"
+        action={<Link href="/production" className="flex items-center gap-1 text-[11px] font-medium text-blue-600">Ver todas <ArrowRight className="h-3.5 w-3.5" /></Link>}
+      />
+      <div className="max-h-[220px] divide-y divide-slate-100 overflow-y-auto px-4 pb-3">
+        {summary.attentionOrders.length ? summary.attentionOrders.map((order) => (
+          <Link
+            key={order.id}
+            href={order.invoiceId ? `/invoices/${order.invoiceId}` : '/production'}
+            className="flex min-w-0 items-center gap-3 py-2.5 hover:bg-slate-50"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+              <AlertTriangle className="h-4 w-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-xs font-semibold text-slate-950">{order.orderNumber}</p>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600">
+                  {order.source === 'SHOPIFY' ? 'Shopify' : 'Tienda'}
+                </span>
+              </div>
+              <p className="truncate text-[10px] text-slate-500">{order.clientName} · {order.reasons.join(' · ')}</p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-[10px] font-medium text-slate-600">{productionStageLabel(order.productionStage)}</p>
+              <p className="text-[9px] text-slate-400">{order.promisedAt ? formatDate(order.promisedAt) : 'Sin fecha'}</p>
+            </div>
+          </Link>
+        )) : (
+          <div className="grid min-h-[180px] place-items-center text-center text-xs text-slate-500">
+            <div><PackageCheck className="mx-auto mb-2 h-6 w-6 text-emerald-400" />No hay órdenes que requieran atención.</div>
+          </div>
+        )}
+      </div>
+    </DashboardCard>
+  );
+}
+
+export function SalesChannelCard({ summary }: { summary: DashboardSummary }) {
+  const total = summary.salesByChannel.store + summary.salesByChannel.shopify;
+  const storePercent = total ? (summary.salesByChannel.store / total) * 100 : 0;
+  return (
+    <DashboardCard className="h-full min-h-[260px]">
+      <PanelHeader icon={Store} title="Ventas por canal" subtitle="Facturación del mes" tone="green" />
+      <div className="space-y-5 px-5 pb-5 pt-3">
+        <ChannelMetric label="Tienda" value={summary.salesByChannel.store} percent={storePercent} color="bg-emerald-500" />
+        <ChannelMetric label="Shopify" value={summary.salesByChannel.shopify} percent={total ? 100 - storePercent : 0} color="bg-blue-500" />
+        <div className="border-t border-slate-100 pt-3">
+          <p className="text-[10px] text-slate-500">Total facturado por canal</p>
+          <p className="mt-1 text-lg font-bold text-slate-950">{formatCurrency(total)}</p>
+        </div>
+      </div>
+    </DashboardCard>
+  );
+}
+
+function ChannelMetric({ label, value, percent, color }: { label: string; value: number; percent: number; color: string }) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-slate-700">{label}</span>
+        <span className="font-semibold text-slate-950">{formatCurrency(value)}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn('h-full rounded-full', color)} style={{ width: `${percent}%` }} /></div>
+      <p className="mt-1 text-right text-[9px] text-slate-400">{percent.toFixed(1)}%</p>
+    </div>
+  );
+}
+
+export function DeliverySummaryCard({ summary }: { summary: DashboardSummary }) {
+  const rows = [
+    { label: 'Recogida en tienda', value: summary.delivery.pickupReady, icon: Store },
+    { label: 'Delivery', value: summary.delivery.deliveryReady, icon: Truck },
+    { label: 'Envío a provincia', value: summary.delivery.provinceReady, icon: PackageCheck },
+    { label: 'Prometidas para hoy', value: summary.delivery.promisedToday, icon: ClipboardList },
+  ];
+  return (
+    <DashboardCard className="h-full min-h-[250px]">
+      <PanelHeader icon={Truck} title="Entregas" subtitle="Órdenes listas y compromisos de hoy" tone="green" />
+      <div className="space-y-1.5 px-4 pb-4 pt-1">
+        {rows.map(({ label, value, icon: Icon }) => (
+          <div key={label} className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
+            <Icon className="h-4 w-4 text-slate-500" />
+            <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{label}</span>
+            <span className="text-sm font-bold text-slate-950">{value}</span>
+          </div>
+        ))}
+      </div>
+    </DashboardCard>
+  );
+}
+
+export function CorporateSummaryCard({ summary }: { summary: DashboardSummary }) {
+  const totalUnits = summary.corporate.pendingUnits + summary.corporate.inProgressUnits + summary.corporate.completedUnits;
+  const completedPercent = totalUnits ? (summary.corporate.completedUnits / totalUnits) * 100 : 0;
+  return (
+    <DashboardCard className="h-full min-h-[250px]">
+      <PanelHeader icon={Gift} title="Regalos empresariales" subtitle={`${summary.corporate.activeOrders} órdenes activas`} tone="violet" />
+      <div className="px-5 pb-5 pt-2">
+        <div className="grid grid-cols-3 divide-x divide-slate-200 text-center">
+          <InventoryMetric value={summary.corporate.pendingUnits} label="Pendientes" />
+          <InventoryMetric value={summary.corporate.inProgressUnits} label="En progreso" />
+          <InventoryMetric value={summary.corporate.completedUnits} label="Terminadas" />
+        </div>
+        <div className="mt-5 h-2.5 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-violet-500" style={{ width: `${completedPercent}%` }} />
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[10px] text-slate-500">
+          <span>{completedPercent.toFixed(0)}% completado</span>
+          <span>{summary.corporate.pendingPartialDeliveries} entregas parciales pendientes</span>
+        </div>
+      </div>
+    </DashboardCard>
+  );
+}
+
+export function InventoryAlertsCard({ summary }: { summary: DashboardSummary }) {
+  const alerts = [
+    ...summary.recentInventoryAlerts.map((product) => ({
+      key: `store-${product.id}`,
+      name: product.name,
+      detail: `Tienda · ${product.stock - product.reservedStock} disponibles / mínimo ${product.minStock}`,
+    })),
+  ].slice(0, 6);
+  return (
+    <DashboardCard className="h-full min-h-[250px]">
+      <PanelHeader
+        icon={Package}
+        title="Productos por reponer"
+        subtitle={`${summary.lowStockProducts} productos bajo mínimo`}
+        tone="orange"
+        action={<Link href="/products" className="flex items-center gap-1 text-[11px] font-medium text-blue-600">Ver productos <ArrowRight className="h-3.5 w-3.5" /></Link>}
+      />
+      <div className="divide-y divide-slate-100 px-4 pb-3">
+        {alerts.length ? alerts.map((product) => (
+          <div key={product.key} className="flex min-w-0 items-center gap-3 py-2.5">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-slate-900">{product.name}</p>
+              <p className="truncate text-[10px] text-slate-500">{product.detail}</p>
+            </div>
+          </div>
+        )) : <p className="py-16 text-center text-xs text-slate-500">No hay productos que requieran reposición.</p>}
+      </div>
+    </DashboardCard>
+  );
+}
+
+function productionStageLabel(stage: string) {
+  return { WAITING: 'En espera', FACTORY: 'En fábrica', READY: 'Lista', DELIVERED: 'Entregada' }[stage] ?? stage;
+}
+
 export function AlertsPanel({ summary, session }: { summary: DashboardSummary; session: AuthSession }) {
   const alerts = [
+    {
+      label: 'Órdenes atrasadas',
+      detail: summary.production.late ? 'Requieren seguimiento inmediato' : 'No hay atrasos activos',
+      value: summary.production.late,
+      href: '/production',
+      icon: AlertTriangle,
+      danger: summary.production.late > 0,
+    },
+    {
+      label: 'Problemas de producción',
+      detail: summary.production.problems ? 'Órdenes pausadas o con problemas' : 'Producción sin incidencias',
+      value: summary.production.problems,
+      href: '/production',
+      icon: Factory,
+      danger: summary.production.problems > 0,
+    },
     {
       label: 'Productos bajo mínimo',
       detail: summary.lowStockProducts ? `${summary.lowStockProducts} producto requiere reposición` : 'Inventario dentro del mínimo',
@@ -613,14 +823,6 @@ export function AlertsPanel({ summary, session }: { summary: DashboardSummary; s
       value: summary.accounting.receivables.overdueCount,
       href: '/receivables',
       icon: Users,
-      danger: false,
-    },
-    {
-      label: 'Órdenes pendientes de despacho',
-      detail: summary.warehouse.pendingDispatches ? `${summary.warehouse.pendingDispatches} orden pendiente` : 'No hay órdenes pendientes',
-      value: summary.warehouse.pendingDispatches,
-      href: '/warehouse',
-      icon: PackageCheck,
       danger: false,
     },
   ];

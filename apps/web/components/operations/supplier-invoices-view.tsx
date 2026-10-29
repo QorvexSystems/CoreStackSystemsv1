@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ActionDialog } from '@/components/ui/action-dialog';
 import {
   Table,
@@ -787,7 +788,7 @@ export function SupplierInvoicesView() {
       key: crypto.randomUUID(),
       // Una sugerencia por descripción o por un fragmento de código sirve
       // para orientar a quien revisa, pero no debe seleccionar un producto
-      // por sí sola. En ferretería muchos SKU comparten prefijos y una
+      // por sí sola. En catálogos extensos muchos SKU comparten prefijos y una
       // selección automática equivocada terminaría afectando inventario.
       productId: product && highConfidence ? product.id : '',
       ocrItem: item,
@@ -850,6 +851,7 @@ export function SupplierInvoicesView() {
     const payload: SupplierInvoicePayload = {
       supplierId,
       purchaseOrderId: purchaseOrderId || undefined,
+      inventoryDestination: 'SALES_INVENTORY',
       invoiceNumber: invoiceNumber.trim(),
       ncf: ncf.trim() || undefined,
       issueDate,

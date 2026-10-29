@@ -1,5 +1,5 @@
-import { InventoryView } from '@/components/operations/inventory-view';
+import { redirect } from 'next/navigation';
 
 export default function InventoryPage() {
-  return <InventoryView />;
+  redirect('/products');
 }

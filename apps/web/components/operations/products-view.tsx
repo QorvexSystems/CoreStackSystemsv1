@@ -8,12 +8,14 @@ import {
   Pencil,
   Plus,
   Printer,
+  RefreshCw,
   Search,
   Trash2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ActionDialog } from '@/components/ui/action-dialog';
+import { isAdminSession } from '@/lib/authorization';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,7 +28,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { deleteProduct, generateProductBarcode, getProductLabel, getProducts } from '@/lib/api';
+import {
+  deleteProduct,
+  generateProductBarcode,
+  getProductLabel,
+  getProducts,
+  getShopifyIntegrationStatus,
+  retryShopifyIntegration,
+  syncShopifyProduct,
+} from '@/lib/api';
 import { openBarcodeLabelPrintWindow, printBarcodeLabel } from '@/lib/barcode-label-print';
 import { brand } from '@/lib/brand';
 import { getStatusVariant, translateBarcodeType, translateStatus } from '@/lib/display-labels';
@@ -35,8 +45,9 @@ import { ModuleHeader } from './module-header';
 import { formatQuantity } from './pos/pos-utils';
 import { ProductFormDialog } from './product-form-dialog';
 import { SessionRequired, useCurrentSession } from './session-required';
+import { WebCatalogPanel } from './web-catalog/web-catalog-panel';
 
-export function ProductsView() {
+function ProductsInventoryPanel() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
@@ -60,6 +71,26 @@ export function ProductsView() {
     queryKey: ['products', session?.tenantId, search],
     queryFn: () => getProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
     enabled: Boolean(session),
+  });
+  const shopifyStatus = useQuery({
+    queryKey: ['shopify-status', session?.tenantId],
+    queryFn: () => getShopifyIntegrationStatus(session!.tenantId, session!.accessToken),
+    enabled: Boolean(
+      session && ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session.role),
+    ),
+    refetchInterval: 15000,
+  });
+  const retryMutation = useMutation({
+    mutationFn: () => retryShopifyIntegration(session!.tenantId, session!.accessToken),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries();
+      toast.info(
+        result.configured
+          ? 'Reintento completado; revisa los resultados.'
+          : 'Shopify está pendiente de configurar.',
+      );
+    },
+    onError: (error) => toast.error(error.message),
   });
   const generateMutation = useMutation({
     mutationFn: (productId: string) => {
@@ -129,12 +160,25 @@ export function ProductsView() {
       toast.error(error instanceof Error ? error.message : 'No se pudo desactivar el producto.');
     },
   });
+  const shopifyMutation = useMutation({
+    mutationFn: (productId: string) => {
+      if (!session) throw new Error('Sesion requerida.');
+      return syncShopifyProduct(session.tenantId, session.accessToken, productId);
+    },
+    onSuccess: async (product) => {
+      await queryClient.invalidateQueries({ queryKey: ['products'] });
+      toast.success('Producto sincronizado con Shopify.', { description: product.name });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudo sincronizar con Shopify.');
+    },
+  });
 
   if (!session) {
     return <SessionRequired session={session} />;
   }
 
-  const readOnly = session.role === 'ACCOUNTANT';
+  const readOnly = !isAdminSession(session);
   const products = productsQuery.data ?? [];
   const pageCount = Math.max(1, Math.ceil(products.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -144,10 +188,39 @@ export function ProductsView() {
 
   return (
     <div className="space-y-6">
-      <ModuleHeader
-        title="Productos"
-        description={`Catálogo de productos y servicios de ${brand.name}, precios e inventario desde PostgreSQL.`}
-      />
+      {shopifyStatus.data ? (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm">
+                Shopify: {shopifyStatus.data.configured ? 'configurado' : 'pendiente de configurar'}{' '}
+                · {shopifyStatus.data.jobs.filter((job) => job.pending).length} cambios pendientes
+              </p>
+              <Button
+                variant="outline"
+                disabled={!shopifyStatus.data.configured || retryMutation.isPending}
+                onClick={() => retryMutation.mutate()}
+              >
+                Reintentar sincronización
+              </Button>
+            </div>
+            {shopifyStatus.data.jobs
+              .filter((job) => job.error)
+              .map((job) => (
+                <p key={job.id} className="text-xs text-red-700">
+                  {productsQuery.data?.find((product) => product.id === job.productId)?.name ??
+                    job.productId}
+                  : {job.error}
+                </p>
+              ))}
+            {shopifyStatus.data.dispatchErrors.map((order) => (
+              <p key={order.id} className="text-xs text-red-700">
+                {order.orderNumber}: {order.shopifyFulfillmentError}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative max-w-md flex-1">
@@ -183,9 +256,18 @@ export function ProductsView() {
               <CardTitle>Catalogo</CardTitle>
               <CardDescription>{products.length} productos activos o inactivos.</CardDescription>
             </div>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground" aria-label="Leyenda de inventario">
-              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-300" />Stock bajo</span>
-              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-300" />Agotado</span>
+            <div
+              className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"
+              aria-label="Leyenda de inventario"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
+                Stock bajo
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-300" />
+                Agotado
+              </span>
             </div>
           </div>
         </CardHeader>
@@ -208,9 +290,8 @@ export function ProductsView() {
             {visibleProducts.map((product) => {
               const availableStock = getAvailableStock(product);
               const outOfStock = product.trackInventory && availableStock <= 0;
-              const lowStock = product.trackInventory
-                && !outOfStock
-                && availableStock <= Number(product.minStock);
+              const lowStock =
+                product.trackInventory && !outOfStock && availableStock <= Number(product.minStock);
               return (
                 <div
                   key={product.id}
@@ -235,24 +316,62 @@ export function ProductsView() {
                     <span className="font-semibold">{formatCurrency(Number(product.price))}</span>
                     {product.trackInventory ? (
                       <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
-                        {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
-                        {' · '}{formatQuantity(product.reservedStock)} res.
+                        {outOfStock
+                          ? 'Agotado'
+                          : lowStock
+                            ? 'Stock bajo'
+                            : `${formatQuantity(availableStock)} disp.`}
+                        {' · '}
+                        {formatQuantity(product.reservedStock)} res.
                       </Badge>
                     ) : (
                       <Badge variant="outline">Servicio</Badge>
                     )}
                   </div>
                   {!readOnly ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="mt-3 w-full bg-white/80"
-                      onClick={() => setEditingProductId(product.id)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                      Editar producto
-                    </Button>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditingProductId(product.id)}
+                      >
+                        <Pencil className="h-4 w-4" /> Editar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={shopifyMutation.isPending}
+                        onClick={() => shopifyMutation.mutate(product.id)}
+                      >
+                        <RefreshCw className="h-4 w-4" /> Shopify
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          product.barcode
+                            ? requestProductLabel(product.id)
+                            : generateMutation.mutate(product.id)
+                        }
+                      >
+                        <Barcode className="h-4 w-4" />{' '}
+                        {product.barcode ? 'Imprimir etiqueta' : 'Generar código'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={deleteMutation.isPending}
+                        onClick={() =>
+                          setProductPendingDeactivation({ id: product.id, name: product.name })
+                        }
+                      >
+                        <Trash2 className="h-4 w-4" /> Desactivar
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
               );
@@ -276,9 +395,10 @@ export function ProductsView() {
                 {visibleProducts.map((product) => {
                   const availableStock = getAvailableStock(product);
                   const outOfStock = product.trackInventory && availableStock <= 0;
-                  const lowStock = product.trackInventory
-                    && !outOfStock
-                    && availableStock <= Number(product.minStock);
+                  const lowStock =
+                    product.trackInventory &&
+                    !outOfStock &&
+                    availableStock <= Number(product.minStock);
                   return (
                     <TableRow
                       key={product.id}
@@ -295,6 +415,20 @@ export function ProductsView() {
                         <div className="text-xs text-muted-foreground">
                           {product.sku ?? 'Sin SKU'} {product.brand ? `- ${product.brand}` : ''}
                         </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <Badge variant={product.kind === 'PERSONALIZED' ? 'warning' : 'outline'}>
+                            {product.kind === 'PERSONALIZED' ? 'Personalizado' : 'Normal'}
+                          </Badge>
+                          {product.material ? (
+                            <Badge variant="outline">{product.material}</Badge>
+                          ) : null}
+                          {product.measurement ? (
+                            <Badge variant="outline">{product.measurement}</Badge>
+                          ) : null}
+                          {product.shopifySyncedAt ? (
+                            <Badge variant="success">Shopify</Badge>
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell>{product.brand?.trim() || 'Sin marca'}</TableCell>
                       <TableCell>{formatCurrency(Number(product.price))}</TableCell>
@@ -307,9 +441,16 @@ export function ProductsView() {
                       <TableCell>
                         {product.trackInventory ? (
                           <div>
-                            <Badge variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}>
-                              {outOfStock ? 'Agotado' : lowStock ? 'Stock bajo' : `${formatQuantity(availableStock)} disp.`}
-                              {' · '}{formatQuantity(product.reservedStock)} res.
+                            <Badge
+                              variant={outOfStock ? 'danger' : lowStock ? 'warning' : 'success'}
+                            >
+                              {outOfStock
+                                ? 'Agotado'
+                                : lowStock
+                                  ? 'Stock bajo'
+                                  : `${formatQuantity(availableStock)} disp.`}
+                              {' · '}
+                              {formatQuantity(product.reservedStock)} res.
                             </Badge>
                             <p className="mt-1 text-xs text-muted-foreground">
                               Total {formatQuantity(product.stock)} / min{' '}
@@ -328,6 +469,22 @@ export function ProductsView() {
                       {!readOnly ? (
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              disabled={shopifyMutation.isPending}
+                              onClick={() => shopifyMutation.mutate(product.id)}
+                              aria-label={`Sincronizar ${product.name} con Shopify`}
+                              title={
+                                product.shopifySyncedAt
+                                  ? 'Actualizar en Shopify'
+                                  : 'Crear en Shopify'
+                              }
+                            >
+                              <RefreshCw
+                                className={`h-4 w-4 ${shopifyMutation.isPending ? 'animate-spin' : ''}`}
+                              />
+                            </Button>
                             {!product.barcode ? (
                               <Button
                                 variant="outline"
@@ -516,4 +673,83 @@ function ProductPagination({
 
 function getAvailableStock(product: { stock: number | string; reservedStock: number | string }) {
   return Math.max(Number(product.stock) - Number(product.reservedStock), 0);
+}
+
+type ProductsTab = 'inventory' | 'web';
+
+export function ProductsView() {
+  const session = useCurrentSession();
+  const [tab, setTab] = useState<ProductsTab>('inventory');
+  const canManageWeb = isAdminSession(session);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'web') {
+      setTab('web');
+    }
+  }, []);
+
+  const activeTab: ProductsTab = tab === 'web' && canManageWeb ? 'web' : 'inventory';
+  const tabs: Array<{ id: ProductsTab; label: string }> = [
+    { id: 'inventory', label: 'Productos' },
+    ...(canManageWeb ? [{ id: 'web' as const, label: 'Catálogo web' }] : []),
+  ];
+
+  function selectTab(next: ProductsTab) {
+    setTab(next);
+    const url = new URL(window.location.href);
+    if (next === 'web') url.searchParams.set('tab', 'web');
+    else url.searchParams.delete('tab');
+    window.history.replaceState(null, '', url);
+  }
+
+  return (
+    <div className="space-y-6">
+      <ModuleHeader
+        title="Productos"
+        description={`Catálogo de productos y servicios de ${brand.name}, precios e inventario desde PostgreSQL.`}
+      />
+      {tabs.length > 1 ? (
+        <div role="tablist" aria-label="Secciones de productos" className="flex gap-1 border-b border-border">
+          {tabs.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              id={`products-tab-${entry.id}`}
+              aria-selected={activeTab === entry.id}
+              aria-controls={`products-panel-${entry.id}`}
+              tabIndex={activeTab === entry.id ? 0 : -1}
+              onClick={() => selectTab(entry.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+                  const index = tabs.findIndex((candidate) => candidate.id === entry.id);
+                  const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+                  selectTab(next.id);
+                  document.getElementById(`products-tab-${next.id}`)?.focus();
+                }
+              }}
+              className={`-mb-px h-11 border-b-2 px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                activeTab === entry.id
+                  ? 'border-gold-dark text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div
+        role={tabs.length > 1 ? 'tabpanel' : undefined}
+        id={`products-panel-${activeTab}`}
+        aria-labelledby={tabs.length > 1 ? `products-tab-${activeTab}` : undefined}
+      >
+        {activeTab === 'web' && session ? (
+          <WebCatalogPanel session={session} />
+        ) : (
+          <ProductsInventoryPanel />
+        )}
+      </div>
+    </div>
+  );
 }

@@ -6,15 +6,18 @@ import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   AlertsPanel,
+  AttentionOrdersPanel,
   CashMovementCard,
-  InventorySummaryCard,
+  CorporateSummaryCard,
+  DeliverySummaryCard,
+  InventoryAlertsCard,
   KpiCard,
   MonthComparison,
   MonthlySalesChart,
-  OrdersStatusChart,
+  ProductionOverview,
   ProductSalesChart,
   QuickActions,
-  RecentActivity,
+  SalesChannelCard,
   SalesBehaviorChart,
   dashboardIcons,
 } from '@/components/dashboard/dashboard-widgets';
@@ -40,7 +43,12 @@ export function DashboardView() {
   });
 
   if (!session) {
-    return <DashboardMessage title="Sesión no disponible" detail="Inicia sesión nuevamente para consultar el panel." />;
+    return (
+      <DashboardMessage
+        title="Sesión no disponible"
+        detail="Inicia sesión nuevamente para consultar el panel."
+      />
+    );
   }
 
   if (summaryQuery.isLoading) {
@@ -64,7 +72,6 @@ export function DashboardView() {
 
   const summary = summaryQuery.data;
   const employeeName = session.user.name?.split(' ')[0] || session.tenantName;
-  const pendingOrderCount = summary.pendingOrders + summary.claimedOrders;
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4 pb-5">
@@ -82,8 +89,12 @@ export function DashboardView() {
           <div className="flex min-h-12 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
             <CalendarDays className="h-4 w-4 text-slate-700" aria-hidden="true" />
             <div>
-              <p className="text-xs font-medium capitalize text-slate-800">{formatLongDate(new Date())}</p>
-              <p className="mt-0.5 text-[10px] text-slate-400">Actualizado {formatUpdatedAt(new Date())}</p>
+              <p className="text-xs font-medium capitalize text-slate-800">
+                {formatLongDate(new Date())}
+              </p>
+              <p className="mt-0.5 text-[10px] text-slate-400">
+                Actualizado {formatUpdatedAt(new Date())}
+              </p>
             </div>
           </div>
           <Button
@@ -95,100 +106,247 @@ export function DashboardView() {
               void productRankingQuery.refetch();
             }}
           >
-            <RefreshCw className={`mr-2 h-4 w-4 ${summaryQuery.isFetching || productRankingQuery.isFetching ? 'animate-spin' : ''}`} />
+            <RefreshCw
+              className={`mr-2 h-4 w-4 ${summaryQuery.isFetching || productRankingQuery.isFetching ? 'animate-spin' : ''}`}
+            />
             Actualizar
           </Button>
         </div>
       </header>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6" aria-label="Indicadores principales">
-        <KpiCard
-          title="Ventas de hoy"
-          value={formatCurrency(summary.netSalesToday)}
-          detail={`${summary.completedOrdersToday} órdenes • ${summary.invoicesToday} facturas`}
-          icon={dashboardIcons.sales}
-          tone="green"
-          session={session}
-        />
-        <KpiCard
-          title="Cobrado en el mes"
-          value={formatCurrency(summary.netSalesMonth)}
-          detail="vs. mes anterior"
-          icon={dashboardIcons.collected}
-          tone="blue"
-          session={session}
-          footer={<MonthComparison current={summary.netSalesMonth} previous={summary.previousMonthNetSales} />}
-        />
-        <KpiCard
-          title="Órdenes registradas"
-          value={String(summary.totalOrders)}
-          detail={`${summary.completedOrders} completadas • ${pendingOrderCount} pendiente${pendingOrderCount === 1 ? '' : 's'}`}
-          icon={dashboardIcons.orders}
-          tone="orange"
-          href="/orders"
-          session={session}
-        />
-        <KpiCard
-          title="Productos activos"
-          value={String(summary.activeProducts)}
-          detail={`${summary.lowStockProducts} bajo mínimo`}
-          icon={dashboardIcons.products}
-          tone="violet"
-          href="/products"
-          session={session}
-        />
-        <KpiCard
-          title="Almacén B2B"
-          value={String(summary.warehouse.productCount)}
-          detail={`${summary.warehouse.productCount === 1 ? 'tipo de producto' : 'tipos de producto'} • ${formatCompactQuantity(summary.warehouse.unitCount)} unidades`}
-          icon={dashboardIcons.warehouse}
-          tone="green"
-          href="/warehouse"
-          session={session}
-        />
-        <KpiCard
-          title="Alertas fiscales"
-          value={String(summary.fiscalSequenceAlerts.length)}
-          detail={summary.fiscalSequenceAlerts.length > 0 ? 'requiere atención' : 'sin alertas activas'}
-          icon={dashboardIcons.fiscal}
-          tone="red"
-          href="/settings/fiscal-sequences"
-          session={session}
-        />
-      </section>
+      {session.role === 'ACCOUNTANT' ? (
+        <>
+          <section
+            className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
+            aria-label="Indicadores contables"
+          >
+            <KpiCard
+              title="Ventas de hoy"
+              value={formatCurrency(summary.netSalesToday)}
+              detail={`${summary.invoicesToday} facturas`}
+              icon={dashboardIcons.sales}
+              tone="green"
+              session={session}
+            />
+            <KpiCard
+              title="Cobrado en el mes"
+              value={formatCurrency(summary.netSalesMonth)}
+              detail={`Cobrado: ${formatCurrency(summary.collectionsMonth)}`}
+              icon={dashboardIcons.collected}
+              tone="blue"
+              session={session}
+              footer={
+                <MonthComparison
+                  current={summary.netSalesMonth}
+                  previous={summary.previousMonthNetSales}
+                />
+              }
+            />
+            <KpiCard
+              title="Por cobrar"
+              value={formatCurrency(summary.accounting.receivables.outstandingBalance)}
+              detail={`${summary.accounting.receivables.openInvoiceCount} facturas abiertas`}
+              icon={dashboardIcons.collected}
+              tone="orange"
+              href="/receivables"
+              session={session}
+            />
+            <KpiCard
+              title="Cartera vencida"
+              value={formatCurrency(summary.accounting.receivables.overdueBalance)}
+              detail={`${summary.accounting.receivables.overdueCount} facturas vencidas`}
+              icon={dashboardIcons.fiscal}
+              tone="red"
+              href="/receivables"
+              session={session}
+            />
+            <KpiCard
+              title="Por pagar"
+              value={formatCurrency(summary.accounting.payables.outstandingBalance)}
+              detail={`${summary.accounting.payables.openInvoiceCount} compromisos`}
+              icon={dashboardIcons.orders}
+              tone="violet"
+              href="/payables"
+              session={session}
+            />
+            <KpiCard
+              title="Alertas fiscales"
+              value={String(summary.fiscalSequenceAlerts.length)}
+              detail={
+                summary.fiscalSequenceAlerts.length ? 'Requieren atención' : 'Sin alertas activas'
+              }
+              icon={dashboardIcons.fiscal}
+              tone="red"
+              href="/settings/fiscal-sequences"
+              session={session}
+            />
+          </section>
+          <section className="grid gap-3 xl:grid-cols-12">
+            <div className="xl:col-span-7">
+              <MonthlySalesChart summary={summary} />
+            </div>
+            <div className="xl:col-span-5">
+              <SalesBehaviorChart summary={summary} />
+            </div>
+          </section>
+          <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-12">
+            <div className="xl:col-span-4">
+              <CashMovementCard summary={summary} />
+            </div>
+            <div className="xl:col-span-4">
+              <ProductSalesChart
+                ranking={productRankingQuery.data}
+                isLoading={productRankingQuery.isLoading}
+              />
+            </div>
+            <div className="xl:col-span-4">
+              <AlertsPanel summary={summary} session={session} />
+            </div>
+          </section>
+        </>
+      ) : (
+        <>
+          <section
+            className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
+            aria-label="Indicadores principales"
+          >
+            <KpiCard
+              title="Ventas de hoy"
+              value={formatCurrency(summary.netSalesToday)}
+              detail={`${summary.completedOrdersToday} órdenes · ${summary.invoicesToday} facturas`}
+              icon={dashboardIcons.sales}
+              tone="green"
+              session={session}
+            />
+            <KpiCard
+              title="Ventas del mes"
+              value={formatCurrency(summary.netSalesMonth)}
+              detail="Comparación mensual"
+              icon={dashboardIcons.collected}
+              tone="blue"
+              session={session}
+              footer={
+                <MonthComparison
+                  current={summary.netSalesMonth}
+                  previous={summary.previousMonthNetSales}
+                />
+              }
+            />
+            <KpiCard
+              title="Órdenes activas"
+              value={String(
+                summary.production.waiting + summary.production.factory + summary.production.ready,
+              )}
+              detail={`${summary.production.urgent} urgentes`}
+              icon={dashboardIcons.orders}
+              tone="orange"
+              href="/production"
+              session={session}
+            />
+            <KpiCard
+              title="En fábrica"
+              value={String(summary.production.factory)}
+              detail="En proceso de personalización"
+              icon={dashboardIcons.warehouse}
+              tone="violet"
+              href="/production"
+              session={session}
+            />
+            <KpiCard
+              title="Listas para entregar"
+              value={String(summary.production.ready)}
+              detail={`${summary.delivery.promisedToday} prometidas para hoy`}
+              icon={dashboardIcons.products}
+              tone="green"
+              href="/production"
+              session={session}
+            />
+            <KpiCard
+              title="Órdenes atrasadas"
+              value={String(summary.production.late)}
+              detail={
+                summary.production.late ? 'Requieren atención inmediata' : 'Sin atrasos activos'
+              }
+              icon={dashboardIcons.fiscal}
+              tone="red"
+              href="/production"
+              session={session}
+            />
+          </section>
 
-      <section className="grid gap-3 xl:grid-cols-12" aria-label="Analítica comercial">
-        <div className="xl:col-span-6"><MonthlySalesChart summary={summary} /></div>
-        <div className="xl:col-span-3"><OrdersStatusChart summary={summary} /></div>
-        <div className="xl:col-span-3">
-          <ProductSalesChart ranking={productRankingQuery.data} isLoading={productRankingQuery.isLoading} />
-        </div>
-      </section>
+          <section className="grid gap-3 xl:grid-cols-12" aria-label="Producción y seguimiento">
+            <div className="xl:col-span-5">
+              <ProductionOverview summary={summary} />
+            </div>
+            <div className="xl:col-span-7">
+              <AttentionOrdersPanel summary={summary} />
+            </div>
+          </section>
 
-      <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-12" aria-label="Operación e inventario">
-        <div className="xl:col-span-3"><CashMovementCard summary={summary} /></div>
-        <div className="xl:col-span-5"><SalesBehaviorChart summary={summary} /></div>
-        <div className="lg:col-span-2 xl:col-span-4"><InventorySummaryCard summary={summary} session={session} /></div>
-      </section>
+          <section className="grid gap-3 xl:grid-cols-12" aria-label="Ventas">
+            <div className="xl:col-span-6">
+              <MonthlySalesChart summary={summary} />
+            </div>
+            <div className="xl:col-span-3">
+              <SalesChannelCard summary={summary} />
+            </div>
+            <div className="xl:col-span-3">
+              <ProductSalesChart
+                ranking={productRankingQuery.data}
+                isLoading={productRankingQuery.isLoading}
+              />
+            </div>
+          </section>
 
-      <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-12" aria-label="Acciones y seguimiento">
-        <div className="xl:col-span-4"><QuickActions session={session} /></div>
-        <div className="xl:col-span-4"><RecentActivity summary={summary} session={session} /></div>
-        <div className="lg:col-span-2 xl:col-span-4"><AlertsPanel summary={summary} session={session} /></div>
-      </section>
+          <section
+            className="grid gap-3 lg:grid-cols-2 xl:grid-cols-12"
+            aria-label="Entregas e inventario"
+          >
+            <div className="xl:col-span-4">
+              <DeliverySummaryCard summary={summary} />
+            </div>
+            <div className="xl:col-span-4">
+              <InventoryAlertsCard summary={summary} />
+            </div>
+            <div className="lg:col-span-2 xl:col-span-4">
+              <CorporateSummaryCard summary={summary} />
+            </div>
+          </section>
+
+          <section
+            className="grid gap-3 lg:grid-cols-2 xl:grid-cols-12"
+            aria-label="Acciones y alertas"
+          >
+            <div className="xl:col-span-4">
+              <QuickActions session={session} />
+            </div>
+            <div className="xl:col-span-8">
+              <AlertsPanel summary={summary} session={session} />
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }
 
 function DashboardLoading() {
   return (
-    <div className="mx-auto w-full max-w-[1600px] animate-pulse space-y-4" aria-label="Cargando panel">
+    <div
+      className="mx-auto w-full max-w-[1600px] animate-pulse space-y-4"
+      aria-label="Cargando panel"
+    >
       <div className="flex items-end justify-between gap-4">
-        <div className="space-y-2"><div className="h-8 w-72 rounded bg-slate-200" /><div className="h-4 w-96 max-w-full rounded bg-slate-200" /></div>
+        <div className="space-y-2">
+          <div className="h-8 w-72 rounded bg-slate-200" />
+          <div className="h-4 w-96 max-w-full rounded bg-slate-200" />
+        </div>
         <div className="h-12 w-80 rounded-xl bg-slate-200" />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-[110px] rounded-2xl bg-white" />)}
+        {Array.from({ length: 6 }).map((_, index) => (
+          <div key={index} className="h-[110px] rounded-2xl bg-white" />
+        ))}
       </div>
       <div className="grid gap-3 xl:grid-cols-12">
         <div className="h-[260px] rounded-2xl bg-white xl:col-span-6" />
@@ -199,7 +357,15 @@ function DashboardLoading() {
   );
 }
 
-function DashboardMessage({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) {
+function DashboardMessage({
+  title,
+  detail,
+  action,
+}: {
+  title: string;
+  detail: string;
+  action?: React.ReactNode;
+}) {
   return (
     <div className="grid min-h-[55vh] place-items-center">
       <div className="rounded-2xl border border-slate-200 bg-white px-8 py-10 text-center shadow-sm">
@@ -232,8 +398,4 @@ function formatUpdatedAt(value: string | Date) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
-}
-
-function formatCompactQuantity(value: number) {
-  return new Intl.NumberFormat('es-DO', { maximumFractionDigits: 2 }).format(value);
 }

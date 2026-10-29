@@ -72,7 +72,8 @@ export function InvoicesView() {
       })
       .sort(
         (a, b) =>
-          new Date(b.issuedAt ?? b.createdAt).getTime() - new Date(a.issuedAt ?? a.createdAt).getTime(),
+          new Date(b.issuedAt ?? b.createdAt).getTime() -
+          new Date(a.issuedAt ?? a.createdAt).getTime(),
       );
   }, [invoicesQuery.data, periodFilter, search, statusFilter]);
   const total = filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.total), 0);
@@ -153,7 +154,9 @@ export function InvoicesView() {
       <Card>
         <CardHeader>
           <CardTitle>Listado de facturas</CardTitle>
-          <CardDescription>Datos reales consultados por tenant, organizados por fecha.</CardDescription>
+          <CardDescription>
+            Datos reales consultados por tenant, organizados por fecha.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-3 md:hidden">
@@ -166,7 +169,9 @@ export function InvoicesView() {
                       {invoice.customer?.name ?? 'Consumidor final'}
                     </p>
                   </div>
-                  <Badge variant={getStatusVariant(invoice.status)}>{translateStatus(invoice.status)}</Badge>
+                  <Badge variant={getStatusVariant(invoice.status)}>
+                    {translateStatus(invoice.status)}
+                  </Badge>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-sm">
                   <span>{formatDate(invoice.issuedAt ?? invoice.createdAt)}</span>
@@ -186,42 +191,46 @@ export function InvoicesView() {
 
           <div className="hidden md:block">
             <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Numero</TableHead>
-                <TableHead>Cliente</TableHead>
-                <TableHead>Fecha</TableHead>
-                <TableHead>Estado</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Acciones</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredInvoices.map((invoice) => (
-                <TableRow key={invoice.id}>
-                  <TableCell className="font-medium">
-                    <Link href={`/invoices/${invoice.id}`} className="hover:underline">
-                      {invoice.invoiceNumber}
-                    </Link>
-                  </TableCell>
-                  <TableCell>{invoice.customer?.name ?? 'Consumidor final'}</TableCell>
-                  <TableCell>{formatDate(invoice.issuedAt ?? invoice.createdAt)}</TableCell>
-                  <TableCell>
-                    <Badge variant={getStatusVariant(invoice.status)}>{translateStatus(invoice.status)}</Badge>
-                  </TableCell>
-                  <TableCell>{invoice.items.length}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(Number(invoice.total))}</TableCell>
-                  <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="icon">
-                      <Link href={`/invoices/${invoice.id}/print`} aria-label="Imprimir factura">
-                        <Printer className="h-4 w-4" />
-                      </Link>
-                    </Button>
-                  </TableCell>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Numero</TableHead>
+                  <TableHead>Cliente</TableHead>
+                  <TableHead>Fecha</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead>Items</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
+              </TableHeader>
+              <TableBody>
+                {filteredInvoices.map((invoice) => (
+                  <TableRow key={invoice.id}>
+                    <TableCell className="font-medium">
+                      <Link href={`/invoices/${invoice.id}`} className="hover:underline">
+                        {invoice.invoiceNumber}
+                      </Link>
+                    </TableCell>
+                    <TableCell>{invoice.customer?.name ?? 'Consumidor final'}</TableCell>
+                    <TableCell>{formatDate(invoice.issuedAt ?? invoice.createdAt)}</TableCell>
+                    <TableCell>
+                      <Badge variant={getStatusVariant(invoice.status)}>
+                        {translateStatus(invoice.status)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{invoice.items.length}</TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(Number(invoice.total))}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button asChild variant="ghost" size="icon">
+                        <Link href={`/invoices/${invoice.id}/print`} aria-label="Imprimir factura">
+                          <Printer className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
             </Table>
           </div>
         </CardContent>
@@ -248,15 +257,25 @@ function matchesPeriod(dateValue: string, period: string) {
 
   if (period === 'LAST_MONTH') {
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    return date.getFullYear() === lastMonth.getFullYear() && date.getMonth() === lastMonth.getMonth();
+    return (
+      date.getFullYear() === lastMonth.getFullYear() && date.getMonth() === lastMonth.getMonth()
+    );
   }
 
   if (period === 'FIRST_HALF') {
-    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() <= 15;
+    return (
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() <= 15
+    );
   }
 
   if (period === 'SECOND_HALF') {
-    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() > 15;
+    return (
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() > 15
+    );
   }
 
   return date.getFullYear() === now.getFullYear();

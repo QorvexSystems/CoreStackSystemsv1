@@ -27,10 +27,7 @@ import {
 } from '@/lib/api';
 import { brand } from '@/lib/brand';
 import { getStatusVariant, translateDocumentType, translateStatus } from '@/lib/display-labels';
-import {
-  normalizeDominicanDocument,
-  validateDominicanDocument,
-} from '@/lib/dominican-documents';
+import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
 import { formatDate } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -98,9 +95,7 @@ export function CustomersView() {
       if (form.documentType === 'RNC' || form.documentType === 'CEDULA') {
         if (!validateDominicanDocument(form.documentType, documentNumber)) {
           throw new Error(
-            form.documentType === 'RNC'
-              ? 'El RNC no es valido.'
-              : 'La cedula no es valida.',
+            form.documentType === 'RNC' ? 'El RNC no es valido.' : 'La cedula no es valida.',
           );
         }
 

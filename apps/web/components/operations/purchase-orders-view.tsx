@@ -19,7 +19,6 @@ import {
 import {
   createPurchaseOrder,
   getProducts,
-  getWarehouseProducts,
   getPurchaseOrders,
   getSupplier,
   getSuppliers,
@@ -77,9 +76,7 @@ export function PurchaseOrdersView() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [supplierId, setSupplierId] = useState('');
-  const [destination, setDestination] = useState<'SALES_INVENTORY' | 'WAREHOUSE'>(
-    'SALES_INVENTORY',
-  );
+  const destination = 'SALES_INVENTORY' as const;
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<EditablePurchaseItem[]>([blankItem()]);
@@ -114,11 +111,8 @@ export function PurchaseOrdersView() {
     enabled: Boolean(session && supplierId),
   });
   const productsQuery = useQuery({
-    queryKey: ['products', session?.tenantId, 'purchase-order', destination],
-    queryFn: () =>
-      destination === 'WAREHOUSE'
-        ? getWarehouseProducts(session?.tenantId ?? '', session?.accessToken ?? '')
-        : getProducts(session?.tenantId ?? '', session?.accessToken ?? ''),
+    queryKey: ['products', session?.tenantId, 'purchase-order'],
+    queryFn: () => getProducts(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
 
@@ -177,7 +171,6 @@ export function PurchaseOrdersView() {
   function resetForm() {
     setEditingId(null);
     setSupplierId('');
-    setDestination('SALES_INVENTORY');
     setExpectedDeliveryDate('');
     setNotes('');
     setItems([blankItem()]);
@@ -216,7 +209,6 @@ export function PurchaseOrdersView() {
   function editOrder(order: PurchaseOrder) {
     setEditingId(order.id);
     setSupplierId(order.supplierId);
-    setDestination(order.destination);
     setExpectedDeliveryDate(toDateInput(order.expectedDeliveryDate));
     setNotes(order.notes ?? '');
     setItems(
@@ -316,23 +308,6 @@ export function PurchaseOrdersView() {
                         {supplier.commercialName}
                       </option>
                     ))}
-                  </select>
-                </FormField>
-                <FormField
-                  label="Destino de la compra"
-                  hint="Almacén queda separado y no aumenta el inventario de ventas."
-                >
-                  <select
-                    required
-                    className={selectClassName}
-                    value={destination}
-                    onChange={(event) => {
-                      setDestination(event.target.value as 'SALES_INVENTORY' | 'WAREHOUSE');
-                      setItems([blankItem()]);
-                    }}
-                  >
-                    <option value="SALES_INVENTORY">Inventario de ventas</option>
-                    <option value="WAREHOUSE">Almacén</option>
                   </select>
                 </FormField>
                 <FormField
@@ -529,7 +504,7 @@ export function PurchaseOrdersView() {
                     <p className="truncate text-sm text-muted-foreground">
                       {order.supplierNameSnapshot} · {order.items.length} producto(s)
                       {' · '}
-                      {order.destination === 'WAREHOUSE' ? 'Almacén' : 'Inventario de ventas'}
+                      Productos
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
@@ -549,7 +524,7 @@ export function PurchaseOrdersView() {
                   <Meta label="Entrega estimada" value={formatDate(order.expectedDeliveryDate)} />
                   <Meta
                     label="Destino"
-                    value={order.destination === 'WAREHOUSE' ? 'Almacén' : 'Inventario de ventas'}
+                    value="Productos"
                   />
                 </div>
                 <div className="overflow-x-auto rounded-md border">

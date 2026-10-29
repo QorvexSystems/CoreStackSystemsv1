@@ -1,14 +1,14 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Bell, Building2, LogOut } from 'lucide-react';
+import { Bell, ChevronDown, LogOut, Search } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { clearSession, getSession, type AuthSession } from '@/lib/auth-session';
-import { canAccessPath, getDefaultPathForSession } from '@/lib/authorization';
+import { canAccessPath, getDefaultPathForSession, isAccountantSession, isAdminSession } from '@/lib/authorization';
 import {
   getCurrentCashSession,
   getDashboardSummary,
@@ -24,6 +24,8 @@ import { MobileNavigation, Sidebar } from './sidebar';
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
   const pathname = usePathname();
   const router = useRouter();
@@ -49,6 +51,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const currentSession = getSession();
     setSession(currentSession);
+    setNotificationsOpen(false);
+    setUserMenuOpen(false);
+    setMobileSearchOpen(false);
 
     if (!currentSession) {
       const nextPath = `${pathname}${window.location.search}`;
@@ -107,8 +112,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (session === undefined) {
     return (
-      <div className="grid min-h-screen place-items-center bg-zinc-100 px-4">
-        <div className="rounded-md border border-zinc-200 bg-white px-4 py-3 text-sm text-muted-foreground shadow-sm">
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
           Validando sesion...
         </div>
       </div>
@@ -117,8 +122,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!session) {
     return (
-      <div className="grid min-h-screen place-items-center bg-zinc-100 px-4">
-        <div className="rounded-md border border-zinc-200 bg-white px-4 py-3 text-sm text-muted-foreground shadow-sm">
+      <div className="grid min-h-screen place-items-center bg-background px-4">
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
           Redirigiendo al login...
         </div>
       </div>
@@ -126,43 +131,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-100">
+    <div className="min-h-screen overflow-x-clip bg-background">
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)} />
 
       <div
         className={cn(
-          'min-h-screen pb-24 transition-[padding] duration-200 lg:pb-0',
+          'min-h-screen min-w-0 pb-24 transition-[padding] duration-200 lg:pb-0',
           sidebarCollapsed ? 'lg:pl-[4.5rem]' : 'lg:pl-72',
           'print:pb-0 print:pl-0',
         )}
       >
-        <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/90 backdrop-blur print:hidden">
-          <div className="flex h-16 items-center justify-between gap-3 px-3 sm:px-6">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="hidden h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary sm:flex">
-                  <Building2 className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{brand.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">Operacion del cliente</p>
-                </div>
-              </div>
+        <header className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur print:hidden">
+          <div className="flex h-16 min-w-0 items-center justify-between gap-3 px-3 sm:px-6">
+            <div className="flex shrink-0 items-center gap-2 lg:hidden">
+              <img src={brand.logoPath} alt={brand.name} className="h-9 w-9 rounded-md object-contain" />
+              <span className="hidden text-sm font-semibold text-foreground sm:inline">{brand.name}</span>
             </div>
 
             <GlobalSearch session={session} />
 
-            <div className="relative flex shrink-0 items-center gap-2">
+            <div className="relative flex shrink-0 items-center gap-2 sm:gap-3">
+              {isAdminSession(session) || isAccountantSession(session) ? (
+                <Button type="button" variant="ghost" size="icon" aria-label="Buscar" aria-expanded={mobileSearchOpen} className="md:hidden" onClick={() => { setMobileSearchOpen((open) => !open); setNotificationsOpen(false); setUserMenuOpen(false); }}><Search className="h-5 w-5" /></Button>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label="Notificaciones"
-                className="relative inline-flex"
-                onClick={() => setNotificationsOpen((current) => !current)}
+                className="relative inline-flex text-muted-foreground hover:text-foreground"
+                onClick={() => { setNotificationsOpen((current) => !current); setUserMenuOpen(false); setMobileSearchOpen(false); }}
               >
                 <Bell className="h-5 w-5" />
                 {fiscalSequenceAlertsQuery.data?.length ? (
-                  <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+                  <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[11px] font-bold text-white">
                     {fiscalSequenceAlertsQuery.data.length > 9
                       ? '9+'
                       : fiscalSequenceAlertsQuery.data.length}
@@ -179,22 +180,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   onClose={() => setNotificationsOpen(false)}
                 />
               ) : null}
-              <div className="flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-2 py-1.5 sm:px-3">
-                <div className="h-8 w-8 rounded-md bg-primary text-center text-sm font-semibold leading-8 text-primary-foreground">
-                  {session?.user.name.slice(0, 2).toUpperCase() ?? 'RV'}
+              <button
+                type="button"
+                aria-expanded={userMenuOpen}
+                aria-label="Menú de usuario"
+                onClick={() => { setUserMenuOpen((current) => !current); setNotificationsOpen(false); setMobileSearchOpen(false); }}
+                className={cn(
+                  'flex items-center gap-2.5 rounded-lg border bg-white px-2 py-1.5 text-left shadow-sm transition-colors hover:bg-[#FAF8F5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-3',
+                  userMenuOpen ? 'border-gold-dark' : 'border-border',
+                )}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white" style={{ backgroundColor: '#8A651E' }}>
+                  {session?.user.name.slice(0, 2).toUpperCase() ?? 'UP'}
                 </div>
-                <div className="hidden sm:block">
-                  <p className="text-sm font-medium">{session?.user.name ?? brand.name}</p>
-                  <p className="text-xs text-muted-foreground">{translateRole(session?.role) ?? 'Operacion'}</p>
+                <div className="hidden min-w-0 sm:block">
+                  <p className="truncate text-sm font-semibold text-[#101623]">{session?.user.name ?? brand.name}</p>
+                  <p className="text-xs font-medium text-[#526075]">{translateRole(session?.role) ?? 'Operacion'}</p>
                 </div>
-              </div>
-              <Button variant="outline" size="icon" aria-label="Cerrar sesion" onClick={handleLogout}>
-                <LogOut className="h-4 w-4" />
-              </Button>
+                <ChevronDown className="hidden h-4 w-4 shrink-0 text-[#526075] sm:block" />
+              </button>
+              {userMenuOpen ? (
+                <div className="absolute right-0 top-12 z-50 min-w-52 rounded-lg border border-border bg-card p-2 shadow-lg">
+                  <p className="truncate px-3 py-2 text-xs text-muted-foreground">{session.user.name}</p>
+                  <button type="button" onClick={handleLogout} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <LogOut className="h-4 w-4" /> Cerrar sesión
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
+          {mobileSearchOpen ? <div className="absolute inset-x-3 top-16 z-30 rounded-lg border border-border bg-card p-3 shadow-lg md:hidden"><GlobalSearch session={session} mobile /></div> : null}
         </header>
-        <main className="animate-page-enter mx-auto w-full max-w-[92rem] px-3 py-4 print:max-w-none print:p-0 sm:px-6 sm:py-6">
+        <main className="animate-page-enter mx-auto w-full min-w-0 max-w-[110rem] px-3 py-5 print:max-w-none print:p-0 sm:px-6 sm:py-7">
           {children}
         </main>
       </div>
@@ -258,7 +275,7 @@ function NotificationsPanel({
   ];
 
   return (
-    <div className="absolute right-12 top-12 z-50 w-80 rounded-md border border-zinc-200 bg-white p-3 shadow-xl">
+    <div className="absolute right-0 top-12 z-50 w-[min(20rem,calc(100vw-1.5rem))] rounded-lg border border-border bg-card p-3 shadow-lg">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-sm font-semibold">Notificaciones</p>
         <button type="button" className="text-xs text-muted-foreground" onClick={onClose}>

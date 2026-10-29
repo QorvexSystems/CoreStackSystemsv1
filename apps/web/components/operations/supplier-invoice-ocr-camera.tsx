@@ -277,7 +277,9 @@ export function SupplierInvoiceOcrCamera({
         ),
       );
     } catch {
-      setOcrError('No se pudo girar la página. Puedes repetir la foto o introducir la factura manualmente.');
+      setOcrError(
+        'No se pudo girar la página. Puedes repetir la foto o introducir la factura manualmente.',
+      );
     } finally {
       setProcessing(false);
     }
@@ -372,9 +374,7 @@ export function SupplierInvoiceOcrCamera({
           for (const region of regions) {
             if (!requiredRegions.includes(region.id)) continue;
             const pageSegmentationMode =
-              region.id === 'table' || region.id === 'footer'
-                ? PSM.SINGLE_BLOCK
-                : PSM.SPARSE_TEXT;
+              region.id === 'table' || region.id === 'footer' ? PSM.SINGLE_BLOCK : PSM.SPARSE_TEXT;
             const text = await recognizeImage(region.image, pageSegmentationMode);
             if (text.length >= 8) {
               regionalTexts.push(
@@ -723,9 +723,11 @@ function getRequiredOcrRegions(
   // A weak photograph earns an extra, small reading pass even if it found a
   // keyword. This is cheaper than running every zone for every clean image.
   if (quality?.status === 'warning') return ['header', 'table', 'footer'];
-  return [needsHeader ? 'header' : null, needsTable ? 'table' : null, needsFooter ? 'footer' : null].filter(
-    (region): region is 'header' | 'table' | 'footer' => Boolean(region),
-  );
+  return [
+    needsHeader ? 'header' : null,
+    needsTable ? 'table' : null,
+    needsFooter ? 'footer' : null,
+  ].filter((region): region is 'header' | 'table' | 'footer' => Boolean(region));
 }
 
 function humanizeOcrStatus(status: string) {

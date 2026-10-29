@@ -3,27 +3,27 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 96%;
-  --foreground: 0 0% 7%;
+  --background: 36 33% 97%;
+  --foreground: 221 37% 10%;
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 7%;
-  --muted: 0 0% 92%;
-  --muted-foreground: 0 0% 38%;
-  --primary: 0 0% 7%;
+  --card-foreground: 221 37% 10%;
+  --muted: 40 38% 94%;
+  --muted-foreground: 218 14% 45%;
+  --primary: 42 100% 30%;
   --primary-foreground: 0 0% 100%;
-  --accent: 0 0% 16%;
+  --accent: 39 64% 33%;
   --accent-foreground: 0 0% 100%;
-  --border: 0 0% 82%;
-  --input: 0 0% 82%;
-  --ring: 0 0% 7%;
-  --success: 0 0% 22%;
-  --warning: 0 0% 38%;
-  --danger: 0 0% 14%;
+  --border: 39 26% 87%;
+  --input: 39 26% 87%;
+  --ring: 42 100% 30%;
+  --success: 151 58% 31%;
+  --warning: 32 95% 40%;
+  --danger: 0 72% 44%;
 }
 
 * {
   box-sizing: border-box;
-  scrollbar-color: rgb(100 116 139 / 0.72) transparent;
+  scrollbar-color: rgb(138 101 30 / 0.32) transparent;
   scrollbar-width: thin;
 }
 
@@ -38,7 +38,7 @@
 
 *::-webkit-scrollbar-thumb {
   background-clip: content-box;
-  background-color: rgb(100 116 139 / 0.62);
+  background-color: rgb(138 101 30 / 0.38);
   border: 2px solid transparent;
   border-radius: 999px;
 }
@@ -55,7 +55,20 @@ body {
   margin: 0;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-family: var(--font-inter), 'Segoe UI', Arial, sans-serif;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: #e4c77c70;
+  color: #101623;
 }
 
 a {
@@ -83,6 +96,43 @@ a {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes kanban-drop-glow {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 1px rgb(153 107 0 / 0.2);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 2px rgb(153 107 0 / 0.5),
+      0 6px 20px rgb(153 107 0 / 0.08);
+  }
+}
+
+@keyframes kanban-card-arrive {
+  from {
+    opacity: 0.45;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.kanban-card-dragging {
+  opacity: 0.38;
+  transform: scale(0.97) rotate(-1deg);
+  box-shadow: 0 14px 30px rgb(16 22 35 / 0.16);
+}
+
+.kanban-drop-target {
+  animation: kanban-drop-glow 900ms ease-in-out infinite;
+}
+
+.kanban-card-arrived {
+  animation: kanban-card-arrive 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -123,7 +173,7 @@ a {
 
   .sidebar-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: rgb(71 85 105 / 0.75) transparent;
+    scrollbar-color: rgb(138 101 30 / 0.35) transparent;
   }
 
   .sidebar-scrollbar::-webkit-scrollbar {
@@ -135,8 +185,8 @@ a {
   }
 
   .sidebar-scrollbar::-webkit-scrollbar-thumb {
-    background-color: rgb(51 65 85 / 0.72);
-    border: 2px solid rgb(2 6 23);
+    background-color: rgb(138 101 30 / 0.32);
+    border: 2px solid #faf8f5;
     border-radius: 999px;
   }
 

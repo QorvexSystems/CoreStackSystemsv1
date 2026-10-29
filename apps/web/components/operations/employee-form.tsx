@@ -213,7 +213,14 @@ export function EmployeeForm({
                 type="password"
                 value={form.password}
                 onChange={(event) => setField('password', event.target.value)}
-                placeholder={employeeId ? 'Dejar vacio para no cambiar' : 'ContrasenaDemo123!'}
+                required={!employeeId && form.role === 'WAREHOUSE_KEEPER'}
+                placeholder={
+                  employeeId
+                    ? 'Dejar vacío para no cambiar'
+                    : form.role === 'WAREHOUSE_KEEPER'
+                      ? 'Crea una contraseña para Fábrica'
+                      : 'Contraseña de acceso'
+                }
               />
             </Field>
             <Field label="Rol">
@@ -225,8 +232,8 @@ export function EmployeeForm({
                 <option value="ADMIN">Administrador</option>
                 <option value="ACCOUNTANT">Contador</option>
                 <option value="CASHIER">Cajero</option>
-                <option value="ORDER_TAKER">Ordenanza</option>
-                <option value="WAREHOUSE_KEEPER">Almacenista</option>
+                <option value="ORDER_TAKER">Toma de órdenes</option>
+                <option value="WAREHOUSE_KEEPER">Fábrica</option>
               </select>
             </Field>
             <Field label="Estado">
@@ -291,10 +298,11 @@ export function EmployeeForm({
               ) : null}
               {form.role === 'WAREHOUSE_KEEPER' ? (
                 <div className="rounded-md border border-primary/20 bg-primary/5 p-3 sm:col-span-2 lg:col-span-3">
-                  <p className="text-sm font-semibold">Acceso de almacén incluido por el rol</p>
+                  <p className="text-sm font-semibold">Acceso de fábrica incluido por el rol</p>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Puede consultar existencias y movimientos, agregar productos al almacén y
-                    registrar despachos. No tiene acceso a caja, ventas ni a otros módulos.
+                    Accede únicamente a la cola de trabajos de Fábrica. Puede iniciar trabajos,
+                    actualizar su avance y marcarlos como terminados. No ve precios, caja,
+                    inventario ni otros módulos.
                   </p>
                 </div>
               ) : null}
@@ -359,6 +367,10 @@ function getDefaultPermissionsForRole(
   if (role === 'ORDER_TAKER') {
     return {
       ...permissions,
+      canUsePos: true,
+      canOpenCashSession: true,
+      canCloseCashSession: true,
+      canReprintReceipt: true,
       canTakeOrders: true,
     };
   }

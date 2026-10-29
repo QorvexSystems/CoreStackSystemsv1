@@ -8,7 +8,10 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ActionDialog } from '@/components/ui/action-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { acceptSalesOrder, cancelSalesOrder, getSalesOrders, type SalesOrder } from '@/lib/api';
 import { brand } from '@/lib/brand';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
@@ -29,6 +32,10 @@ export function QuotationsView() {
   const [activeTab, setActiveTab] = useState<QuotationTab>('PENDING');
   const [cancelTarget, setCancelTarget] = useState<SalesOrder | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [acceptTarget, setAcceptTarget] = useState<SalesOrder | null>(null);
+  const [promisedDate, setPromisedDate] = useState(() =>
+    new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+  );
 
   const quotationsQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'quotations-all'],
@@ -64,16 +71,17 @@ export function QuotationsView() {
   });
 
   const acceptMutation = useMutation({
-    mutationFn: (orderId: string) => {
+    mutationFn: ({ orderId, date }: { orderId: string; date: string }) => {
       if (!session) {
         throw new Error('Sesion requerida.');
       }
 
-      return acceptSalesOrder(session.tenantId, session.accessToken, orderId);
+      return acceptSalesOrder(session.tenantId, session.accessToken, orderId, date);
     },
     onSuccess: async (order) => {
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       setActiveTab('ACCEPTED');
+      setAcceptTarget(null);
       toast.success(
         order.paymentMode === 'CREDIT'
           ? 'Cotización aceptada y enviada para aprobación de crédito'
@@ -186,11 +194,19 @@ export function QuotationsView() {
                   key={order.id}
                   order={order}
                   tab={activeTab}
-                  isAccepting={acceptMutation.isPending && acceptMutation.variables === order.id}
+                  isAccepting={
+                    acceptMutation.isPending && acceptMutation.variables?.orderId === order.id
+                  }
                   isCancelling={
                     cancelMutation.isPending && cancelMutation.variables?.orderId === order.id
                   }
-                  onAccept={() => acceptMutation.mutate(order.id)}
+                  onAccept={() => {
+                    setAcceptTarget(order);
+                    setPromisedDate(
+                      order.promisedAt?.slice(0, 10) ??
+                        new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+                    );
+                  }}
                   onEdit={() => router.push(`/orders?edit=${order.id}`)}
                   onCancel={() => openCancelModal(order)}
                 />
@@ -217,6 +233,40 @@ export function QuotationsView() {
         onClose={closeCancelModal}
         onConfirm={confirmCancel}
       />
+      <ActionDialog
+        open={Boolean(acceptTarget)}
+        title="Aceptar cotización"
+        description={
+          acceptTarget
+            ? `${acceptTarget.orderNumber} pasará a la cola de órdenes y luego a caja.`
+            : undefined
+        }
+        tone="success"
+        confirmLabel="Aceptar y crear orden"
+        isPending={acceptMutation.isPending}
+        confirmDisabled={!promisedDate}
+        onClose={() => setAcceptTarget(null)}
+        onConfirm={() => {
+          if (acceptTarget && promisedDate) {
+            acceptMutation.mutate({ orderId: acceptTarget.id, date: promisedDate });
+          }
+        }}
+      >
+        <div className="space-y-2">
+          <Label htmlFor="quotationPromisedDate">Fecha prometida *</Label>
+          <Input
+            id="quotationPromisedDate"
+            type="date"
+            min={new Date().toISOString().slice(0, 10)}
+            value={promisedDate}
+            onChange={(event) => setPromisedDate(event.target.value)}
+            data-dialog-autofocus
+          />
+          <p className="text-xs text-muted-foreground">
+            Esta fecha se mostrará en Producción y despacho para controlar atrasos.
+          </p>
+        </div>
+      </ActionDialog>
     </div>
   );
 }
@@ -254,6 +304,8 @@ function QuotationCard({
           </div>
           <Badge variant={getStatusVariant(order.status)}>{translateStatus(order.status)}</Badge>
         </div>
+
+        {order.isCorporate ? <Badge variant="success">Regalos empresariales</Badge> : null}
 
         <div className="space-y-1 border-t border-zinc-100 pt-3 text-sm">
           <p className="text-zinc-700">

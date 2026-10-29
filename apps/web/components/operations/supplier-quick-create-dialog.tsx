@@ -6,12 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { ActionDialog } from '@/components/ui/action-dialog';
 import { Input } from '@/components/ui/input';
-import {
-  createSupplier,
-  updateSupplier,
-  type Supplier,
-  type SupplierPayload,
-} from '@/lib/api';
+import { createSupplier, updateSupplier, type Supplier, type SupplierPayload } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
 import {
   formatDominicanDocument,
@@ -136,7 +131,9 @@ export function SupplierQuickCreateDialog({
   const reactivateMutation = useMutation({
     mutationFn: (supplier: Supplier) => {
       if (!session) throw new Error('La sesión ya no está disponible. Vuelve a iniciar sesión.');
-      return updateSupplier(session.tenantId, session.accessToken, supplier.id, { status: 'ACTIVE' });
+      return updateSupplier(session.tenantId, session.accessToken, supplier.id, {
+        status: 'ACTIVE',
+      });
     },
     onSuccess: async (supplier) => {
       await queryClient.invalidateQueries({ queryKey: ['suppliers'] });
@@ -218,7 +215,11 @@ export function SupplierQuickCreateDialog({
       confirmDisabled={createDisabled}
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Nombre comercial" htmlFor="quick-supplier-commercial" className="sm:col-span-2">
+        <FormField
+          label="Nombre comercial"
+          htmlFor="quick-supplier-commercial"
+          className="sm:col-span-2"
+        >
           <Input
             id="quick-supplier-commercial"
             data-dialog-autofocus
@@ -359,7 +360,9 @@ export function SupplierQuickCreateDialog({
                 id="quick-supplier-phone"
                 maxLength={40}
                 value={form.phone}
-                onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, phone: event.target.value }))
+                }
               />
             </FormField>
             <FormField label="Correo" htmlFor="quick-supplier-email">
@@ -368,7 +371,9 @@ export function SupplierQuickCreateDialog({
                 type="email"
                 maxLength={254}
                 value={form.email}
-                onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, email: event.target.value }))
+                }
               />
             </FormField>
             <FormField label="Persona de contacto" htmlFor="quick-supplier-contact">
@@ -438,10 +443,7 @@ function inferDocumentType(value: string): SupplierDocumentType {
 
 function hasOptionalPrefill(prefill?: SupplierQuickCreatePrefill) {
   return Boolean(
-    prefill?.phone ||
-      prefill?.email ||
-      prefill?.paymentTerms ||
-      prefill?.creditDays !== undefined,
+    prefill?.phone || prefill?.email || prefill?.paymentTerms || prefill?.creditDays !== undefined,
   );
 }
 
@@ -465,6 +467,12 @@ function normalizeSupplierName(value: string) {
 }
 
 function isDuplicateSupplierError(message: string) {
-  const normalized = message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return normalized.includes('ya existe un proveedor con este rnc') || normalized.includes('already exists');
+  const normalized = message
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return (
+    normalized.includes('ya existe un proveedor con este rnc') ||
+    normalized.includes('already exists')
+  );
 }

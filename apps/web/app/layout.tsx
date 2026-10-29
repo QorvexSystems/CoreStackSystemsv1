@@ -12,12 +12,22 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: brand.name,
-  description: `${brand.descriptor}. Operación, facturación e inventario.`,
+  applicationName: brand.name,
+  title: {
+    default: `${brand.name} | CoreStack`,
+    template: `%s | ${brand.name}`,
+  },
+  description: `${brand.descriptor}. Operación, facturación, personalización e inventario.`,
+  manifest: '/manifest.webmanifest',
   icons: {
-    icon: [{ url: brand.faviconPath, type: 'image/png' }],
+    icon: [{ url: brand.faviconPath, type: 'image/png', sizes: '512x512' }],
     shortcut: brand.faviconPath,
-    apple: brand.faviconPath,
+    apple: [{ url: brand.appleTouchIconPath, type: 'image/png', sizes: '180x180' }],
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: brand.shortName,
   },
 };
 

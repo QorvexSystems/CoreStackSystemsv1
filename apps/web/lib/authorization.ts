@@ -5,10 +5,11 @@ const accountantExactPaths = new Set([
   '/dashboard',
   '/products',
   '/customers',
-  '/inventory',
   '/invoices',
   '/cash/logs',
   '/cash/sessions',
+  '/cash/registers',
+  '/settings/fiscal-sequences',
   '/operations/logs',
 ]);
 const accountantNestedPaths = [
@@ -72,6 +73,15 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
 
   if (isWarehouseKeeperSession(session)) {
     return pathname === '/warehouse';
+  }
+
+  if (
+    session.role === 'ORDER_TAKER' &&
+    ['/products', '/customers', '/invoices', '/quotations', '/receivables'].some(
+      (path) => pathname === path || pathname.startsWith(path + '/'),
+    )
+  ) {
+    return !pathname.endsWith('/new') && !pathname.endsWith('/edit');
   }
 
   if (pathname === '/quotations' || pathname.startsWith('/quotations/')) {

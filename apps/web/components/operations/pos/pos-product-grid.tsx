@@ -17,7 +17,6 @@ import {
 type PosProductGridProps = {
   products: Product[];
   quantitiesByProduct: Record<string, number>;
-  inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
   isLoading?: boolean;
   onAddProduct: (product: Product) => void;
 };
@@ -25,7 +24,6 @@ type PosProductGridProps = {
 export function PosProductGrid({
   products,
   quantitiesByProduct,
-  inventorySource = 'SALES_INVENTORY',
   isLoading,
   onAddProduct,
 }: PosProductGridProps) {
@@ -85,13 +83,11 @@ export function PosProductGrid({
                 >
                   {outOfStock
                     ? 'Sin stock'
-                    : inventorySource === 'WAREHOUSE'
-                      ? `Almacén · ${formatQuantity(availableStock)}`
-                      : product.trackInventory
-                        ? lowStock
-                          ? `Stock bajo · ${formatQuantity(availableStock)}`
-                          : `En stock · ${formatQuantity(availableStock)}`
-                        : 'Servicio'}
+                    : product.trackInventory
+                      ? lowStock
+                        ? `Stock bajo · ${formatQuantity(availableStock)}`
+                        : `En stock · ${formatQuantity(availableStock)}`
+                      : 'Servicio'}
                 </Badge>
                 <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">
                   {product.name}
@@ -105,7 +101,8 @@ export function PosProductGrid({
             <div className="mt-auto flex items-end justify-between gap-3 pt-3">
               <div className="min-w-0">
                 <p className="truncate text-xs text-muted-foreground">
-                  {product.category?.name ?? 'Sin tipo'} · {product.brand ?? 'Sin proveedor'}
+                  {product.category?.name ?? 'Sin categoría'} ·{' '}
+                  {product.material ?? product.brand ?? 'Sin material'}
                 </p>
                 <p className="mt-0.5 text-lg font-bold tracking-tight text-zinc-950">
                   {formatCurrency(getProductPrice(product))}

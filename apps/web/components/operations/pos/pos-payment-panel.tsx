@@ -216,7 +216,7 @@ export function PosPaymentPanel({
         <div className="rounded-lg bg-slate-950 px-3 py-2.5 text-white shadow-sm">
           <p className="text-[11px] text-slate-300">Total a cobrar</p>
           <p className="mt-0.5 text-xl font-bold leading-none">
-            {formatCurrency(totals.requiredPayment)}
+            {formatCurrency(creditSale ? totals.requiredPayment : totals.total)}
           </p>
         </div>
         <div className="rounded-lg bg-zinc-100 px-3 py-2.5 text-zinc-900">
@@ -241,7 +241,6 @@ export function PosPaymentPanel({
                 type="text"
                 inputMode="decimal"
                 value={amountReceived}
-                disabled={!cashPayment}
                 onChange={(event) =>
                   onAmountReceivedChange(sanitizeCurrencyInput(event.target.value))
                 }
@@ -277,14 +276,14 @@ export function PosPaymentPanel({
               <span>Total</span>
               <span>{formatCurrency(totals.total)}</span>
             </div>
-            {creditSale ? (
+            {creditSale || totals.remainingBalance > 0 ? (
               <>
                 <div className="mt-1 flex justify-between font-semibold text-sky-800">
-                  <span>Inicial</span>
+                  <span>{creditSale ? 'Inicial' : 'Abono a registrar'}</span>
                   <span>{formatCurrency(totals.requiredPayment)}</span>
                 </div>
                 <div className="flex justify-between font-semibold text-amber-800">
-                  <span>Saldo</span>
+                  <span>Balance pendiente</span>
                   <span>{formatCurrency(totals.remainingBalance)}</span>
                 </div>
               </>
@@ -300,7 +299,6 @@ export function PosPaymentPanel({
                 type="button"
                 variant="outline"
                 className="h-10 text-sm font-semibold"
-                disabled={!cashPayment}
                 onClick={() => appendAmount(key)}
               >
                 {key}
@@ -310,7 +308,6 @@ export function PosPaymentPanel({
               type="button"
               variant="outline"
               className="h-10"
-              disabled={!cashPayment}
               onClick={() => onAmountReceivedChange(backspaceCurrencyInput(amountReceived))}
               aria-label="Borrar último dígito"
             >
@@ -325,11 +322,23 @@ export function PosPaymentPanel({
             onClick={onCompleteSale}
           >
             <ReceiptText className="h-4 w-4" />
-            {isCompleting ? 'Facturando...' : 'Facturar e imprimir'}
+            {isCompleting ? 'Facturando...' : !creditSale && totals.remainingBalance > 0
+              ? 'Facturar con abono e imprimir' : 'Facturar e imprimir'}
           </Button>
         </div>
       </div>
 
+      {!creditSale && totals.remainingBalance > 0 ? (
+        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Se registrará un abono de {formatCurrency(totals.requiredPayment)}. El cliente quedará
+          con un balance pendiente de {formatCurrency(totals.remainingBalance)}.
+        </p>
+      ) : null}
+      {!cashPayment && Math.abs(totals.received - totals.requiredPayment) >= 0.005 ? (
+        <p role="status" className="rounded-md bg-danger/10 px-3 py-1.5 text-xs text-danger">
+          Tarjeta y transferencia no generan devuelta. El monto debe coincidir con el cobro.
+        </p>
+      ) : null}
       {cashInsufficient ? (
         <p className="rounded-md bg-danger/10 px-3 py-1.5 text-xs text-danger">
           El efectivo recibido debe cubrir el monto requerido.

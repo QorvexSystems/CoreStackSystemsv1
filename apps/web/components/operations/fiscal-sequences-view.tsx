@@ -89,7 +89,9 @@ export function FiscalSequencesView() {
   const sequences = sequencesQuery.data ?? [];
   const selectedType = fiscalDocumentTypes.find((type) => type.value === form.documentType)!;
   const suggestedStart = useMemo(() => {
-    const previousBlocks = sequences.filter((sequence) => sequence.documentType === form.documentType);
+    const previousBlocks = sequences.filter(
+      (sequence) => sequence.documentType === form.documentType,
+    );
     return previousBlocks.length
       ? Math.max(...previousBlocks.map((sequence) => sequence.endNumber)) + 1
       : 1;
@@ -168,7 +170,11 @@ export function FiscalSequencesView() {
       return;
     }
 
-    if (!Number.isInteger(startNumber) || !Number.isInteger(endNumber) || !Number.isInteger(nextNumber)) {
+    if (
+      !Number.isInteger(startNumber) ||
+      !Number.isInteger(endNumber) ||
+      !Number.isInteger(nextNumber)
+    ) {
       toast.error('Los números del bloque deben ser enteros válidos.');
       return;
     }
@@ -209,8 +215,8 @@ export function FiscalSequencesView() {
                   : 'No hay un bloque activo para este tipo: el nuevo se activará de inmediato.'}
               </p>
               <p className="mt-1 text-muted-foreground">
-                Copia exactamente el rango autorizado por DGII. El siguiente número puede ser
-                mayor que el inicio si ya lo utilizaste fuera del sistema. Los rangos nunca pueden
+                Copia exactamente el rango autorizado por DGII. El siguiente número puede ser mayor
+                que el inicio si ya lo utilizaste fuera del sistema. Los rangos nunca pueden
                 solaparse.
               </p>
             </div>
@@ -233,7 +239,9 @@ export function FiscalSequencesView() {
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs leading-5 text-muted-foreground">{selectedType.description}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {selectedType.description}
+                  </p>
                 </div>
                 <NumericField
                   id="fiscal-start-number"
@@ -287,7 +295,9 @@ export function FiscalSequencesView() {
                         issuerDocumentNumber: event.target.value,
                       }))
                     }
-                    placeholder={form.issuerDocumentType === 'RNC' ? '1-01-00000-1' : '001-0000000-1'}
+                    placeholder={
+                      form.issuerDocumentType === 'RNC' ? '1-01-00000-1' : '001-0000000-1'
+                    }
                     required
                   />
                   {form.issuerDocumentNumber ? (
@@ -301,10 +311,7 @@ export function FiscalSequencesView() {
                           : 'text-xs text-danger'
                       }
                     >
-                      {validateDominicanDocument(
-                        form.issuerDocumentType,
-                        form.issuerDocumentNumber,
-                      )
+                      {validateDominicanDocument(form.issuerDocumentType, form.issuerDocumentNumber)
                         ? 'Documento válido.'
                         : 'Verifica el dígito verificador dominicano.'}
                     </p>
@@ -318,7 +325,10 @@ export function FiscalSequencesView() {
                     id="fiscal-authorization"
                     value={form.authorizationNumber}
                     onChange={(event) =>
-                      setForm((current) => ({ ...current, authorizationNumber: event.target.value }))
+                      setForm((current) => ({
+                        ...current,
+                        authorizationNumber: event.target.value,
+                      }))
                     }
                     required={selectedType.requiresRnc}
                     maxLength={80}
@@ -386,7 +396,10 @@ export function FiscalSequencesView() {
             <TableBody>
               {sequences.map((sequence) => {
                 const total = sequence.endNumber - sequence.startNumber + 1;
-                const used = Math.min(Math.max(sequence.nextNumber - sequence.startNumber, 0), total);
+                const used = Math.min(
+                  Math.max(sequence.nextNumber - sequence.startNumber, 0),
+                  total,
+                );
                 const remaining = Math.max(sequence.endNumber - sequence.nextNumber + 1, 0);
                 const progress = total > 0 ? Math.round((used / total) * 100) : 0;
 
@@ -417,10 +430,14 @@ export function FiscalSequencesView() {
                         : '-'}
                     </TableCell>
                     <TableCell>{sequence.authorizationNumber ?? '-'}</TableCell>
-                    <TableCell>{sequence.validUntil ? formatDate(sequence.validUntil) : '-'}</TableCell>
+                    <TableCell>
+                      {sequence.validUntil ? formatDate(sequence.validUntil) : '-'}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={getStatusVariant(sequence.status)}>
-                        {sequence.status === 'INACTIVE' ? 'En espera' : translateStatus(sequence.status)}
+                        {sequence.status === 'INACTIVE'
+                          ? 'En espera'
+                          : translateStatus(sequence.status)}
                       </Badge>
                     </TableCell>
                   </TableRow>

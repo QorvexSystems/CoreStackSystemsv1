@@ -75,9 +75,7 @@ export function CashRegistersView() {
       <Card>
         <CardHeader>
           <CardTitle>Crear nueva caja</CardTitle>
-          <CardDescription>
-            Cada caja puede tener una sola sesión abierta a la vez.
-          </CardDescription>
+          <CardDescription>Cada caja puede tener una sola sesión abierta a la vez.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end" onSubmit={submit}>
@@ -87,7 +85,7 @@ export function CashRegistersView() {
                 id="cashRegisterName"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Ej. Caja principal - ALLPA"
+                placeholder="Ej. Caja principal - Unique"
                 maxLength={120}
               />
             </div>

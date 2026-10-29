@@ -24,6 +24,8 @@ import {
   getImportBatches,
   getImportBatchRows,
   importProductsFile,
+  importCustomersFile,
+  importOpenOrdersFile,
   type ImportBatch,
   type ImportBatchRow,
   type ImportBatchRowsResponse,
@@ -42,6 +44,8 @@ export function ImportsView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedCustomerFile, setSelectedCustomerFile] = useState<File | null>(null);
+  const [selectedOrderFile, setSelectedOrderFile] = useState<File | null>(null);
   const [detailBatch, setDetailBatch] = useState<ImportBatch | null>(null);
   const [detailStatus, setDetailStatus] = useState<ImportBatchRowStatus>('FAILED');
   const [detailPage, setDetailPage] = useState(1);
@@ -86,6 +90,40 @@ export function ImportsView() {
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'No se pudo importar el archivo.');
+    },
+  });
+  const customerImportMutation = useMutation({
+    mutationFn: (file: File) => {
+      if (!session) throw new Error('Sesión requerida.');
+      return importCustomersFile(session.tenantId, session.accessToken, file);
+    },
+    onSuccess: async (batch) => {
+      setSelectedCustomerFile(null);
+      await queryClient.invalidateQueries({ queryKey: ['imports'] });
+      await queryClient.invalidateQueries({ queryKey: ['customers'] });
+      toast.success('Clientes importados', {
+        description: `${batch.importedRows} cliente(s) importado(s).`,
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron importar los clientes.');
+    },
+  });
+  const orderImportMutation = useMutation({
+    mutationFn: (file: File) => {
+      if (!session) throw new Error('Sesión requerida.');
+      return importOpenOrdersFile(session.tenantId, session.accessToken, file);
+    },
+    onSuccess: async (batch) => {
+      setSelectedOrderFile(null);
+      await queryClient.invalidateQueries({ queryKey: ['imports'] });
+      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      toast.success('Órdenes abiertas importadas', {
+        description: `${batch.importedRows} línea(s) importada(s).`,
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron importar las órdenes.');
     },
   });
   const deleteMutation = useMutation({
@@ -141,7 +179,7 @@ export function ImportsView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Importaciones"
-        description="Carga productos en bloque y conserva un historial claro de lo procesado, omitido y su motivo."
+        description="Carga productos, inventario inicial y clientes; conserva un historial de cada fila procesada."
       />
 
       {canManageImports ? (
@@ -167,6 +205,81 @@ export function ImportsView() {
                   <FileUp className="h-4 w-4" />
                 )}
                 {importMutation.isPending ? 'Importando...' : 'Importar productos'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canManageImports ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Importar clientes</CardTitle>
+            <CardDescription>
+              Columnas admitidas: nombre, tipo documento, documento, correo, teléfono y dirección.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-3 md:grid-cols-[1fr_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (selectedCustomerFile) customerImportMutation.mutate(selectedCustomerFile);
+              }}
+            >
+              <Input
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) => setSelectedCustomerFile(event.target.files?.[0] ?? null)}
+              />
+              <Button
+                type="submit"
+                disabled={!selectedCustomerFile || customerImportMutation.isPending}
+              >
+                {customerImportMutation.isPending ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileUp className="h-4 w-4" />
+                )}
+                {customerImportMutation.isPending ? 'Importando...' : 'Importar clientes'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canManageImports ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Importar órdenes abiertas</CardTitle>
+            <CardDescription>
+              Una fila por producto. Usa el mismo número de orden para agrupar varias líneas en una
+              sola tarjeta. Requiere: número orden, SKU, cantidad, precio unitario histórico y fecha
+              prometida (AAAA-MM-DD). Indica inventario (tienda/fábrica), canal, pagado, inventario
+              descontado (sí/no), etapa (WAITING/FACTORY/READY) y aprobaciones. Usa la misma
+              referencia para agrupar líneas; una referencia ya importada se rechaza.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-3 md:grid-cols-[1fr_auto]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (selectedOrderFile) orderImportMutation.mutate(selectedOrderFile);
+              }}
+            >
+              <Input
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) => setSelectedOrderFile(event.target.files?.[0] ?? null)}
+              />
+              <Button type="submit" disabled={!selectedOrderFile || orderImportMutation.isPending}>
+                {orderImportMutation.isPending ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileUp className="h-4 w-4" />
+                )}
+                {orderImportMutation.isPending ? 'Importando...' : 'Importar órdenes'}
               </Button>
             </form>
           </CardContent>

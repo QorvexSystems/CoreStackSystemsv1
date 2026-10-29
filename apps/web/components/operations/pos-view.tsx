@@ -8,8 +8,6 @@ import {
   ClipboardCheck,
   DoorClosed,
   DoorOpen,
-  Filter,
-  Plus,
   ReceiptText,
   Search,
   ShieldCheck,
@@ -59,6 +57,8 @@ import {
 } from './pos/currency-input';
 import { PosCart } from './pos/pos-cart';
 import { PosPaymentPanel } from './pos/pos-payment-panel';
+import { paymentSummary } from './pos/payment-summary';
+import { prepareInvoicePrint } from './pos/checkout-cache';
 import { PosProductGrid } from './pos/pos-product-grid';
 import {
   canAddProduct,
@@ -144,7 +144,7 @@ export function PosView() {
   const productsQuery = useQuery({
     queryKey: ['pos-products-search', session?.tenantId, search],
     queryFn: () => searchPosProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
-    enabled: Boolean(session && currentSessionQuery.data && canCreateDirectSale && !loadedOrder),
+    enabled: Boolean(session && currentSessionQuery.data && canCreateDirectSale && !loadedOrder && counterSaleOpen),
   });
   const pendingOrdersQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'OPEN', 'pos'],
@@ -214,11 +214,11 @@ export function PosView() {
   }, [registersQuery.data, selectedRegisterId]);
 
   useEffect(() => {
-    if (currentCashSession && canCreateDirectSale) {
+    if (currentCashSession && canCreateDirectSale && counterSaleOpen) {
       setScannerEnabled(true);
       window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
     }
-  }, [canCreateDirectSale, currentCashSession?.id]);
+  }, [canCreateDirectSale, currentCashSession?.id, counterSaleOpen]);
 
   useEffect(() => {
     if (scannerEnabled) {
@@ -247,29 +247,30 @@ export function PosView() {
     const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
     const total = Math.round((subtotal + tax) * 100) / 100;
     const received = parseCurrencyInput(amountReceived);
-    const requiredPayment =
-      loadedOrder?.paymentMode === 'CREDIT' ? Number(loadedOrder.initialPaymentAmount ?? 0) : total;
-
     return {
       subtotal,
       discount,
       tax,
       total,
-      requiredPayment,
-      remainingBalance: Math.max(total - requiredPayment, 0),
-      received,
-      change:
-        paymentMethod === 'CASH' && received > requiredPayment ? received - requiredPayment : 0,
+      ...paymentSummary({
+        total,
+        received,
+        paymentMethod,
+        initialPayment: loadedOrder?.paymentMode === 'CREDIT'
+          ? Number(loadedOrder.initialPaymentAmount ?? 0)
+          : undefined,
+        allowPartial: !loadedOrder?.isExpress && Boolean(customerId || loadedOrder?.clientName?.trim()),
+      }),
     };
-  }, [amountReceived, cart, loadedOrder, paymentMethod]);
-
-  useEffect(() => {
-    if (paymentMethod === 'CARD' && totals.requiredPayment >= 0) {
-      setAmountReceived(formatCurrencyInputFromNumber(totals.requiredPayment));
-    }
-  }, [paymentMethod, totals.requiredPayment]);
+  }, [amountReceived, cart, loadedOrder, paymentMethod, customerId]);
 
   useEffect(() => () => stopCameraScan(), []);
+
+  useEffect(() => {
+    if (loadedOrder?.invoiceId) {
+      router.prefetch(`/invoices/${loadedOrder.invoiceId}/print?autoPrint=1`);
+    }
+  }, [loadedOrder?.invoiceId, router]);
 
   const activeCustomers = (customersQuery.data ?? []).filter(
     (customer) => customer.status === 'ACTIVE',
@@ -319,7 +320,7 @@ export function PosView() {
     Boolean(currentCashSession) &&
     !orderClaimPending &&
     (Boolean(loadedOrder) || canCreateDirectSale) &&
-    (paymentMethod !== 'TRANSFER' || Math.abs(totals.received - totals.requiredPayment) < 0.005) &&
+    totals.valid &&
     canCompleteFiscalDocument;
   const selectedOpenSession = (cashSessionsQuery.data ?? []).find(
     (cashSession) =>
@@ -456,6 +457,7 @@ export function PosView() {
         fiscalDocumentType: requiresRecipientDocument ? fiscalDocumentType : undefined,
         fiscalDocumentNumber: requiresRecipientDocument ? fiscalDocumentNumber : undefined,
         paymentMethod,
+        paymentAmount: loadedOrder?.paymentMode !== 'CREDIT' ? totals.requiredPayment : undefined,
         amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
         cashSessionId: currentCashSession?.id,
         orderId: loadedOrder?.id,
@@ -467,7 +469,8 @@ export function PosView() {
             })),
       });
     },
-    onSuccess: async (invoice) => {
+    onSuccess: (invoice) => {
+      prepareInvoicePrint(queryClient, invoice, loadedOrder?.id);
       setMessage(
         invoice.eNcf
           ? `e-CF ${invoice.eNcf} creada. Su XML y correo de simulación quedaron pendientes de firma y Resend.`
@@ -479,15 +482,6 @@ export function PosView() {
       setLoadedOrder(null);
       setFiscalDocumentNumber('');
       setAmountReceived(clearCurrencyInput());
-      await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
-      await queryClient.invalidateQueries({ queryKey: ['products'] });
-      await queryClient.invalidateQueries({ queryKey: ['pos-products-search'] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['cash-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['employee-logs'] });
-      await invalidateCashQueries();
       toast.dismiss();
       router.push(`/invoices/${invoice.id}/print?autoPrint=1`);
     },
@@ -763,6 +757,9 @@ export function PosView() {
 
   function changePaymentMethod(value: string) {
     setPaymentMethod(value);
+    if (value !== 'CASH') {
+      setAmountReceived(formatCurrencyInputFromNumber(totals.requiredPayment));
+    }
   }
 
   function populateFiscalDocumentFromCustomer(nextCustomerId: string) {
@@ -969,9 +966,9 @@ export function PosView() {
             <Store className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-zinc-950">Caja</h1>
+            <h1 className="text-xl font-bold tracking-tight text-zinc-950">Caja POS</h1>
             <p className="text-xs text-muted-foreground">
-              Cobro de órdenes, ventas de mostrador y cierre de caja.
+              Cobra órdenes de tienda y Shopify y controla la caja.
             </p>
           </div>
         </div>
@@ -979,17 +976,6 @@ export function PosView() {
           <p className="hidden text-xs font-medium capitalize text-muted-foreground sm:block">
             {todayLabel}
           </p>
-          {currentCashSession && canCreateDirectSale && !loadedOrder ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setCounterSaleOpen((current) => !current)}
-            >
-              <Plus className="h-4 w-4" />{' '}
-              {counterSaleOpen ? 'Ocultar mostrador' : 'Venta de mostrador'}
-            </Button>
-          ) : null}
         </div>
       </div>
 
@@ -1122,13 +1108,14 @@ export function PosView() {
             {canCreateDirectSale && !loadedOrder && counterSaleOpen ? (
               <Card>
                 <CardHeader>
-                  <CardTitle>Venta de mostrador</CardTitle>
+                  <CardTitle>Venta rápida en tienda</CardTitle>
                   <CardDescription>
-                    Vende repuestos y servicios rápidos sin crear una orden de trabajo.
+                    Para productos normales entregados de inmediato. Los personalizados deben entrar
+                    por Toma de órdenes.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Label htmlFor="pos-product-search">Buscar repuesto o servicio</Label>
+                  <Label htmlFor="pos-product-search">Buscar producto</Label>
                   <Input
                     id="pos-product-search"
                     value={search}
@@ -1203,10 +1190,10 @@ export function PosView() {
                     <div>
                       <ReceiptText className="mx-auto h-8 w-8 text-zinc-400" />
                       <p className="mt-3 font-semibold text-zinc-800">
-                        Selecciona una orden pendiente
+                        Selecciona una orden pendiente para cobrar
                       </p>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Se cargará aquí el cobro actual sin salir de esta pantalla.
+                        El cobro y la factura se completan aquí sin salir de Caja POS.
                       </p>
                     </div>
                   </div>
@@ -1299,9 +1286,6 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
-              <Badge variant="outline">
-                {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-              </Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {order.orderNumber} · {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
@@ -1386,12 +1370,8 @@ function SalesOrdersQueuePanel({
   onLoad: (order: SalesOrder) => void;
 }) {
   const [queueSearch, setQueueSearch] = useState('');
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [originFilter, setOriginFilter] = useState<'ALL' | 'SALES_INVENTORY' | 'WAREHOUSE'>('ALL');
   const normalizedSearch = queueSearch.trim().toLowerCase();
-  const originOrders = orders.filter((order) =>
-    originFilter === 'ALL' ? true : order.inventorySource === originFilter,
-  );
+  const originOrders = orders;
   const visibleOrders = normalizedSearch
     ? originOrders.filter((order) =>
         [
@@ -1444,36 +1424,7 @@ function SalesOrdersQueuePanel({
               placeholder="Buscar por cliente, ticket, orden o monto"
             />
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            className={cn('shrink-0', filtersOpen && 'border-primary bg-primary/5 text-primary')}
-            onClick={() => setFiltersOpen((current) => !current)}
-          >
-            <Filter className="h-4 w-4" /> <span className="hidden sm:inline">Filtros</span>
-          </Button>
         </div>
-        {filtersOpen ? (
-          <div className="mb-3 flex flex-wrap gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2">
-            {(
-              [
-                ['ALL', 'Todos'],
-                ['SALES_INVENTORY', 'Inventario'],
-                ['WAREHOUSE', 'Almacén B2B'],
-              ] as const
-            ).map(([value, label]) => (
-              <Button
-                key={value}
-                type="button"
-                size="sm"
-                variant={originFilter === value ? 'default' : 'outline'}
-                onClick={() => setOriginFilter(value)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-        ) : null}
         {failed ? (
           <div role="alert" className="rounded-md border border-danger/30 bg-danger/5 p-3 text-sm">
             <p>
@@ -1506,28 +1457,13 @@ function SalesOrdersQueuePanel({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 gap-3">
-                    <div
-                      className={cn(
-                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
-                        order.inventorySource === 'WAREHOUSE'
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'bg-violet-50 text-violet-700',
-                      )}
-                    >
-                      {order.inventorySource === 'WAREHOUSE' ? (
-                        <Store className="h-5 w-5" />
-                      ) : (
-                        <ShoppingBag className="h-5 w-5" />
-                      )}
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+                      <ShoppingBag className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
-                        <Badge
-                          variant={order.inventorySource === 'WAREHOUSE' ? 'default' : 'outline'}
-                        >
-                          {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                        </Badge>
+                        {order.isExpress ? <Badge variant="success">Venta exprés</Badge> : null}
                         {order.paymentMode === 'CREDIT' ? (
                           <Badge variant="outline">
                             {order.creditApproval?.status === 'APPROVED'
@@ -1576,9 +1512,6 @@ function SalesOrdersQueuePanel({
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="outline">
-                      {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                    </Badge>
                     <span>{order.items.length} línea(s)</span>
                   </div>
                   {canChargeOrders ? (
@@ -1930,8 +1863,8 @@ function CashCloseDialog({
             !hasCountedAmount
               ? 'bg-zinc-100 text-zinc-600'
               : Math.abs(difference) < 0.005
-              ? 'bg-emerald-50 text-emerald-800'
-              : 'bg-amber-50 text-amber-900',
+                ? 'bg-emerald-50 text-emerald-800'
+                : 'bg-amber-50 text-amber-900',
           )}
         >
           <span>Diferencia</span>

@@ -29,6 +29,9 @@ type ProductFormState = {
   barcode: string;
   imageUrl: string;
   brand: string;
+  kind: 'STANDARD' | 'PERSONALIZED';
+  material: string;
+  measurement: string;
   unit: string;
   price: string;
   cost: string;
@@ -45,6 +48,9 @@ const defaultState: ProductFormState = {
   barcode: '',
   imageUrl: '',
   brand: '',
+  kind: 'STANDARD',
+  material: '',
+  measurement: '',
   unit: 'UNIT',
   price: clearCurrencyInput(),
   cost: clearCurrencyInput(),
@@ -92,6 +98,9 @@ export function ProductForm({
         barcode: productQuery.data.barcode ?? '',
         imageUrl: productQuery.data.imageUrl ?? '',
         brand: productQuery.data.brand ?? '',
+        kind: productQuery.data.kind ?? 'STANDARD',
+        material: productQuery.data.material ?? '',
+        measurement: productQuery.data.measurement ?? '',
         unit: productQuery.data.unit,
         price: formatCurrencyInputFromNumber(
           Number(productQuery.data.salePrice ?? productQuery.data.price ?? 0),
@@ -118,6 +127,9 @@ export function ProductForm({
         barcode: form.barcode || undefined,
         imageUrl: form.imageUrl || undefined,
         brand: form.brand || undefined,
+        kind: form.kind,
+        material: form.material || undefined,
+        measurement: form.measurement || undefined,
         unit: form.unit,
         price: parseCurrencyInput(form.price),
         cost: parseCurrencyInput(form.cost),
@@ -210,8 +222,15 @@ export function ProductForm({
     return (
       <div className="rounded-lg border border-danger/20 bg-danger/5 p-5 text-center">
         <p className="font-semibold text-foreground">No se pudo cargar el producto.</p>
-        <p className="mt-1 text-sm text-muted-foreground">Comprueba la conexión e inténtalo nuevamente.</p>
-        <Button type="button" variant="outline" className="mt-4" onClick={() => void productQuery.refetch()}>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Comprueba la conexión e inténtalo nuevamente.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          className="mt-4"
+          onClick={() => void productQuery.refetch()}
+        >
           Reintentar
         </Button>
       </div>
@@ -349,6 +368,34 @@ export function ProductForm({
               onChange={(event) => updateField('brand', event.target.value)}
             />
           </Field>
+          <Field label="Tipo de producto">
+            <select
+              value={form.kind}
+              onChange={(event) =>
+                updateField('kind', event.target.value as ProductFormState['kind'])
+              }
+              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="STANDARD">Normal</option>
+              <option value="PERSONALIZED">Personalizado</option>
+            </select>
+          </Field>
+          <Field label="Material">
+            <Input
+              value={form.material}
+              onChange={(event) => updateField('material', event.target.value)}
+              placeholder="Ej. Oro 10K, plata 925"
+              maxLength={80}
+            />
+          </Field>
+          <Field label="Medida / variante">
+            <Input
+              value={form.measurement}
+              onChange={(event) => updateField('measurement', event.target.value)}
+              placeholder="Ej. 18 cm, talla 7"
+              maxLength={80}
+            />
+          </Field>
           <Field label="Unidad">
             <select
               value={form.unit}
@@ -433,7 +480,15 @@ export function ProductForm({
               onChange={(event) => updateField('taxRate', event.target.value)}
             />
           </Field>
-          <Field label="Stock actual" required>
+          <div className="rounded-lg border border-gold-light/60 bg-gold-light/10 p-3 md:col-span-2">
+            <p className="text-sm font-semibold text-foreground">Existencias de Tienda</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {productId
+                ? 'Cambiar el stock actual al guardar registra un ajuste de existencias en Tienda.'
+                : 'La existencia inicial se registrará en Tienda.'}
+            </p>
+          </div>
+          <Field label="Stock actual en Tienda" required>
             <Input
               type="number"
               min="0"

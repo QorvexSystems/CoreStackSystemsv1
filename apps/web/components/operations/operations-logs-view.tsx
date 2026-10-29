@@ -15,11 +15,7 @@ import { useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  getOperationalLogs,
-  type OperationalLog,
-  type OperationalLogCategory,
-} from '@/lib/api';
+import { getOperationalLogs, type OperationalLog, type OperationalLogCategory } from '@/lib/api';
 import {
   getStatusVariant,
   translateEmployeeAction,
@@ -162,7 +158,9 @@ export function OperationsLogsView() {
                     </span>
                     <Badge variant={isActive ? 'success' : 'outline'}>{count}</Badge>
                   </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">{tab.description}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {tab.description}
+                  </span>
                 </button>
               );
             })}
@@ -221,7 +219,10 @@ function LogsList({ logs }: { logs: OperationalLog[] }) {
           </thead>
           <tbody>
             {logs.map((log) => (
-              <tr key={log.id} className="border-b border-zinc-100 align-top last:border-0 hover:bg-zinc-50/70">
+              <tr
+                key={log.id}
+                className="border-b border-zinc-100 align-top last:border-0 hover:bg-zinc-50/70"
+              >
                 <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
                   {formatDateTime(log.createdAt)}
                 </td>
@@ -230,22 +231,34 @@ function LogsList({ logs }: { logs: OperationalLog[] }) {
                 </td>
                 <td className="px-4 py-3">
                   <p className="font-medium text-zinc-900">{getOperationalActionLabel(log)}</p>
-                  {log.detail ? <p className="mt-1 max-w-xs text-xs text-muted-foreground">{log.detail}</p> : null}
+                  {log.detail ? (
+                    <p className="mt-1 max-w-xs text-xs text-muted-foreground">{log.detail}</p>
+                  ) : null}
                 </td>
                 <td className="px-4 py-3">
-                  <p className="font-medium text-zinc-900">{log.documentNumber ?? 'Sin documento'}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{log.customerName ?? 'Cliente no registrado'}</p>
+                  <p className="font-medium text-zinc-900">
+                    {log.documentNumber ?? 'Sin documento'}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {log.customerName ?? 'Cliente no registrado'}
+                  </p>
                 </td>
                 <td className="px-4 py-3">
-                  <p className="font-medium text-zinc-900">{log.user?.name ?? 'Usuario no disponible'}</p>
+                  <p className="font-medium text-zinc-900">
+                    {log.user?.name ?? 'Usuario no disponible'}
+                  </p>
                   {log.cashRegisterName ? (
-                    <p className="mt-1 text-xs text-muted-foreground">Caja: {log.cashRegisterName}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Caja: {log.cashRegisterName}
+                    </p>
                   ) : null}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {log.status ? (
-                      <Badge variant={getStatusVariant(log.status)}>{translateStatus(log.status)}</Badge>
+                      <Badge variant={getStatusVariant(log.status)}>
+                        {translateStatus(log.status)}
+                      </Badge>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
@@ -265,20 +278,27 @@ function LogsList({ logs }: { logs: OperationalLog[] }) {
 
       <div className="space-y-3 md:hidden">
         {logs.map((log) => (
-          <article key={log.id} className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
+          <article
+            key={log.id}
+            className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm"
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <CategoryBadge category={log.category} />
                   {log.status ? (
-                    <Badge variant={getStatusVariant(log.status)}>{translateStatus(log.status)}</Badge>
+                    <Badge variant={getStatusVariant(log.status)}>
+                      {translateStatus(log.status)}
+                    </Badge>
                   ) : null}
                 </div>
                 <p className="mt-2 text-sm font-semibold text-zinc-900">
                   {getOperationalActionLabel(log)}
                 </p>
               </div>
-              <strong className="whitespace-nowrap text-sm text-zinc-900">{formatLogAmount(log.amount)}</strong>
+              <strong className="whitespace-nowrap text-sm text-zinc-900">
+                {formatLogAmount(log.amount)}
+              </strong>
             </div>
             <div className="mt-3 space-y-1 border-t border-zinc-100 pt-3 text-xs text-muted-foreground">
               <p className="font-medium text-zinc-900">{log.documentNumber ?? 'Sin documento'}</p>
@@ -288,7 +308,9 @@ function LogsList({ logs }: { logs: OperationalLog[] }) {
                 {log.user?.name ?? 'Usuario no disponible'}
                 {log.cashRegisterName ? ` · Caja: ${log.cashRegisterName}` : ''}
               </p>
-              {log.paymentMethod ? <p>Método: {translatePaymentMethod(log.paymentMethod)}</p> : null}
+              {log.paymentMethod ? (
+                <p>Método: {translatePaymentMethod(log.paymentMethod)}</p>
+              ) : null}
               {log.detail ? <p>{log.detail}</p> : null}
               <p>{formatDateTime(log.createdAt)}</p>
             </div>
@@ -328,7 +350,9 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="rounded-md border border-danger/30 bg-danger/5 px-4 py-8 text-center">
       <p className="font-medium text-danger">No se pudieron cargar los logs operativos.</p>
-      <p className="mt-1 text-sm text-muted-foreground">Verifica la conexión e inténtalo nuevamente.</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Verifica la conexión e inténtalo nuevamente.
+      </p>
       <Button type="button" variant="outline" size="sm" className="mt-4" onClick={onRetry}>
         Reintentar
       </Button>

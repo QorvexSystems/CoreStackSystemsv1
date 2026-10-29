@@ -20,7 +20,12 @@ type PaymentCalculatorProps = {
 
 const numberKeys = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0'];
 
-export function PaymentCalculator({ total, amountReceived, disabled = false, onAmountChange }: PaymentCalculatorProps) {
+export function PaymentCalculator({
+  total,
+  amountReceived,
+  disabled = false,
+  onAmountChange,
+}: PaymentCalculatorProps) {
   function append(value: string) {
     onAmountChange(appendCurrencyInput(amountReceived, value));
   }
@@ -35,7 +40,9 @@ export function PaymentCalculator({ total, amountReceived, disabled = false, onA
       <div className="mb-3 rounded-md bg-zinc-950 p-3 text-white">
         <p className="text-xs text-zinc-300">Total a cobrar</p>
         <p className="mt-1 text-2xl font-bold">{formatCurrency(total)}</p>
-        <p className="mt-2 text-xs text-zinc-300">Recibido: {formatCurrency(parseCurrencyInput(amountReceived))}</p>
+        <p className="mt-2 text-xs text-zinc-300">
+          Recibido: {formatCurrency(parseCurrencyInput(amountReceived))}
+        </p>
       </div>
 
       <div className="mb-3 grid grid-cols-4 gap-2">

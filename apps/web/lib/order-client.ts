@@ -14,6 +14,8 @@ export function getOrderClientLabel(order: Pick<SalesOrder, 'clientName' | 'cust
   return 'Cliente no especificado';
 }
 
-export function getOrderSearchLabel(order: Pick<SalesOrder, 'orderNumber' | 'clientName' | 'customer'>) {
+export function getOrderSearchLabel(
+  order: Pick<SalesOrder, 'orderNumber' | 'clientName' | 'customer'>,
+) {
   return `${getOrderClientLabel(order)} - ${order.orderNumber}`;
 }

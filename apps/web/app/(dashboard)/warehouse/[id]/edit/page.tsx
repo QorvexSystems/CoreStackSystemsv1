@@ -1,4 +1,4 @@
-import { WarehouseProductForm } from '@/components/operations/warehouse-product-form';
+import { redirect } from 'next/navigation';
 
 export default async function EditWarehouseProductPage({
   params,
@@ -6,5 +6,5 @@ export default async function EditWarehouseProductPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <WarehouseProductForm productId={id} />;
+  redirect(`/products/${id}/edit`);
 }

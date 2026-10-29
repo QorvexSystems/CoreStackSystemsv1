@@ -86,9 +86,9 @@ export default function LoginPage() {
           </div>
 
           <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center py-8 text-center lg:py-12">
-            <div className="animate-enter animate-enter-delay-1 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black p-4 shadow-2xl shadow-black/50 sm:max-w-[20rem] sm:p-6 lg:max-w-[24rem]">
+            <div className="animate-enter animate-enter-delay-1 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-amber-200/15 bg-black/40 p-4 shadow-2xl shadow-amber-950/30 sm:max-w-[20rem] sm:p-6 lg:max-w-[24rem]">
               <img
-                src={brand.logoPath}
+                src={brand.stackedLogoPath}
                 alt={`Logo ${brand.name}`}
                 className="max-h-full max-w-full object-contain"
                 width={384}
@@ -100,7 +100,7 @@ export default function LoginPage() {
               {brand.name}
             </p>
             <h1 className="animate-enter animate-enter-delay-3 mt-3 max-w-xl text-2xl font-semibold leading-tight sm:text-4xl">
-              Acceso privado para la operación, facturación e inventario.
+              Tus pedidos, personalizaciones e inventario en un solo lugar.
             </h1>
             <p className="animate-enter animate-enter-delay-4 mt-4 max-w-xl text-sm leading-6 text-zinc-300">
               {brand.descriptor}. {brand.tagline}.
@@ -134,7 +134,7 @@ export default function LoginPage() {
                     type="email"
                     className="pl-9"
                     autoComplete="off"
-                    placeholder="usuario@empresa.com"
+                    placeholder={brand.loginEmailPlaceholder}
                     {...register('email')}
                   />
                 </div>

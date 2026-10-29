@@ -85,7 +85,12 @@ export function SupplierInvoiceEntryPanel({
     queryFn: () => getProducts(session.tenantId, session.accessToken),
   });
   const purchaseOrderQuery = useQuery({
-    queryKey: ['purchase-order', session.tenantId, invoice.purchaseOrderId, 'supplier-invoice-entry'],
+    queryKey: [
+      'purchase-order',
+      session.tenantId,
+      invoice.purchaseOrderId,
+      'supplier-invoice-entry',
+    ],
     queryFn: () =>
       getPurchaseOrder(session.tenantId, session.accessToken, invoice.purchaseOrderId ?? ''),
     enabled: Boolean(invoice.purchaseOrderId),
@@ -154,7 +159,8 @@ export function SupplierInvoiceEntryPanel({
           Number(product.cost) !== Number(invoiceItem.unitCostNet);
         const canRecalculateMargin =
           costChanged &&
-          calculateSuggestedPrice(Number(invoiceItem.unitCostNet), Number(product?.margin)) !== null;
+          calculateSuggestedPrice(Number(invoiceItem.unitCostNet), Number(product?.margin)) !==
+            null;
 
         return {
           invoiceItem,
@@ -189,7 +195,9 @@ export function SupplierInvoiceEntryPanel({
         throw new Error('Espera a que cargue la comparación con la orden de compra.');
       }
       if (invoice.purchaseOrderId && purchaseOrderQuery.error) {
-        throw new Error('No se pudo validar la factura contra la orden de compra. Intenta de nuevo.');
+        throw new Error(
+          'No se pudo validar la factura contra la orden de compra. Intenta de nuevo.',
+        );
       }
       if (orderReconciliation.hasStructuralIssue) {
         throw new Error(
@@ -202,9 +210,7 @@ export function SupplierInvoiceEntryPanel({
         );
       }
       if (orderReconciliation.requiresReview && !orderReconciliationNote.trim()) {
-        throw new Error(
-          'Explica la diferencia con la orden de compra para que quede auditada.',
-        );
+        throw new Error('Explica la diferencia con la orden de compra para que quede auditada.');
       }
 
       for (const item of selected) {
@@ -405,7 +411,7 @@ export function SupplierInvoiceEntryPanel({
                   value={notes}
                   maxLength={1000}
                   onChange={(event) => setNotes(event.target.value)}
-                  placeholder="Ej. Entrega completa, recibida por almacén."
+                  placeholder="Ej. Entrega completa, recibida en fábrica."
                 />
               </FormField>
 
@@ -1172,15 +1178,13 @@ function reconcileInvoiceWithPurchaseOrder(
   }
 
   const missingItems = purchaseOrder.items.filter((item) => !linkedOrderItemIds.has(item.id));
-  const hasStructuralIssue = Boolean(
-    unexpectedInvoiceItems.length || productMismatches.length,
-  );
+  const hasStructuralIssue = Boolean(unexpectedInvoiceItems.length || productMismatches.length);
   const requiresReview = Boolean(
     missingItems.length ||
-      unexpectedInvoiceItems.length ||
-      productMismatches.length ||
-      quantityDifferences.length ||
-      costDifferences.length,
+    unexpectedInvoiceItems.length ||
+    productMismatches.length ||
+    quantityDifferences.length ||
+    costDifferences.length,
   );
 
   return {

@@ -21,8 +21,7 @@ export function PurchaseOrderPrint({
   const router = useRouter();
   const orderQuery = useQuery({
     queryKey: ['purchase-order', orderId, session?.tenantId],
-    queryFn: () =>
-      getPurchaseOrder(session?.tenantId ?? '', session?.accessToken ?? '', orderId),
+    queryFn: () => getPurchaseOrder(session?.tenantId ?? '', session?.accessToken ?? '', orderId),
     enabled: Boolean(session && orderId),
   });
 
@@ -96,7 +95,7 @@ export function PurchaseOrderPrint({
             <p className="mt-1 font-semibold">{formatDate(order.expectedDeliveryDate)}</p>
             <p className="mt-3 text-xs uppercase tracking-wide text-zinc-500">Destino</p>
             <p className="font-medium">
-              {order.destination === 'WAREHOUSE' ? 'Almacén' : 'Inventario de ventas'}
+              Productos
             </p>
             <p className="mt-3 text-xs uppercase tracking-wide text-zinc-500">Solicitada por</p>
             <p className="font-medium">{order.requestedBy?.name ?? order.createdBy.name}</p>

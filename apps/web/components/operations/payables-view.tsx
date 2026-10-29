@@ -23,11 +23,7 @@ import {
 } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
-import {
-  ProcurementStatusBadge,
-  QueryState,
-  selectClassName,
-} from './procurement-ui';
+import { ProcurementStatusBadge, QueryState, selectClassName } from './procurement-ui';
 import { SessionRequired, useCurrentSession } from './session-required';
 
 export function PayablesView() {
@@ -38,7 +34,11 @@ export function PayablesView() {
   const summaryQuery = useQuery({
     queryKey: ['payables', 'summary', session?.tenantId, supplierId],
     queryFn: () =>
-      getPayablesSummary(session?.tenantId ?? '', session?.accessToken ?? '', supplierId || undefined),
+      getPayablesSummary(
+        session?.tenantId ?? '',
+        session?.accessToken ?? '',
+        supplierId || undefined,
+      ),
     enabled: Boolean(session),
   });
   const invoicesQuery = useQuery({
@@ -239,7 +239,9 @@ export function PayablesView() {
       <Card>
         <CardHeader>
           <CardTitle>Resumen por suplidor</CardTitle>
-          <CardDescription>Deuda consolidada para conciliación y planificación de pagos.</CardDescription>
+          <CardDescription>
+            Deuda consolidada para conciliación y planificación de pagos.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <QueryState
@@ -258,9 +260,7 @@ export function PayablesView() {
                         {supplier.invoiceCount} factura(s) abierta(s)
                       </p>
                     </div>
-                    {supplier.overdueCount ? (
-                      <ProcurementStatusBadge status="OVERDUE" />
-                    ) : null}
+                    {supplier.overdueCount ? <ProcurementStatusBadge status="OVERDUE" /> : null}
                   </div>
                   <p className="mt-4 text-xl font-semibold">
                     {formatCurrency(Number(supplier.outstandingBalance))}
@@ -302,7 +302,11 @@ function MetricCard({
           {icon ? <span className="[&>svg]:h-4 [&>svg]:w-4">{icon}</span> : null}
           {label}
         </div>
-        <p className={danger ? 'mt-2 text-2xl font-semibold text-danger' : 'mt-2 text-2xl font-semibold'}>
+        <p
+          className={
+            danger ? 'mt-2 text-2xl font-semibold text-danger' : 'mt-2 text-2xl font-semibold'
+          }
+        >
           {value}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">{detail}</p>

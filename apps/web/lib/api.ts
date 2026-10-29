@@ -23,6 +23,7 @@ export type FiscalSequenceAlert = {
 };
 
 export type DashboardSummary = {
+  collectionsMonth: number;
   totalBilledMonth: number;
   totalBilledToday: number;
   grossSalesMonth: number;
@@ -77,11 +78,44 @@ export type DashboardSummary = {
     exitsCount: number;
   };
   previousMonthNetSales: number;
-  warehouse: {
-    productCount: number;
-    unitCount: number;
-    lowStockProducts: number;
-    pendingDispatches: number;
+  production: {
+    waiting: number;
+    factory: number;
+    ready: number;
+    delivered: number;
+    deliveredToday: number;
+    late: number;
+    urgent: number;
+    problems: number;
+    shopify: number;
+  };
+  attentionOrders: Array<{
+    id: string;
+    orderNumber: string;
+    clientName: string;
+    invoiceId: string | null;
+    productionStage: ProductionStage;
+    promisedAt: string | null;
+    source: 'STORE' | 'SHOPIFY';
+    reasons: string[];
+  }>;
+  salesByChannel: {
+    store: number;
+    shopify: number;
+  };
+  delivery: {
+    pickupReady: number;
+    deliveryReady: number;
+    provinceReady: number;
+    promisedToday: number;
+    overdue: number;
+  };
+  corporate: {
+    activeOrders: number;
+    pendingUnits: number;
+    inProgressUnits: number;
+    completedUnits: number;
+    pendingPartialDeliveries: number;
   };
   openCashSessionDetails: Array<{
     id: string;
@@ -254,6 +288,13 @@ export type Product = {
   description: string | null;
   imageUrl: string | null;
   brand: string | null;
+  kind: 'STANDARD' | 'PERSONALIZED';
+  material: string | null;
+  measurement: string | null;
+  shopifyProductId: string | null;
+  shopifyVariantId: string | null;
+  shopifyInventoryItemId: string | null;
+  shopifySyncedAt: string | null;
   unit: string;
   price: string;
   salePrice: string;
@@ -262,7 +303,7 @@ export type Product = {
   margin?: string | null;
   taxRate: string;
   trackInventory: boolean;
-  inventoryDestination: 'SALES_INVENTORY' | 'WAREHOUSE';
+  inventoryDestination: 'SALES_INVENTORY';
   stock: number;
   reservedStock: number;
   minStock: number;
@@ -271,102 +312,6 @@ export type Product = {
     id: string;
     name: string;
   } | null;
-};
-
-export type InventoryMovement = {
-  id: string;
-  type: string;
-  quantity: number;
-  previousStock: number | null;
-  newStock: number | null;
-  reason: string | null;
-  reference: string | null;
-  createdAt: string;
-  product: Product;
-};
-
-export type WarehouseStock = {
-  id: string;
-  tenantId: string;
-  productId: string;
-  quantity: number;
-  unitCost: string | null;
-  createdAt: string;
-  updatedAt: string;
-  product: Product;
-};
-
-export type WarehouseMovement = {
-  id: string;
-  type:
-    | 'PURCHASE'
-    | 'SALE'
-    | 'MANUAL_RECEIPT'
-    | 'MANUAL_DISPATCH'
-    | 'STOCK_COUNT'
-    | 'DISPATCH'
-    | 'ADJUSTMENT_IN'
-    | 'ADJUSTMENT_OUT';
-  quantity: number;
-  previousQuantity: number | null;
-  newQuantity: number | null;
-  unitCost: string | null;
-  reason: string | null;
-  reference: string | null;
-  createdAt: string;
-  product: Pick<Product, 'id' | 'name' | 'sku' | 'barcode' | 'unit'>;
-  createdBy: { id: string; name: string; email: string } | null;
-};
-
-export type WarehouseProductPayload = {
-  name: string;
-  sku?: string;
-  barcode?: string;
-  brand?: string;
-  description?: string;
-  unit?: string;
-  cost?: number;
-  salePrice?: number;
-  minStock?: number;
-  taxCategory?: 'ITBIS_18' | 'ITBIS_16' | 'EXEMPT';
-  taxRate?: number;
-  initialQuantity?: number;
-};
-
-export type WarehouseDispatchPayload = {
-  quantity: number;
-  reference: string;
-  reason: string;
-};
-
-export type WarehouseStockMovementPayload = {
-  quantity: number;
-  unitCost?: number;
-  reference: string;
-  reason: string;
-};
-
-export type WarehouseStockCountPayload = {
-  countedQuantity: number;
-  reference?: string;
-  reason: string;
-};
-
-export type WarehousePendingDispatch = {
-  id: string;
-  orderNumber: string;
-  completedAt: string | null;
-  clientName: string | null;
-  customer: { id: string; name: string; phone: string | null } | null;
-  invoice: { id: string; invoiceNumber: string; status: string; total: string } | null;
-  items: Array<{
-    id: string;
-    productId: string | null;
-    sku: string | null;
-    barcode: string | null;
-    description: string;
-    quantity: string;
-  }>;
 };
 
 export type Invoice = {
@@ -436,6 +381,12 @@ export type Invoice = {
   items: Array<{
     id: string;
     description: string;
+    personalization?: {
+      charms?: number;
+      children?: number;
+      material?: string;
+      instructions?: string;
+    } | null;
     sku: string | null;
     barcode: string | null;
     quantity: string;
@@ -463,6 +414,7 @@ export type CreateInvoicePayload = {
 };
 
 export type PosSalePayload = {
+  paymentAmount?: number;
   customerId?: string;
   documentType: string;
   fiscalDocumentType?: 'RNC' | 'CEDULA';
@@ -478,6 +430,13 @@ export type PosSalePayload = {
 };
 
 export type ReturnInvoiceLookup = Omit<Invoice, 'items'> & {
+  matches?: Array<{
+    id: string;
+    invoiceNumber: string;
+    total: string;
+    createdAt: string;
+    clientName: string;
+  }>;
   salesOrder?: {
     id: string;
     orderNumber: string;
@@ -577,13 +536,24 @@ export type CreditTermOption =
   | 'DAYS_45'
   | 'CUSTOM_DATE';
 export type CreditApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+export type ProductionStage = 'WAITING' | 'FACTORY' | 'READY' | 'DELIVERED';
+export type OrderExceptionStatus = 'NONE' | 'PAUSED' | 'PROBLEM' | 'CANCELLED';
+export type OrderPriority = 'NORMAL' | 'URGENT';
 
 export type SalesOrder = {
+  workflowEvents?: Array<{
+    id: string;
+    createdAt: string;
+    fromStage: string;
+    toStage: string;
+    note: string | null;
+    changedBy: { name: string };
+  }>;
   id: string;
   tenantId: string;
   customerId: string | null;
   destination: 'CASH_SALE' | 'QUOTATION';
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE';
+  inventorySource: 'SALES_INVENTORY';
   clientName: string | null;
   quotationDocumentType: string | null;
   quotationDocumentNumber: string | null;
@@ -591,6 +561,34 @@ export type SalesOrder = {
   ecfRecipientEmail: string | null;
   orderNumber: string;
   status: string;
+  source: 'STORE' | 'SHOPIFY';
+  externalOrderId: string | null;
+  productionStage: ProductionStage;
+  isExpress: boolean;
+  exceptionStatus: OrderExceptionStatus;
+  priority: OrderPriority;
+  promisedAt: string | null;
+  requiresProduction: boolean;
+  designApprovedAt: string | null;
+  qualityApprovedAt: string | null;
+  productionNotes: string | null;
+  deliveredAt: string | null;
+  isCorporate: boolean;
+  deliveryMethod: 'PICKUP' | 'DELIVERY' | 'PROVINCE_SHIPPING';
+  dispatchLocation: 'STORE' | 'FACTORY';
+  deliveryAddress: string | null;
+  deliveryPhone: string | null;
+  notificationEmail: string | null;
+  readyNotifiedAt: string | null;
+  corporateUnits: Array<{
+    id: string;
+    recipientName: string;
+    salesOrderItemId?: string;
+    message: string | null;
+    personalization: Record<string, string | number> | null;
+    status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+    deliveredAt: string | null;
+  }>;
   priceLevel: SalesOrderPriceLevel;
   discountRate: string;
   subtotal: string;
@@ -657,6 +655,12 @@ export type SalesOrder = {
     sku: string | null;
     barcode: string | null;
     description: string;
+    personalization: {
+      charms?: number;
+      children?: number;
+      material?: string;
+      instructions?: string;
+    } | null;
     quantity: string;
     reservedQuantity: number;
     unitPrice: string;
@@ -667,6 +671,42 @@ export type SalesOrder = {
     total: string;
     product: Product | null;
   }>;
+};
+
+export type ProductionBoardOrder = Pick<
+  SalesOrder,
+  | 'id'
+  | 'orderNumber'
+  | 'clientName'
+  | 'status'
+  | 'source'
+  | 'productionStage'
+  | 'exceptionStatus'
+  | 'priority'
+  | 'promisedAt'
+  | 'requiresProduction'
+  | 'designApprovedAt'
+  | 'qualityApprovedAt'
+  | 'productionNotes'
+  | 'deliveredAt'
+  | 'isCorporate'
+  | 'deliveryMethod'
+  | 'dispatchLocation'
+  | 'deliveryAddress'
+  | 'deliveryPhone'
+  | 'invoiceId'
+  | 'createdAt'
+> & {
+  total?: string;
+  customer?: Pick<Customer, 'name'> | null;
+  invoice?: Pick<NonNullable<SalesOrder['invoice']>, 'invoiceNumber'> | null;
+  items: Array<
+    Pick<SalesOrder['items'][number], 'id' | 'description' | 'quantity' | 'personalization'> & {
+      product?: Pick<Product, 'kind'> | null;
+    }
+  >;
+  corporateUnits: SalesOrder['corporateUnits'];
+  workflowEvents?: SalesOrder['workflowEvents'];
 };
 
 export type SalesOrderTransitionResult = Pick<
@@ -686,7 +726,9 @@ export type SalesOrderTransitionResult = Pick<
 
 export type CreateSalesOrderPayload = {
   destination: 'CASH_SALE' | 'QUOTATION';
-  inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
+  isExpress?: boolean;
+  requiresProduction?: boolean;
+  inventorySource?: 'SALES_INVENTORY';
   electronicInvoiceRequested?: boolean;
   ecfRecipientEmail?: string;
   clientName?: string;
@@ -700,9 +742,24 @@ export type CreateSalesOrderPayload = {
   quotationDocumentType?: 'RNC' | 'CEDULA';
   quotationDocumentNumber?: string;
   notes?: string;
+  promisedDate?: string;
+  priority?: OrderPriority;
+  isCorporate?: boolean;
+  deliveryMethod?: 'PICKUP' | 'DELIVERY' | 'PROVINCE_SHIPPING';
+  dispatchLocation?: 'STORE' | 'FACTORY';
+  deliveryAddress?: string;
+  deliveryPhone?: string;
+  notificationEmail?: string;
   items: Array<{
     productId: string;
     quantity: number;
+    unitPrice?: number;
+    personalization?: {
+      charms?: number;
+      children?: number;
+      material?: string;
+      instructions?: string;
+    };
   }>;
 };
 
@@ -1204,7 +1261,7 @@ export type PurchaseOrder = {
   supplierId: string;
   orderNumber: string;
   status: PurchaseOrderStatus;
-  destination: 'SALES_INVENTORY' | 'WAREHOUSE';
+  destination: 'SALES_INVENTORY';
   displayStatus: PurchaseOrderStatus | 'OVERDUE';
   isOverdue: boolean;
   currency: 'DOP';
@@ -1251,7 +1308,7 @@ export type PurchaseOrder = {
 
 export type PurchaseOrderPayload = {
   supplierId: string;
-  destination: 'SALES_INVENTORY' | 'WAREHOUSE';
+  destination: 'SALES_INVENTORY';
   expectedDeliveryDate?: string;
   notes?: string;
   items: Array<{
@@ -1317,6 +1374,7 @@ export type SupplierPayment = {
 };
 
 export type SupplierInvoice = {
+  inventoryDestination: 'SALES_INVENTORY';
   id: string;
   tenantId: string;
   supplierId: string;
@@ -1373,6 +1431,7 @@ export type SupplierInvoice = {
 };
 
 export type SupplierInvoicePayload = {
+  inventoryDestination?: 'SALES_INVENTORY';
   supplierId: string;
   purchaseOrderId?: string;
   invoiceNumber: string;
@@ -2025,6 +2084,13 @@ export function getProduct(tenantId: string, accessToken: string, productId: str
   });
 }
 
+export function syncShopifyProduct(tenantId: string, accessToken: string, productId: string) {
+  return fetchJson<Product>(`/integrations/shopify/products/${productId}/sync`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
 export function searchPosProducts(tenantId: string, accessToken: string, q: string) {
   return fetchJson<Product[]>(`/pos/products/search?q=${encodeURIComponent(q)}`, {
     headers: tenantHeaders(tenantId, accessToken),
@@ -2047,6 +2113,105 @@ export function getSalesOrders(tenantId: string, accessToken: string, status?: s
 export function getSalesOrder(tenantId: string, accessToken: string, orderId: string) {
   return fetchJson<SalesOrder>(`/orders/${orderId}`, {
     headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getProductionKanban(tenantId: string, accessToken: string) {
+  return fetchJson<ProductionBoardOrder[]>('/orders/kanban/board', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function updateOrderWorkflow(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  payload: {
+    stage?: ProductionStage;
+    requiresProduction?: boolean;
+    exceptionStatus?: OrderExceptionStatus;
+    priority?: OrderPriority;
+    note?: string;
+  },
+) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/workflow`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveOrderDesign(tenantId: string, accessToken: string, orderId: string) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/design-approval`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function approveOrderQuality(tenantId: string, accessToken: string, orderId: string) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/quality-approval`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function addCorporateOrderUnits(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  units: Array<{ recipientName: string; message?: string; salesOrderItemId?: string }>,
+) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/corporate-units`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ units }),
+  });
+}
+
+export function importCorporateOrderUnits(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  file: File,
+) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return fetchFormData<SalesOrder>(
+    `/orders/${orderId}/corporate-units/import`,
+    formData,
+    tenantHeaders(tenantId, accessToken),
+  );
+}
+
+export function removeCorporateOrderUnit(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  unitId: string,
+) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/corporate-units/${unitId}`, {
+    method: 'DELETE',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function updateCorporateOrderUnit(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  unitId: string,
+  payload: {
+    status?: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+    delivered?: boolean;
+    recipientName?: string;
+    message?: string;
+    personalization?: Record<string, string | number>;
+  },
+) {
+  return fetchJson<SalesOrder>(`/orders/${orderId}/corporate-units/${unitId}`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -2108,10 +2273,16 @@ export function updateSalesOrder(
   });
 }
 
-export function acceptSalesOrder(tenantId: string, accessToken: string, orderId: string) {
+export function acceptSalesOrder(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  promisedDate: string,
+) {
   return fetchJson<SalesOrder>(`/orders/${orderId}/accept`, {
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ promisedDate }),
   });
 }
 
@@ -2119,7 +2290,7 @@ export function searchOrderProducts(
   tenantId: string,
   accessToken: string,
   q: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
+  inventorySource: 'SALES_INVENTORY' = 'SALES_INVENTORY',
 ) {
   return fetchJson<Product[]>(
     `/orders/products/search?q=${encodeURIComponent(q)}&inventorySource=${inventorySource}`,
@@ -2131,7 +2302,7 @@ export function getOrderProductByBarcode(
   tenantId: string,
   accessToken: string,
   barcode: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
+  inventorySource: 'SALES_INVENTORY' = 'SALES_INVENTORY',
 ) {
   return fetchJson<Product>(
     `/orders/products/barcode/${encodeURIComponent(barcode)}?inventorySource=${inventorySource}`,
@@ -2205,12 +2376,6 @@ export function uploadProductImage(tenantId: string, accessToken: string, file: 
   );
 }
 
-export function getInventoryMovements(tenantId: string, accessToken: string) {
-  return fetchJson<InventoryMovement[]>('/inventory/movements', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
 export function getInvoices(tenantId: string, accessToken: string) {
   return fetchJson<Invoice[]>('/invoices', {
     headers: tenantHeaders(tenantId, accessToken),
@@ -2246,7 +2411,12 @@ export function approveReturnRequest(
   tenantId: string,
   accessToken: string,
   returnRequestId: string,
-  payload: { cashSessionId?: string; refundMethod?: string; adminNote?: string },
+  payload: {
+    cashSessionId?: string;
+    refundMethod?: string;
+    restockDestination?: string;
+    adminNote?: string;
+  },
 ) {
   return fetchJson<ReturnRequest>(`/returns/${returnRequestId}/approve`, {
     method: 'POST',
@@ -2398,159 +2568,6 @@ export function getFiscalSequences(tenantId: string, accessToken: string) {
   });
 }
 
-export function getWarehouseStock(tenantId: string, accessToken: string) {
-  return fetchJson<WarehouseStock[]>('/warehouse/stock', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function getWarehouseMovements(tenantId: string, accessToken: string) {
-  return fetchJson<WarehouseMovement[]>('/warehouse/movements', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function getWarehouseProducts(tenantId: string, accessToken: string) {
-  return fetchJson<
-    (Product & {
-      warehouseStocks: Array<{
-        id: string;
-        quantity: number;
-        unitCost: string | null;
-        updatedAt: string;
-      }>;
-    })[]
-  >('/warehouse/products', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function createWarehouseProduct(
-  tenantId: string,
-  accessToken: string,
-  payload: WarehouseProductPayload,
-) {
-  return fetchJson<Product>('/warehouse/products', {
-    method: 'POST',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function updateWarehouseProduct(
-  tenantId: string,
-  accessToken: string,
-  productId: string,
-  payload: Partial<WarehouseProductPayload>,
-) {
-  return fetchJson<Product>(`/warehouse/products/${productId}`, {
-    method: 'PATCH',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteWarehouseProduct(tenantId: string, accessToken: string, productId: string) {
-  return fetchJson<Product>(`/warehouse/products/${productId}`, {
-    method: 'DELETE',
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function dispatchWarehouseProduct(
-  tenantId: string,
-  accessToken: string,
-  productId: string,
-  payload: WarehouseDispatchPayload,
-) {
-  return fetchJson<{ product: Product; stock: WarehouseStock }>(
-    `/warehouse/products/${productId}/dispatch`,
-    {
-      method: 'POST',
-      headers: tenantHeaders(tenantId, accessToken),
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-export function receiveWarehouseStock(
-  tenantId: string,
-  accessToken: string,
-  productId: string,
-  payload: WarehouseStockMovementPayload,
-) {
-  return fetchJson<{ product: Product; stock: WarehouseStock }>(
-    `/warehouse/products/${productId}/receive`,
-    {
-      method: 'POST',
-      headers: tenantHeaders(tenantId, accessToken),
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-export function receiveWarehouseStockBatch(
-  tenantId: string,
-  accessToken: string,
-  payload: {
-    items: Array<{ productId: string; quantity: number }>;
-    reference: string;
-    reason: string;
-  },
-) {
-  return fetchJson<{ receivedProducts: number }>('/warehouse/stock/receive-batch', {
-    method: 'POST',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function countWarehouseStock(
-  tenantId: string,
-  accessToken: string,
-  productId: string,
-  payload: WarehouseStockCountPayload,
-) {
-  return fetchJson<{ product: Product; stock: WarehouseStock }>(
-    `/warehouse/products/${productId}/count`,
-    {
-      method: 'POST',
-      headers: tenantHeaders(tenantId, accessToken),
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-export function activateWarehouseProduct(tenantId: string, accessToken: string, productId: string) {
-  return fetchJson<Product>(`/warehouse/products/${productId}/activate`, {
-    method: 'PATCH',
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function getWarehousePendingDispatches(tenantId: string, accessToken: string) {
-  return fetchJson<WarehousePendingDispatch[]>('/warehouse/dispatches/pending', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function confirmWarehouseOrderDispatch(
-  tenantId: string,
-  accessToken: string,
-  orderId: string,
-  items: Array<{ orderItemId: string; quantity: number }>,
-  note?: string,
-) {
-  return fetchJson<{ id: string; orderNumber: string; invoiceNumber: string | null }>(
-    `/warehouse/dispatches/${orderId}/confirm`,
-    {
-      method: 'POST',
-      headers: tenantHeaders(tenantId, accessToken),
-      body: JSON.stringify({ items, note: note?.trim() || undefined }),
-    },
-  );
-}
-
 export function createCashRegister(
   tenantId: string,
   accessToken: string,
@@ -2621,6 +2638,26 @@ export function importProductsFile(tenantId: string, accessToken: string, file: 
 
   return fetchFormData<ImportBatch>(
     '/imports/products',
+    formData,
+    tenantHeaders(tenantId, accessToken),
+  );
+}
+
+export function importCustomersFile(tenantId: string, accessToken: string, file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return fetchFormData<ImportBatch>(
+    '/imports/customers',
+    formData,
+    tenantHeaders(tenantId, accessToken),
+  );
+}
+
+export function importOpenOrdersFile(tenantId: string, accessToken: string, file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return fetchFormData<ImportBatch>(
+    '/imports/open-orders',
     formData,
     tenantHeaders(tenantId, accessToken),
   );
@@ -3151,6 +3188,7 @@ export function createReceivablePayment(
   invoiceId: string,
   payload: {
     amount: number;
+    method?: string;
     cashSessionId: string;
     idempotencyKey?: string;
   },
@@ -3181,5 +3219,28 @@ export function cancelReceivablePayment(
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify(payload),
+  });
+}
+
+export type ShopifyIntegrationStatus = {
+  configured: boolean;
+  jobs: Array<{
+    id: string;
+    productId: string;
+    pending: boolean;
+    error: string | null;
+    attempts: number;
+  }>;
+  dispatchErrors: Array<{ id: string; orderNumber: string; shopifyFulfillmentError: string }>;
+};
+export function getShopifyIntegrationStatus(tenantId: string, token: string) {
+  return fetchJson<ShopifyIntegrationStatus>('/integrations/shopify/status', {
+    headers: tenantHeaders(tenantId, token),
+  });
+}
+export function retryShopifyIntegration(tenantId: string, token: string) {
+  return fetchJson<{ configured: boolean; processed: number }>('/integrations/shopify/retry', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, token),
   });
 }

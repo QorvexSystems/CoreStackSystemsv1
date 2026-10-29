@@ -55,8 +55,10 @@ export function SupplierInvoicePrint({
   }
 
   const invoice = invoiceQuery.data;
-  const activePayments = invoice.payments?.filter((payment) => payment.status !== 'CANCELLED') ?? [];
-  const cancelledPayments = invoice.payments?.filter((payment) => payment.status === 'CANCELLED') ?? [];
+  const activePayments =
+    invoice.payments?.filter((payment) => payment.status !== 'CANCELLED') ?? [];
+  const cancelledPayments =
+    invoice.payments?.filter((payment) => payment.status === 'CANCELLED') ?? [];
 
   return (
     <>
@@ -159,7 +161,10 @@ export function SupplierInvoicePrint({
                 label="Orden de compra"
                 value={invoice.purchaseOrder?.orderNumber ?? 'Sin orden previa'}
               />
-              <PrintMeta label="Registrada por" value={invoice.createdBy?.name ?? 'No disponible'} />
+              <PrintMeta
+                label="Registrada por"
+                value={invoice.createdBy?.name ?? 'No disponible'}
+              />
             </div>
           </section>
 

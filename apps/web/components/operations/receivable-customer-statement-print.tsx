@@ -242,8 +242,8 @@ export function ReceivableCustomerStatementPrint({
         </section>
 
         <footer className="border-t border-zinc-200 pt-4 text-xs leading-5 text-zinc-500">
-          Documento generado por Qorvex para {session.tenantName}. Los pagos anulados se conservan
-          en el historial para fines de auditoría.
+          Documento generado por CoreStack para {session.tenantName}. Los pagos anulados se
+          conservan en el historial para fines de auditoría.
         </footer>
       </article>
     </div>

@@ -11,7 +11,10 @@ type BarcodeCameraScannerProps = {
   label?: string;
 };
 
-export function BarcodeCameraScanner({ onDetected, label = 'Escanear con camara' }: BarcodeCameraScannerProps) {
+export function BarcodeCameraScanner({
+  onDetected,
+  label = 'Escanear con camara',
+}: BarcodeCameraScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -26,17 +29,21 @@ export function BarcodeCameraScanner({ onDetected, label = 'Escanear con camara'
     try {
       setScanning(true);
       const reader = new BrowserMultiFormatReader();
-      controlsRef.current = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
-        const text = result?.getText();
+      controlsRef.current = await reader.decodeFromVideoDevice(
+        undefined,
+        videoRef.current,
+        (result) => {
+          const text = result?.getText();
 
-        if (!text) {
-          return;
-        }
+          if (!text) {
+            return;
+          }
 
-        onDetected(text);
-        toast.success('Codigo detectado', { description: text });
-        stopScanner();
-      });
+          onDetected(text);
+          toast.success('Codigo detectado', { description: text });
+          stopScanner();
+        },
+      );
     } catch {
       setScanning(false);
       toast.error('No se pudo activar la camara.', {

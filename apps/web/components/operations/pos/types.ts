@@ -1,6 +1,8 @@
 import type { Product } from '@/lib/api';
 
 export type CartItem = {
+  lineId?: string;
+  customUnitPrice?: number;
   product: Product;
   quantity: number;
   unitPrice?: number;
@@ -9,6 +11,12 @@ export type CartItem = {
   subtotal?: number;
   taxTotal?: number;
   total?: number;
+  personalization?: {
+    charms?: number;
+    children?: number;
+    material?: string;
+    instructions?: string;
+  };
 };
 
 export type PosTotals = {

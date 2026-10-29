@@ -28,7 +28,7 @@ import {
   type SalesOrder,
   type SalesOrderPriceLevel,
 } from '@/lib/api';
-import { canTakeOrders, isAdminSession } from '@/lib/authorization';
+import { canTakeOrders, canUsePosSession, isAdminSession } from '@/lib/authorization';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
 import {
   normalizeDominicanDocument,
@@ -66,7 +66,6 @@ type WindowWithBarcodeDetector = Window &
   typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor };
 
 type OrderDestination = 'CASH_SALE' | 'QUOTATION';
-type InventorySource = 'SALES_INVENTORY' | 'WAREHOUSE';
 const finalDiscountCustomerId = '__FINAL_DISCOUNT_10__';
 const finalPreferredCustomerId = '__FINAL_PREFERRED_18__';
 
@@ -136,16 +135,21 @@ function buildPricedCartItem(
   quantity: number,
   priceLevel: SalesOrderPriceLevel,
   reservedQuantity = 0,
+  personalization?: CartItem['personalization'],
+  customUnitPrice?: number,
+  lineId = crypto.randomUUID(),
 ): CartItem {
   const regularUnitPrice = getProductPrice(product);
   const discountRate = getPriceLevelDiscountRate(priceLevel);
-  const unitPrice = roundMoney(regularUnitPrice * (1 - discountRate));
+  const unitPrice = customUnitPrice ?? roundMoney(regularUnitPrice * (1 - discountRate));
   const regularSubtotal = roundMoney(regularUnitPrice * quantity);
   const subtotal = roundMoney(unitPrice * quantity);
   const discountTotal = roundMoney(Math.max(regularSubtotal - subtotal, 0));
   const taxTotal = roundMoney(subtotal * Number(product.taxRate));
 
   return {
+    lineId,
+    customUnitPrice,
     product,
     quantity,
     reservedQuantity,
@@ -154,6 +158,7 @@ function buildPricedCartItem(
     subtotal,
     taxTotal,
     total: roundMoney(subtotal + taxTotal),
+    personalization,
   };
 }
 
@@ -173,7 +178,9 @@ export function OrdersView() {
   const editToastShownRef = useRef<string | null>(null);
 
   const [destination, setDestination] = useState<OrderDestination>('CASH_SALE');
-  const [inventorySource, setInventorySource] = useState<InventorySource>('SALES_INVENTORY');
+  const [isExpress, setIsExpress] = useState(false);
+  const [requiresFactoryWork, setRequiresFactoryWork] = useState(false);
+  const inventorySource = 'SALES_INVENTORY' as const;
   const [electronicInvoiceRequested, setElectronicInvoiceRequested] = useState(false);
   const [ecfRecipientEmail, setEcfRecipientEmail] = useState('');
   const [clientName, setClientName] = useState('');
@@ -189,6 +196,18 @@ export function OrdersView() {
   const [customDueDate, setCustomDueDate] = useState('');
   const [creditRequestNote, setCreditRequestNote] = useState('');
   const [notes, setNotes] = useState('');
+  const [promisedDate, setPromisedDate] = useState(() =>
+    new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+  );
+  const [priority, setPriority] = useState<'NORMAL' | 'URGENT'>('NORMAL');
+  const [isCorporate, setIsCorporate] = useState(false);
+  const [deliveryMethod, setDeliveryMethod] = useState<'PICKUP' | 'DELIVERY' | 'PROVINCE_SHIPPING'>(
+    'PICKUP',
+  );
+  const [dispatchLocation, setDispatchLocation] = useState<'STORE' | 'FACTORY'>('STORE');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [notificationEmail, setNotificationEmail] = useState('');
   const [barcode, setBarcode] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
@@ -197,7 +216,6 @@ export function OrdersView() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [brandFilter, setBrandFilter] = useState('ALL');
-  const [availableOnly, setAvailableOnly] = useState(false);
   const [notesExpanded, setNotesExpanded] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
@@ -251,7 +269,15 @@ export function OrdersView() {
   useEffect(() => {
     setCart((current) =>
       current.map((item) =>
-        buildPricedCartItem(item.product, item.quantity, priceLevel, item.reservedQuantity),
+        buildPricedCartItem(
+          item.product,
+          item.quantity,
+          priceLevel,
+          item.reservedQuantity,
+          item.personalization,
+          item.customUnitPrice,
+          item.lineId,
+        ),
       ),
     );
   }, [priceLevel]);
@@ -292,7 +318,6 @@ export function OrdersView() {
 
         // Cargar datos
         setDestination('QUOTATION');
-        setInventorySource(order.inventorySource ?? 'SALES_INVENTORY');
         setElectronicInvoiceRequested(order.electronicInvoiceRequested);
         setClientName(order.clientName || '');
         setCustomerId(order.customerId || getSpecialCustomerValue(order.priceLevel));
@@ -307,6 +332,14 @@ export function OrdersView() {
         );
         setCreditRequestNote(order.creditRequestNote ?? order.creditApproval?.requestNote ?? '');
         setNotes(order.notes || '');
+        setPromisedDate(order.promisedAt?.slice(0, 10) || '');
+        setPriority(order.priority ?? 'NORMAL');
+        setIsCorporate(order.isCorporate ?? false);
+        setDeliveryMethod(order.deliveryMethod ?? 'PICKUP');
+        setDispatchLocation(order.dispatchLocation ?? 'STORE');
+        setDeliveryAddress(order.deliveryAddress ?? '');
+        setDeliveryPhone(order.deliveryPhone ?? '');
+        setNotificationEmail(order.notificationEmail ?? '');
         if (order.quotationDocumentType === 'RNC' || order.quotationDocumentType === 'CEDULA') {
           setQuotationDocumentType(order.quotationDocumentType);
         }
@@ -314,6 +347,7 @@ export function OrdersView() {
 
         // Cargar productos en el carrito
         const cartItems = order.items.map((item) => ({
+          lineId: item.id,
           product: item.product! as Product,
           quantity: Number(item.quantity),
           reservedQuantity: item.reservedQuantity,
@@ -322,6 +356,7 @@ export function OrdersView() {
           subtotal: Number(item.subtotal),
           taxTotal: Number(item.taxTotal),
           total: Number(item.total),
+          personalization: item.personalization ?? undefined,
         }));
 
         setCart(cartItems);
@@ -397,13 +432,11 @@ export function OrdersView() {
   );
   const filteredProducts = productPool
     .filter((product) => categoryFilter === 'ALL' || product.category?.name === categoryFilter)
-    .filter((product) => brandFilter === 'ALL' || product.brand === brandFilter)
-    .filter(
-      (product) => !availableOnly || !product.trackInventory || getAvailableStock(product) > 0,
-    );
-  const quantitiesByProduct = Object.fromEntries(
-    cart.map((item) => [item.product.id, item.quantity]),
-  );
+    .filter((product) => brandFilter === 'ALL' || product.brand === brandFilter);
+  const quantitiesByProduct = cart.reduce<Record<string, number>>((counts, item) => {
+    counts[item.product.id] = (counts[item.product.id] ?? 0) + item.quantity;
+    return counts;
+  }, {});
   const totals = useMemo(() => {
     const subtotal = cart.reduce(
       (sum, item) => sum + (item.subtotal ?? getProductPrice(item.product) * item.quantity),
@@ -478,13 +511,37 @@ export function OrdersView() {
         throw new Error('Sesion requerida.');
       }
 
-      const trimmedClientName = clientName.trim();
+      const trimmedClientName = clientName.trim() || (isExpress ? 'Consumidor final' : '');
       if (!trimmedClientName) {
         throw new Error('El nombre del cliente es requerido.');
       }
 
       if (destination === 'CASH_SALE' && electronicInvoiceRequested && !ecfRecipientEmail.trim()) {
         throw new Error('Indica el correo que recibirá la copia de la factura electrónica.');
+      }
+
+      if (destination === 'CASH_SALE' && !isExpress && !promisedDate) {
+        throw new Error('Indica la fecha prometida de la orden.');
+      }
+      if (
+        isExpress &&
+        (cart.some((item) => item.product.kind === 'PERSONALIZED') ||
+          paymentMode === 'CREDIT' ||
+          inventorySource !== 'SALES_INVENTORY' ||
+          isCorporate ||
+          deliveryMethod !== 'PICKUP')
+      ) {
+        throw new Error(
+          'La venta exprés requiere artículos normales de Tienda, cobro de contado y entrega inmediata.',
+        );
+      }
+
+      if (
+        destination === 'CASH_SALE' &&
+        deliveryMethod !== 'PICKUP' &&
+        (!deliveryAddress.trim() || !deliveryPhone.trim())
+      ) {
+        throw new Error('Indica la dirección y el teléfono para el envío.');
       }
 
       if (paymentMode === 'CREDIT') {
@@ -516,6 +573,11 @@ export function OrdersView() {
 
       const payload = {
         destination,
+        isExpress: !editOrderId && destination === 'CASH_SALE' && isExpress,
+        requiresProduction:
+          !editOrderId && destination === 'CASH_SALE' && isAdminSession(session)
+            ? requiresFactoryWork
+            : undefined,
         inventorySource,
         electronicInvoiceRequested:
           destination === 'CASH_SALE' ? electronicInvoiceRequested : false,
@@ -544,9 +606,19 @@ export function OrdersView() {
             ? normalizeDominicanDocument(quotationDocumentNumber)
             : undefined,
         notes: notes.trim() || undefined,
+        promisedDate: isExpress ? undefined : promisedDate || undefined,
+        priority,
+        isCorporate,
+        deliveryMethod,
+        dispatchLocation,
+        deliveryAddress: deliveryAddress.trim() || undefined,
+        deliveryPhone: deliveryPhone.trim() || undefined,
+        notificationEmail: notificationEmail.trim() || undefined,
         items: cart.map((item) => ({
           productId: item.product.id,
           quantity: item.quantity,
+          unitPrice: item.customUnitPrice,
+          personalization: item.product.kind === 'PERSONALIZED' ? item.personalization : undefined,
         })),
       };
 
@@ -566,7 +638,8 @@ export function OrdersView() {
             : `Ticket pendiente ${order.orderNumber} enviado a caja. No es una factura fiscal.`;
       setMessage(successMessage);
       setCart([]);
-      setInventorySource('SALES_INVENTORY');
+      setIsExpress(false);
+      setRequiresFactoryWork(false);
       setElectronicInvoiceRequested(false);
       setEcfRecipientEmail('');
       setNotes('');
@@ -598,6 +671,8 @@ export function OrdersView() {
 
       if (editOrderId) {
         router.push('/quotations');
+      } else if (order.isExpress && canUsePosSession(session)) {
+        router.push(`/pos?order=${order.id}`);
       }
     },
     onError: (error) => {
@@ -649,7 +724,10 @@ export function OrdersView() {
 
     setMessage(null);
     setCart((current) => {
-      const existing = current.find((item) => item.product.id === product.id);
+      const existing =
+        product.kind === 'PERSONALIZED'
+          ? undefined
+          : current.find((item) => item.product.id === product.id);
 
       if (existing) {
         return current.map((item) =>
@@ -665,13 +743,25 @@ export function OrdersView() {
                   roundQuantity(cappedQuantity),
                   priceLevel,
                   item.reservedQuantity,
+                  item.personalization,
+                  item.customUnitPrice,
+                  item.lineId,
                 );
               })()
             : item,
         );
       }
 
-      return [...current, buildPricedCartItem(product, getDefaultQuantity(product), priceLevel)];
+      return [
+        ...current,
+        buildPricedCartItem(
+          product,
+          getDefaultQuantity(product),
+          priceLevel,
+          0,
+          product.kind === 'PERSONALIZED' ? { material: product.material ?? undefined } : undefined,
+        ),
+      ];
     });
 
     return true;
@@ -681,7 +771,7 @@ export function OrdersView() {
     setCart((current) =>
       current
         .map((item) => {
-          if (item.product.id !== productId) {
+          if ((item.lineId ?? item.product.id) !== productId) {
             return item;
           }
 
@@ -700,9 +790,33 @@ export function OrdersView() {
             roundQuantity(nextQuantity),
             priceLevel,
             item.reservedQuantity,
+            item.personalization,
+            item.customUnitPrice,
+            item.lineId,
           );
         })
         .filter((item) => item.quantity > 0),
+    );
+  }
+
+  function updatePersonalization(
+    productId: string,
+    field: 'charms' | 'children' | 'material' | 'instructions',
+    value: string,
+  ) {
+    setCart((current) =>
+      current.map((item) => {
+        if ((item.lineId ?? item.product.id) !== productId) return item;
+
+        const personalization = { ...item.personalization };
+        if (field === 'charms' || field === 'children') {
+          personalization[field] = value === '' ? undefined : Math.max(0, Number(value));
+        } else {
+          personalization[field] = value || undefined;
+        }
+
+        return { ...item, personalization };
+      }),
     );
   }
 
@@ -773,6 +887,7 @@ export function OrdersView() {
 
   function handlePaymentModeChange(nextPaymentMode: SalePaymentMode) {
     setPaymentMode(nextPaymentMode);
+    if (nextPaymentMode === 'CREDIT') setIsExpress(false);
     if (nextPaymentMode !== 'CREDIT') {
       return;
     }
@@ -784,20 +899,6 @@ export function OrdersView() {
         setClientName('');
       }
     }
-  }
-
-  function handleInventorySourceChange(nextInventorySource: InventorySource) {
-    if (nextInventorySource === inventorySource) return;
-    setInventorySource(nextInventorySource);
-    setCart([]);
-    setCategoryFilter('ALL');
-    setBrandFilter('ALL');
-    setAvailableOnly(false);
-    setMessage(
-      nextInventorySource === 'WAREHOUSE'
-        ? 'Catálogo B2B de almacén seleccionado.'
-        : 'Catálogo de inventario de ventas seleccionado.',
-    );
   }
 
   function enableScanner() {
@@ -901,8 +1002,8 @@ export function OrdersView() {
       }
     >
       <ModuleHeader
-        title="Toma de ordenes"
-        description="Escanea, busca y agrega productos. Revisa la orden cuando estés listo para enviarla a caja."
+        title="Toma de órdenes"
+        description="Registra ventas de tienda, pedidos personalizados y cotizaciones empresariales."
       />
 
       <div className="flex flex-wrap justify-end gap-2">
@@ -969,8 +1070,8 @@ export function OrdersView() {
                 onStartCamera={startCameraScan}
               />
 
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr_auto]">
-                <div className="relative">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr]">
+                <div className="relative lg:self-end">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     value={search}
@@ -982,7 +1083,7 @@ export function OrdersView() {
                 <select
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
+                  className="h-11 rounded-md border border-input bg-white px-3 text-sm lg:self-end"
                 >
                   <option value="ALL">Todos los tipos</option>
                   {categories.map((category) => (
@@ -994,24 +1095,15 @@ export function OrdersView() {
                 <select
                   value={brandFilter}
                   onChange={(event) => setBrandFilter(event.target.value)}
-                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
+                  className="h-11 rounded-md border border-input bg-white px-3 text-sm lg:self-end"
                 >
-                  <option value="ALL">Marca/proveedor</option>
+                  <option value="ALL">Marca o colección</option>
                   {brands.map((brand) => (
                     <option key={brand} value={brand}>
                       {brand}
                     </option>
                   ))}
                 </select>
-                <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-md border border-input bg-white px-3 text-sm font-medium sm:col-span-2 lg:col-span-1">
-                  <span className="whitespace-nowrap">Solo disponibles</span>
-                  <input
-                    type="checkbox"
-                    checked={availableOnly}
-                    onChange={(event) => setAvailableOnly(event.target.checked)}
-                    className="h-5 w-5 rounded border-input accent-primary"
-                  />
-                </label>
               </div>
             </CardContent>
           </Card>
@@ -1020,7 +1112,6 @@ export function OrdersView() {
             <PosProductGrid
               products={filteredProducts}
               quantitiesByProduct={quantitiesByProduct}
-              inventorySource={inventorySource}
               isLoading={productsQuery.isLoading}
               onAddProduct={addProduct}
             />
@@ -1049,6 +1140,139 @@ export function OrdersView() {
             onClear={() => setCart([])}
             showHeader={false}
           />
+          {cart.some((item) => item.product.kind === 'PERSONALIZED') ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Datos de personalización</CardTitle>
+                <CardDescription>
+                  Completa únicamente los detalles que apliquen a cada producto.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {cart
+                  .filter((item) => item.product.kind === 'PERSONALIZED')
+                  .map((item) => (
+                    <div
+                      key={item.lineId ?? item.product.id}
+                      className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-zinc-950">{item.product.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Cantidad en la orden: {item.quantity}
+                        </p>
+                      </div>
+                      {isAdminSession(session) || session.permissions.canApplyDiscount ? (
+                        <div className="space-y-1.5">
+                          <Label>Precio unitario de esta personalización</Label>
+                          <Input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={item.customUnitPrice ?? item.unitPrice ?? ''}
+                            onChange={(event) => {
+                              const price = Number(event.target.value);
+                              if (price > 0)
+                                setCart((current) =>
+                                  current.map((row) =>
+                                    row.lineId === item.lineId
+                                      ? buildPricedCartItem(
+                                          row.product,
+                                          row.quantity,
+                                          priceLevel,
+                                          row.reservedQuantity,
+                                          row.personalization,
+                                          price,
+                                          row.lineId,
+                                        )
+                                      : row,
+                                  ),
+                                );
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`charms-${item.product.id}`}>Cantidad de dijes</Label>
+                          <Input
+                            id={`charms-${item.product.id}`}
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={item.personalization?.charms ?? ''}
+                            onChange={(event) =>
+                              updatePersonalization(
+                                item.lineId ?? item.product.id,
+                                'charms',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`children-${item.product.id}`}>Cantidad de niños</Label>
+                          <Input
+                            id={`children-${item.product.id}`}
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={item.personalization?.children ?? ''}
+                            onChange={(event) =>
+                              updatePersonalization(
+                                item.lineId ?? item.product.id,
+                                'children',
+                                event.target.value,
+                              )
+                            }
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`material-${item.product.id}`}>Material</Label>
+                        <select
+                          id={`material-${item.product.id}`}
+                          value={item.personalization?.material ?? ''}
+                          onChange={(event) =>
+                            updatePersonalization(
+                              item.lineId ?? item.product.id,
+                              'material',
+                              event.target.value,
+                            )
+                          }
+                          className="h-11 w-full rounded-md border border-input bg-white px-3 text-sm"
+                        >
+                          <option value="">Seleccionar</option>
+                          <option value="Oro">Oro</option>
+                          <option value="Plata">Plata</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`instructions-${item.product.id}`}>
+                          Instrucciones (opcional)
+                        </Label>
+                        <textarea
+                          id={`instructions-${item.product.id}`}
+                          value={item.personalization?.instructions ?? ''}
+                          onChange={(event) =>
+                            updatePersonalization(
+                              item.lineId ?? item.product.id,
+                              'instructions',
+                              event.target.value,
+                            )
+                          }
+                          maxLength={500}
+                          className="min-h-20 w-full rounded-md border border-input bg-white px-3 py-2 text-sm"
+                          placeholder="Nombre, mensaje o detalle que debe seguir fábrica"
+                        />
+                      </div>
+                    </div>
+                  ))}
+              </CardContent>
+            </Card>
+          ) : null}
           <Card>
             <CardHeader>
               <div className="flex items-start justify-between gap-2">
@@ -1133,47 +1357,128 @@ export function OrdersView() {
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
                       }`}
-                      onClick={() => setDestination('QUOTATION')}
+                      onClick={() => {
+                        setDestination('QUOTATION');
+                        setIsExpress(false);
+                      }}
                     >
                       Cotizacion
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Origen de la venta</Label>
-                  <div className="grid grid-cols-2 gap-2 rounded-md border border-zinc-200 bg-white p-1">
+                {!editOrderId && destination === 'CASH_SALE' ? (
+                  <div
+                    className={`rounded-lg border p-3 ${isExpress ? 'border-gold-dark bg-gold-light/15' : 'border-border bg-card'}`}
+                  >
                     <button
                       type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'SALES_INVENTORY'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('SALES_INVENTORY')}
+                      role="switch"
+                      aria-checked={isExpress}
+                      aria-label="Venta exprés"
+                      aria-describedby="express-sale-help"
+                      disabled={
+                        !isExpress &&
+                        cart.some((item) => item.product.kind === 'PERSONALIZED')
+                      }
+                      onClick={() => {
+                        const enable = !isExpress;
+                        setIsExpress(enable);
+                        if (enable) {
+                          setRequiresFactoryWork(false);
+                          setPaymentMode('CASH');
+                          setIsCorporate(false);
+                          setDeliveryMethod('PICKUP');
+                          setDispatchLocation('STORE');
+                        }
+                      }}
+                      className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Inventario
+                      <span>Venta exprés</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span
+                          className={`text-xs font-semibold ${isExpress ? 'text-gold-deep' : 'text-muted-foreground'}`}
+                        >
+                          {isExpress ? 'Activada' : 'Desactivada'}
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`relative h-6 w-11 rounded-full transition-colors ${isExpress ? 'bg-gold-dark' : 'bg-slate-300'}`}
+                        >
+                          <span
+                            className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${isExpress ? 'translate-x-5' : 'translate-x-0'}`}
+                          />
+                        </span>
+                      </span>
                     </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`min-h-11 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'WAREHOUSE'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('WAREHOUSE')}
-                    >
-                      Almacén B2B
-                    </button>
+                    <p id="express-sale-help" className="text-xs text-muted-foreground">
+                      Para artículos normales que el cliente se lleva ahora. Se envía a Caja para
+                      cobrar y facturar; no aparece en Producción.
+                    </p>
+                    {cart.some((item) => item.product.kind === 'PERSONALIZED') ? (
+                      <p className="mt-1 text-xs text-danger">
+                        Para activar venta exprés, usa solo artículos normales.
+                      </p>
+                    ) : null}
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {inventorySource === 'WAREHOUSE'
-                      ? 'La venta descontará únicamente las existencias del almacén.'
-                      : 'La venta descontará únicamente el inventario de ventas.'}
-                  </p>
-                </div>
+                ) : null}
+
+                {!editOrderId && destination === 'CASH_SALE' && isAdminSession(session) ? (
+                  <div
+                    className={`rounded-lg border p-3 ${requiresFactoryWork ? 'border-gold-dark bg-gold-light/15' : 'border-border bg-card'}`}
+                  >
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={
+                        requiresFactoryWork ||
+                        cart.some((item) => item.product.kind === 'PERSONALIZED')
+                      }
+                      aria-label="Enviar esta orden a Fábrica"
+                      aria-describedby="factory-work-help"
+                      disabled={cart.some((item) => item.product.kind === 'PERSONALIZED')}
+                      onClick={() => {
+                        setRequiresFactoryWork((current) => !current);
+                        setIsExpress(false);
+                      }}
+                      className="flex min-h-11 w-full items-center justify-between gap-3 rounded-md text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed"
+                    >
+                      <span>Trabajo de Fábrica</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {cart.some((item) => item.product.kind === 'PERSONALIZED')
+                            ? 'Automático'
+                            : requiresFactoryWork
+                              ? 'Activado'
+                              : 'Desactivado'}
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`relative h-6 w-11 rounded-full transition-colors ${requiresFactoryWork || cart.some((item) => item.product.kind === 'PERSONALIZED') ? 'bg-gold-dark' : 'bg-slate-300'}`}
+                        >
+                          <span
+                            className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${requiresFactoryWork || cart.some((item) => item.product.kind === 'PERSONALIZED') ? 'translate-x-5' : 'translate-x-0'}`}
+                          />
+                        </span>
+                      </span>
+                    </button>
+                    <p id="factory-work-help" className="text-xs text-muted-foreground">
+                      Los productos personalizados pasan automáticamente. Para un producto normal,
+                      activa esta opción solo en esta orden. No cambia la ubicación del inventario.
+                    </p>
+                  </div>
+                ) : null}
+
+                {destination === 'QUOTATION' ? (
+                  <label className="flex items-center gap-2 rounded-md border border-border bg-white p-3 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      checked={isCorporate}
+                      onChange={(event) => setIsCorporate(event.target.checked)}
+                    />
+                    Cotización de regalos empresariales
+                  </label>
+                ) : null}
 
                 {destination === 'CASH_SALE' ? (
                   <div className="space-y-3">
@@ -1248,7 +1553,12 @@ export function OrdersView() {
 
                 <div className="space-y-2">
                   <Label htmlFor="orderClientName">
-                    Nombre del cliente <span className="text-danger">*</span>
+                    Nombre del cliente{' '}
+                    {isExpress ? (
+                      <span className="text-muted-foreground">(opcional)</span>
+                    ) : (
+                      <span className="text-danger">*</span>
+                    )}
                   </Label>
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1268,7 +1578,7 @@ export function OrdersView() {
                       placeholder="Busca por nombre, cedula, telefono o correo"
                       className="bg-white pl-9"
                       autoComplete="off"
-                      required
+                      required={!isExpress}
                     />
                     {customerSearchOpen ? (
                       <div
@@ -1356,7 +1666,9 @@ export function OrdersView() {
                     ) : null}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {destination === 'QUOTATION'
+                    {isExpress
+                      ? 'Opcional en venta exprés. Si lo dejas vacío, se registrará como Consumidor final.'
+                      : destination === 'QUOTATION'
                       ? 'Puedes usar un cliente registrado o un nombre temporal. El nombre temporal queda solo en esta cotización.'
                       : 'Busca y selecciona un cliente para consultar su saldo. Para contado tambien puedes escribir un cliente no registrado.'}
                   </p>
@@ -1499,6 +1811,101 @@ export function OrdersView() {
                     </p>
                   ) : null}
                 </div>
+
+                {destination === 'CASH_SALE' ? (
+                  <div className="grid gap-4 rounded-md border border-border bg-white p-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="promisedDate">
+                        Fecha prometida{isExpress ? ' (no aplica a venta exprés)' : ' *'}
+                      </Label>
+                      <Input
+                        id="promisedDate"
+                        type="date"
+                        value={promisedDate}
+                        onChange={(event) => setPromisedDate(event.target.value)}
+                        required={!isExpress}
+                        disabled={isExpress}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="orderPriority">Prioridad</Label>
+                      <select
+                        id="orderPriority"
+                        value={priority}
+                        onChange={(event) => setPriority(event.target.value as 'NORMAL' | 'URGENT')}
+                        className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                      >
+                        <option value="NORMAL">Normal</option>
+                        <option value="URGENT">Urgente</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="deliveryMethod">Entrega</Label>
+                      <select
+                        id="deliveryMethod"
+                        value={deliveryMethod}
+                        onChange={(event) => {
+                          const value = event.target.value as typeof deliveryMethod;
+                          setDeliveryMethod(value);
+                          if (value !== 'PICKUP') setIsExpress(false);
+                        }}
+                        className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                      >
+                        <option value="PICKUP">Recogida</option>
+                        <option value="DELIVERY">Delivery</option>
+                        <option value="PROVINCE_SHIPPING">Envío a provincia</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="dispatchLocation">Despachar desde</Label>
+                      <select
+                        id="dispatchLocation"
+                        value={dispatchLocation}
+                        onChange={(event) => {
+                          const value = event.target.value as typeof dispatchLocation;
+                          setDispatchLocation(value);
+                          if (value !== 'STORE') setIsExpress(false);
+                        }}
+                        className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                      >
+                        <option value="STORE">Tienda</option>
+                        <option value="FACTORY">Fábrica</option>
+                      </select>
+                    </div>
+                    {deliveryMethod !== 'PICKUP' ? (
+                      <>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="deliveryAddress">Dirección *</Label>
+                          <Input
+                            id="deliveryAddress"
+                            value={deliveryAddress}
+                            onChange={(event) => setDeliveryAddress(event.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="deliveryPhone">Teléfono *</Label>
+                          <Input
+                            id="deliveryPhone"
+                            value={deliveryPhone}
+                            onChange={(event) => setDeliveryPhone(event.target.value)}
+                            required
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                    <div className="space-y-2">
+                      <Label htmlFor="notificationEmail">Correo para aviso</Label>
+                      <Input
+                        id="notificationEmail"
+                        type="email"
+                        value={notificationEmail}
+                        onChange={(event) => setNotificationEmail(event.target.value)}
+                        placeholder="cliente@correo.com"
+                      />
+                    </div>
+                  </div>
+                ) : null}
 
                 {paymentMode === 'CASH' ? (
                   <div className="space-y-2">
@@ -1724,6 +2131,13 @@ export function OrdersView() {
                         <CreditCard className="h-5 w-5" />
                         Solicitar aprobación de crédito
                       </>
+                    ) : isExpress ? (
+                      <>
+                        <Send className="h-5 w-5" />{' '}
+                        {canUsePosSession(session)
+                          ? 'Cobrar venta exprés en Caja'
+                          : 'Enviar venta exprés a Caja'}
+                      </>
                     ) : (
                       <>
                         <Send className="h-5 w-5" />
@@ -1853,9 +2267,6 @@ function PendingOrdersPanel({
                     <p className="font-semibold text-zinc-950">{order.orderNumber}</p>
                     <Badge variant={getStatusVariant(order.status)}>
                       {translateStatus(order.status)}
-                    </Badge>
-                    <Badge variant="outline">
-                      {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
                     </Badge>
                     {order.paymentMode === 'CREDIT' ? (
                       <Badge variant="outline">
