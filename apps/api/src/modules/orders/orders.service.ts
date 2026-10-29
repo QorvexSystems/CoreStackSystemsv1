@@ -50,6 +50,7 @@ import {
   parseBusinessDate,
 } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
+import { collectionProductFilter, countCollections } from '../web-catalog/web-collections';
 import {
   AcceptSalesOrderDto,
   CancelSalesOrderDto,
@@ -661,12 +662,16 @@ export class OrdersService {
     user: AuthenticatedUser,
     q: string,
     inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+    collection?: string,
   ) {
     await this.ensureCanTakeOrders(tenantId, user);
     if (inventorySource !== ProductInventoryDestination.SALES_INVENTORY) {
       throw new BadRequestException('El stock físico de Fábrica ya no está disponible.');
     }
     const query = q.trim();
+    const collectionFilter = collection
+      ? await collectionProductFilter(this.prisma, tenantId, collection)
+      : {};
 
     return this.prisma.product
       .findMany({
@@ -674,6 +679,7 @@ export class OrdersService {
           tenantId,
           inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
           status: ProductStatus.ACTIVE,
+          ...collectionFilter,
           ...(query
             ? {
                 OR: [
@@ -687,8 +693,17 @@ export class OrdersService {
         },
         include: { category: true },
         orderBy: [{ stock: 'asc' }, { name: 'asc' }],
-        take: 30,
+        // Una colección puede tener más de 30 variantes (la tienda llega a más de 80 por grupo): se amplía el tope.
+        take: collection ? 300 : 30,
       });
+  }
+
+  async searchProductCollections(tenantId: string, user: AuthenticatedUser) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    return countCollections(this.prisma, tenantId, {
+      inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
+      status: ProductStatus.ACTIVE,
+    });
   }
 
   async findProductByBarcode(

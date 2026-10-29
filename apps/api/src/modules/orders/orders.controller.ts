@@ -25,6 +25,7 @@ import {
   ClaimSalesOrderDto,
   CreateSalesOrderDto,
 } from './dto/create-sales-order.dto';
+import { cleanCollectionHandle } from '../web-catalog/web-collections';
 import { OrdersService } from './orders.service';
 import { UpdateOrderWorkflowDto } from './dto/update-order-workflow.dto';
 import {
@@ -52,8 +53,20 @@ export class OrdersController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('q') q = '',
     @Query('inventorySource') inventorySource?: ProductInventoryDestination,
+    @Query('collection') collection?: string,
   ) {
-    return this.ordersService.searchProducts(tenantId, user, q, inventorySource);
+    return this.ordersService.searchProducts(
+      tenantId,
+      user,
+      q,
+      inventorySource,
+      cleanCollectionHandle(collection),
+    );
+  }
+
+  @Get('products/collections')
+  productCollections(@TenantId() tenantId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.ordersService.searchProductCollections(tenantId, user);
   }
 
   @Get('products/barcode/:barcode')

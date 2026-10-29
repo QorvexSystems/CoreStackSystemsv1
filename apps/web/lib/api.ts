@@ -2071,9 +2071,20 @@ export function deleteCustomer(tenantId: string, accessToken: string, customerId
   });
 }
 
-export function getProducts(tenantId: string, accessToken: string, q?: string) {
-  const query = q ? `?q=${encodeURIComponent(q)}` : '';
+export type WebCollectionOption = { handle: string; title: string; count: number };
+
+export function getProducts(tenantId: string, accessToken: string, q?: string, collection?: string) {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (collection) params.set('collection', collection);
+  const query = params.size ? `?${params.toString()}` : '';
   return fetchJson<Product[]>(`/products${query}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getProductCollections(tenantId: string, accessToken: string) {
+  return fetchJson<WebCollectionOption[]>('/products/collections', {
     headers: tenantHeaders(tenantId, accessToken),
   });
 }
@@ -2291,11 +2302,19 @@ export function searchOrderProducts(
   accessToken: string,
   q: string,
   inventorySource: 'SALES_INVENTORY' = 'SALES_INVENTORY',
+  collection?: string,
 ) {
+  const collectionParam = collection ? `&collection=${encodeURIComponent(collection)}` : '';
   return fetchJson<Product[]>(
-    `/orders/products/search?q=${encodeURIComponent(q)}&inventorySource=${inventorySource}`,
+    `/orders/products/search?q=${encodeURIComponent(q)}&inventorySource=${inventorySource}${collectionParam}`,
     { headers: tenantHeaders(tenantId, accessToken) },
   );
+}
+
+export function getOrderProductCollections(tenantId: string, accessToken: string) {
+  return fetchJson<WebCollectionOption[]>('/orders/products/collections', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
 }
 
 export function getOrderProductByBarcode(

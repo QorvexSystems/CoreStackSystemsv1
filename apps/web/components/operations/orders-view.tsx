@@ -1,5 +1,6 @@
 'use client';
 
+import { CollectionSelect } from '@/components/operations/collection-select';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, CreditCard, FileText, Search, Send, X } from 'lucide-react';
 import Link from 'next/link';
@@ -18,6 +19,7 @@ import {
   getOrderProductByBarcode,
   getSalesOrder,
   getSalesOrders,
+  getOrderProductCollections,
   searchOrderProducts,
   updateSalesOrder,
   type Product,
@@ -216,6 +218,7 @@ export function OrdersView() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [brandFilter, setBrandFilter] = useState('ALL');
+  const [collectionFilter, setCollectionFilter] = useState('');
   const [notesExpanded, setNotesExpanded] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
@@ -233,14 +236,20 @@ export function OrdersView() {
     enabled: canUseOrderTaking,
   });
   const productsQuery = useQuery({
-    queryKey: ['order-products-search', session?.tenantId, search, inventorySource],
+    queryKey: ['order-products-search', session?.tenantId, search, inventorySource, collectionFilter],
     queryFn: () =>
       searchOrderProducts(
         session?.tenantId ?? '',
         session?.accessToken ?? '',
         search,
         inventorySource,
+        collectionFilter,
       ),
+    enabled: canUseOrderTaking,
+  });
+  const collectionsQuery = useQuery({
+    queryKey: ['order-product-collections', session?.tenantId],
+    queryFn: () => getOrderProductCollections(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: canUseOrderTaking,
   });
   const pendingOrdersQuery = useQuery({
@@ -1070,7 +1079,7 @@ export function OrdersView() {
                 onStartCamera={startCameraScan}
               />
 
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr]">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.25fr_0.8fr_0.8fr_1fr]">
                 <div className="relative lg:self-end">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -1097,13 +1106,21 @@ export function OrdersView() {
                   onChange={(event) => setBrandFilter(event.target.value)}
                   className="h-11 rounded-md border border-input bg-white px-3 text-sm lg:self-end"
                 >
-                  <option value="ALL">Marca o colección</option>
+                  <option value="ALL">Todas las marcas</option>
                   {brands.map((brand) => (
                     <option key={brand} value={brand}>
                       {brand}
                     </option>
                   ))}
                 </select>
+                <div className="lg:self-end">
+                  <CollectionSelect
+                    id="order-collection"
+                    value={collectionFilter}
+                    options={collectionsQuery.data ?? []}
+                    onChange={setCollectionFilter}
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { CollectionSelect } from '@/components/operations/collection-select';
 import { ActionDialog } from '@/components/ui/action-dialog';
 import { isAdminSession } from '@/lib/authorization';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +33,7 @@ import {
   deleteProduct,
   generateProductBarcode,
   getProductLabel,
+  getProductCollections,
   getProducts,
   getShopifyIntegrationStatus,
   retryShopifyIntegration,
@@ -51,6 +53,7 @@ function ProductsInventoryPanel() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [collection, setCollection] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -68,8 +71,14 @@ function ProductsInventoryPanel() {
   }, []);
 
   const productsQuery = useQuery({
-    queryKey: ['products', session?.tenantId, search],
-    queryFn: () => getProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
+    queryKey: ['products', session?.tenantId, search, collection],
+    queryFn: () =>
+      getProducts(session?.tenantId ?? '', session?.accessToken ?? '', search, collection),
+    enabled: Boolean(session),
+  });
+  const collectionsQuery = useQuery({
+    queryKey: ['product-collections', session?.tenantId],
+    queryFn: () => getProductCollections(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
   const shopifyStatus = useQuery({
@@ -222,7 +231,7 @@ function ProductsInventoryPanel() {
         </Card>
       ) : null}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative max-w-md flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -235,9 +244,21 @@ function ProductsInventoryPanel() {
             placeholder="Buscar nombre, SKU, marca o codigo"
           />
         </div>
+        <div className="w-full sm:w-72">
+          <CollectionSelect
+            id="products-collection"
+            value={collection}
+            options={collectionsQuery.data ?? []}
+            onChange={(handle) => {
+              setCollection(handle);
+              setPage(1);
+            }}
+          />
+        </div>
         {!readOnly ? (
           <Button
             type="button"
+            className="sm:ml-auto"
             onClick={() => {
               setEditingProductId(null);
               setCreateDialogOpen(true);

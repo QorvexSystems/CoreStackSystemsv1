@@ -162,3 +162,16 @@ test('Shopify aislado: con SHOPIFY_SYNC_DISABLED=true no hay worker, ni reintent
   assert.equal(on.isConfigured(), true, 'por defecto, con credenciales, sigue configurado como siempre');
   assert.equal(make({ SHOPIFY_SYNC_DISABLED: 'false' }).isConfigured(), true);
 });
+
+test('colecciones del ERP: handles únicos, sin colecciones vacías y relacionadas por ID de grupo', async () => {
+  const { WEB_COLLECTIONS } = await import('./web-collections.data');
+  assert.ok(WEB_COLLECTIONS.length > 0);
+  assert.equal(new Set(WEB_COLLECTIONS.map((c) => c.handle)).size, WEB_COLLECTIONS.length);
+  for (const c of WEB_COLLECTIONS) {
+    assert.ok(c.title.trim() && c.groupIds.length > 0, c.handle);
+    assert.ok(c.groupIds.every((id) => /^UP-P-\d{4}$/.test(id)), c.handle);
+    assert.equal(new Set(c.groupIds).size, c.groupIds.length, c.handle);
+  }
+  const titles = WEB_COLLECTIONS.map((c) => c.title);
+  assert.deepEqual([...titles].sort((a, b) => a.localeCompare(b, 'es')), titles);
+});

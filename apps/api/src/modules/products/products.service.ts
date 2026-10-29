@@ -17,6 +17,7 @@ import {
 import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
+import { collectionProductFilter, countCollections } from '../web-catalog/web-collections';
 import { getBarcodeLookupCandidates, normalizeBarcodeInput } from '../../common/utils/barcode';
 import { AuditService } from '../audit/audit.service';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -46,19 +47,30 @@ export class ProductsService {
     private readonly channelNotifier: ChannelNotifierService,
   ) {}
 
-  findAll(tenantId: string, q?: string) {
+  async findAll(tenantId: string, q?: string, collection?: string) {
+    const collectionFilter = collection
+      ? await collectionProductFilter(this.prisma, tenantId, collection)
+      : {};
     return this.prisma.product.findMany({
       where: {
         tenantId,
         inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         // Los productos retirados (DISCONTINUED) conservan su historial pero salen del listado operativo.
         status: { not: ProductStatus.DISCONTINUED },
+        ...collectionFilter,
         ...(q ? { OR: this.searchConditions(q) } : {}),
       },
       include: {
         category: true,
       },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  collections(tenantId: string) {
+    return countCollections(this.prisma, tenantId, {
+      inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
+      status: { not: ProductStatus.DISCONTINUED },
     });
   }
 

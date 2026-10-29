@@ -22,6 +22,7 @@ import { TenantMembershipGuard } from '../../common/guards/tenant-membership.gua
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { cleanCollectionHandle } from '../web-catalog/web-collections';
 import { ProductsService } from './products.service';
 import type { UploadedProductImageFile } from './products.service';
 
@@ -39,8 +40,25 @@ export class ProductsController {
     Role.SUPER_ADMIN,
     Role.QORVEX_SUPER_ADMIN,
   )
-  findAll(@TenantId() tenantId: string, @Query('q') q?: string) {
-    return this.productsService.findAll(tenantId, q);
+  findAll(
+    @TenantId() tenantId: string,
+    @Query('q') q?: string,
+    @Query('collection') collection?: string,
+  ) {
+    return this.productsService.findAll(tenantId, q, cleanCollectionHandle(collection));
+  }
+
+  @Get('collections')
+  @Roles(
+    Role.ACCOUNTANT,
+    Role.CASHIER,
+    Role.ORDER_TAKER,
+    Role.ADMIN,
+    Role.SUPER_ADMIN,
+    Role.QORVEX_SUPER_ADMIN,
+  )
+  collections(@TenantId() tenantId: string) {
+    return this.productsService.collections(tenantId);
   }
 
   @Get('search')
