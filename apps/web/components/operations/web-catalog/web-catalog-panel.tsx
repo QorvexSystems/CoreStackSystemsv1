@@ -225,7 +225,10 @@ export function WebCatalogPanel({ session }: { session: AuthSession }) {
                 <div className="flex items-start gap-3">
                   <ProductThumb src={item.primaryImage} alt={item.name} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold leading-snug">{item.name}</p>
+                    <p className="text-sm font-semibold leading-snug">
+                      {item.name}
+                      {item.has3d ? <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase">3D</span> : null}
+                    </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {item.categoryLabel ?? 'Sin categoría'} · {item.id}
                     </p>
@@ -274,7 +277,10 @@ export function WebCatalogPanel({ session }: { session: AuthSession }) {
                       <div className="flex items-center gap-3">
                         <ProductThumb src={item.primaryImage} alt={item.name} />
                         <div className="min-w-0">
-                          <div className="font-medium">{item.name}</div>
+                          <div className="font-medium">
+                            {item.name}
+                            {item.has3d ? <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase">3D</span> : null}
+                          </div>
                           <div className="text-xs text-muted-foreground">
                             {item.id} · {item.slug}
                           </div>

@@ -761,6 +761,8 @@ model WebProduct {
   personalizationOptions Json?
   imageUrl               String?
   imageManifest          Json?
+  /// Modelos 3D asociados: [{ kind: "SKETCHFAB", modelId, sourceUrl }]. Nulo si no tiene.
+  media3d                Json?
   publicationIntent      String
   published              Boolean    @default(false)
   publishedAt            DateTime?

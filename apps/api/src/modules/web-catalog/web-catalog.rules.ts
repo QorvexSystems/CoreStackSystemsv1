@@ -38,6 +38,8 @@ export type GroupRow = {
   personalizationOptions: unknown;
   imageUrl: string | null;
   imageManifest: unknown;
+  /** Modelos 3D asociados (JSON estructurado, ver Model3dEntry). `undefined`/null en grupos sin 3D. */
+  media3d?: unknown;
   published: boolean;
   publishedAt: Date | null;
   updatedAt: Date;
@@ -108,6 +110,49 @@ export function readImages(manifest: unknown): ImageEntry[] {
     .filter((entry) => entry && typeof entry.id === 'string')
     .map((entry, index) => ({ ...entry, position: Number.isInteger(entry.position) ? entry.position : index }))
     .sort((a, b) => a.position - b.position);
+}
+
+// ---- Modelos 3D (visualización interactiva) ----
+// Solo se guarda una referencia estructurada (tipo + identificador validado), nunca HTML. El tipo permite añadir luego
+// modelos GLB propios (`kind: 'GLB'`) sin cambiar el contenedor.
+export type Model3dKind = 'SKETCHFAB';
+export type Model3dEntry = { kind: Model3dKind; modelId: string; sourceUrl: string };
+export type ChannelModel3d = { kind: 'sketchfab'; modelId: string; sourceUrl: string; embedUrl: string };
+
+const SKETCHFAB_HOSTS = new Set(['sketchfab.com', 'www.sketchfab.com']);
+const SKETCHFAB_ID = /^[0-9a-f]{32}$/;
+export const SKETCHFAB_EMBED_ORIGIN = 'https://sketchfab.com';
+
+/**
+ * Extrae el identificador de un modelo de Sketchfab desde su URL pública (`/3d-models/<slug>-<id>`) o de embed
+ * (`/models/<id>[/embed]`). Devuelve null para cualquier otra cosa: otro dominio, HTML, http, credenciales, etc.
+ */
+export function parseSketchfabUrl(value: unknown): { modelId: string; sourceUrl: string } | null {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || !SKETCHFAB_HOSTS.has(url.hostname)) return null;
+  const path = url.pathname.replace(/\/+$/, '');
+  const match = /^\/(?:[a-z]{2}\/)?3d-models\/(?:[A-Za-z0-9._~-]*-)?([0-9a-f]{32})$/i.exec(path) ?? /^\/models\/([0-9a-f]{32})(?:\/embed)?$/i.exec(path);
+  const modelId = match?.[1]?.toLowerCase();
+  if (!modelId || !SKETCHFAB_ID.test(modelId)) return null;
+  return { modelId, sourceUrl: `${SKETCHFAB_EMBED_ORIGIN}/models/${modelId}` };
+}
+
+/** URL de embed construida solo desde el identificador validado y el dominio permitido. */
+export const sketchfabEmbedUrl = (modelId: string) => `${SKETCHFAB_EMBED_ORIGIN}/models/${modelId}/embed`;
+
+export function readModels3d(raw: unknown): Model3dEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m): m is Model3dEntry => !!m && m.kind === 'SKETCHFAB' && typeof m.modelId === 'string' && SKETCHFAB_ID.test(m.modelId) && typeof m.sourceUrl === 'string');
+}
+
+export function toChannelModels3d(raw: unknown): ChannelModel3d[] {
+  return readModels3d(raw).map((m) => ({ kind: 'sketchfab', modelId: m.modelId, sourceUrl: m.sourceUrl, embedUrl: sketchfabEmbedUrl(m.modelId) }));
 }
 
 export function declaredOptions(options: unknown): { name: string; values: string[] }[] {
@@ -211,6 +256,8 @@ export type ChannelProduct = {
   personalizationOptions: unknown;
   primaryImageUrl: string | null;
   images: ChannelImage[];
+  /** Solo presente cuando el producto tiene modelos 3D: los productos sin 3D conservan el contrato anterior. */
+  models3d?: ChannelModel3d[];
   variants: ChannelVariant[];
   publishedAt: string | null;
   updatedAt: string;
@@ -246,6 +293,7 @@ export function toChannelProduct(group: GroupRow, variants: VariantRow[]): Chann
     personalizationOptions: group.personalizationOptions ?? null,
     primaryImageUrl: primary,
     images,
+    ...(toChannelModels3d(group.media3d).length ? { models3d: toChannelModels3d(group.media3d) } : {}),
     variants: visible.map((v) => {
       const meta = (v.webOptions ?? {}) as { compareAtPrice?: unknown; primaryImageId?: unknown };
       return {

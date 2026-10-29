@@ -57,6 +57,8 @@ export class CreateWebProductDto {
   @IsOptional() @IsString() @MaxLength(80) categoryLabel?: string;
   /** URL pública https autorizada. No se inventan ni se descargan imágenes. */
   @IsOptional() @IsString() @MaxLength(2048) imageUrl?: string;
+  /** URL pública de un modelo de Sketchfab (se valida y solo se guarda el identificador). */
+  @IsOptional() @IsString() @MaxLength(2048) model3dUrl?: string;
   @IsArray() @ArrayMaxSize(5) @ValidateNested({ each: true }) @Type(() => OptionDefinitionDto) options: OptionDefinitionDto[];
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @ValidateNested({ each: true }) @Type(() => WebVariantDto) variants: WebVariantDto[];
   @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => NewImageDto) images?: NewImageDto[];
@@ -69,6 +71,8 @@ export class UpdateWebProductDto {
   @IsOptional() @IsString() @MaxLength(80) categoryLabel?: string;
   @IsOptional() @IsString() @MaxLength(2048) imageUrl?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(5) @ValidateNested({ each: true }) @Type(() => OptionDefinitionDto) options?: OptionDefinitionDto[];
+  /** URL de Sketchfab; cadena vacía o null elimina el modelo 3D. */
+  @IsOptional() @IsString() @MaxLength(2048) model3dUrl?: string | null;
   /** Agrega imágenes a la galería; las existentes (incluidas las importadas) se conservan. */
   @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => NewImageDto) addImages?: NewImageDto[];
 }

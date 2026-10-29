@@ -20,8 +20,11 @@ import {
   decimalText,
   isPublicImageUrl,
   isValidSlug,
+  parseSketchfabUrl,
   publishBlockers,
   readImages,
+  readModels3d,
+  sketchfabEmbedUrl,
   slugify,
   stableVariantId,
   type GroupRow,
@@ -95,6 +98,7 @@ export class WebCatalogService {
         publishedAt: group.publishedAt,
         updatedAt: group.updatedAt,
         primaryImage: group.imageUrl ?? first?.url ?? first?.src ?? null,
+        has3d: readModels3d(group.media3d).length > 0,
         variantCount: own.length,
         activeVariantCount: active.length,
         priceMin: prices.length ? Math.min(...prices).toFixed(2) : null,
@@ -153,6 +157,7 @@ export class WebCatalogService {
       options: declaredOptions(group.options),
       imageUrl: group.imageUrl,
       images: readImages(group.imageManifest),
+      model3d: this.model3dDetail(group),
       published: group.published,
       publishedAt: group.publishedAt,
       publishable: blockers.length === 0,
@@ -174,6 +179,20 @@ export class WebCatalogService {
     };
   }
 
+  private model3dDetail(group: GroupRow) {
+    const entry = readModels3d(group.media3d)[0];
+    return entry ? { kind: entry.kind, modelId: entry.modelId, sourceUrl: entry.sourceUrl, embedUrl: sketchfabEmbedUrl(entry.modelId) } : null;
+  }
+
+  /** undefined: sin cambio; null o vacío: elimina; URL válida de Sketchfab: guarda solo el identificador. */
+  private parseModel3d(url: string | null | undefined): Prisma.InputJsonValue | typeof Prisma.DbNull | undefined {
+    if (url === undefined) return undefined;
+    if (url === null || !url.trim()) return Prisma.DbNull;
+    const parsed = parseSketchfabUrl(url);
+    if (!parsed) throw new BadRequestException('La URL del modelo 3D debe ser un enlace https de Sketchfab (sketchfab.com/3d-models/...).');
+    return [{ kind: 'SKETCHFAB', modelId: parsed.modelId, sourceUrl: parsed.sourceUrl }] as unknown as Prisma.InputJsonValue;
+  }
+
   // ---------- Escritura ----------
   async create(tenantId: string, userId: string, dto: CreateWebProductDto) {
     const slug = dto.slug ?? slugify(dto.name);
@@ -181,6 +200,7 @@ export class WebCatalogService {
     this.assertImageUrl(dto.imageUrl);
     this.assertOptionDefinitions(dto.options);
     this.assertVariantsConsistent(dto.options, dto.variants);
+    const media3d = this.parseModel3d(dto.model3dUrl);
 
     const commercialId = `UP-W-${randomBytes(4).toString('hex')}`;
     const created = await this.write(async (tx) => {
@@ -196,6 +216,7 @@ export class WebCatalogService {
           imageUrl: dto.imageUrl ?? null,
           options: dto.options as unknown as Prisma.InputJsonValue,
           imageManifest: images as unknown as Prisma.InputJsonValue,
+          ...(media3d !== undefined ? { media3d } : {}),
           publicationIntent: 'draft',
           published: false,
         },
@@ -213,6 +234,7 @@ export class WebCatalogService {
   async update(tenantId: string, userId: string, ref: string, dto: UpdateWebProductDto) {
     this.assertImageUrl(dto.imageUrl);
     if (dto.options) this.assertOptionDefinitions(dto.options);
+    const media3d = this.parseModel3d(dto.model3dUrl);
     const id = await this.write(async (tx) => {
       const group = await this.findGroup(tx, tenantId, ref);
       const variants = await this.variantsOf(tx, tenantId, group.id);
@@ -228,6 +250,7 @@ export class WebCatalogService {
           ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
           ...(dto.options ? { options: dto.options as unknown as Prisma.InputJsonValue } : {}),
           ...(manifest ? { imageManifest: manifest as unknown as Prisma.InputJsonValue } : {}),
+          ...(media3d !== undefined ? { media3d } : {}),
         },
       });
       await this.assertInvariant(tx, tenantId, group.id);

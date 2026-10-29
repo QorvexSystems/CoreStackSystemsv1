@@ -19,6 +19,7 @@ export type WebProductListItem = {
   publishedAt: string | null;
   updatedAt: string;
   primaryImage: string | null;
+  has3d?: boolean;
   variantCount: number;
   activeVariantCount: number;
   priceMin: string | null;
@@ -72,6 +73,8 @@ export type WebProductDetail = {
     url?: string | null;
     alt?: string | null;
   }>;
+  /** Modelo 3D asociado (Sketchfab hoy; GLB propio en el futuro). */
+  model3d: { kind: 'SKETCHFAB'; modelId: string; sourceUrl: string; embedUrl: string } | null;
   published: boolean;
   publishedAt: string | null;
   publishable: boolean;
@@ -101,6 +104,8 @@ export type UpdateWebProductInput = {
   description?: string;
   categoryLabel?: string;
   imageUrl?: string;
+  /** URL de Sketchfab; cadena vacía o null elimina el modelo 3D. */
+  model3dUrl?: string | null;
   options?: WebProductOptionDefinition[];
 };
 

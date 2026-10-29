@@ -910,7 +910,7 @@ function EditView({ session, id }: { session: AuthSession; id: string }) {
       ) : null}
 
       <GroupCard
-        key={`${product.name}|${product.description}|${product.categoryLabel}|${product.imageUrl}|${JSON.stringify(product.options)}`}
+        key={`${product.name}|${product.description}|${product.categoryLabel}|${product.imageUrl}|${product.model3d?.modelId ?? ""}|${JSON.stringify(product.options)}`}
         session={session}
         product={product}
         onSaved={applyResult}
@@ -950,6 +950,7 @@ function GroupCard({
   const [description, setDescription] = useState(product.description ?? '');
   const [category, setCategory] = useState(product.categoryLabel ?? '');
   const [imageUrl, setImageUrl] = useState(product.imageUrl ?? '');
+  const [model3dUrl, setModel3dUrl] = useState(product.model3d?.sourceUrl ?? '');
   const [options, setOptions] = useState<OptionDraft[]>(() => fromDefinitions(product.options));
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -959,10 +960,15 @@ function GroupCard({
       if (imageUrl.trim() && !/^https:\/\//i.test(imageUrl.trim())) {
         throw new Error('La imagen debe ser una URL pública que empiece con https://.');
       }
+      if (model3dUrl.trim() && !/^https:\/\/(www\.)?sketchfab\.com\//i.test(model3dUrl.trim())) {
+        throw new Error('El modelo 3D debe ser un enlace de Sketchfab (https://sketchfab.com/3d-models/...).');
+      }
       return updateWebProduct(session.tenantId, session.accessToken, product.id, {
         name: name.trim(),
         description: description.trim(),
         categoryLabel: category.trim(),
+        // Solo se envía si cambió; vacío elimina el modelo asociado.
+        ...(model3dUrl.trim() !== (product.model3d?.sourceUrl ?? '') ? { model3dUrl: model3dUrl.trim() || null } : {}),
         ...(imageUrl.trim() && imageUrl.trim() !== (product.imageUrl ?? '')
           ? { imageUrl: imageUrl.trim() }
           : {}),
@@ -1016,6 +1022,29 @@ function GroupCard({
             </div>
             <div className="md:col-span-2">
               <ImageField session={session} value={imageUrl} onChange={setImageUrl} alt={name} />
+            </div>
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="edit-model3d">Modelo 3D / Sketchfab (opcional)</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="edit-model3d"
+                  inputMode="url"
+                  placeholder="https://sketchfab.com/3d-models/nombre-del-modelo-0123abcd…"
+                  value={model3dUrl}
+                  maxLength={2048}
+                  onChange={(e) => setModel3dUrl(e.target.value)}
+                />
+                {model3dUrl ? (
+                  <Button type="button" variant="outline" onClick={() => setModel3dUrl('')}>
+                    Quitar
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {product.model3d
+                  ? `Este producto tiene un modelo 3D asociado (${product.model3d.modelId.slice(0, 8)}…). Aparece como «Ver en 3D» en la ficha del e-commerce.`
+                  : 'Sin modelo 3D. Pega el enlace público del modelo: solo se guarda su identificador y el e-commerce muestra el visor oficial de Sketchfab.'}
+              </p>
             </div>
           </div>
           <OptionsEditor drafts={options} onChange={setOptions} />

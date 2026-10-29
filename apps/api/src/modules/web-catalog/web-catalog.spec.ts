@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { channelCredentialsFromEnv, NonceStore, signChannelRequest, verifyChannelRequest } from './channel-auth';
-import { computeAvailability, isPublicImageUrl, publishBlockers, toChannelProduct, type GroupRow, type VariantRow } from './web-catalog.rules';
+import { computeAvailability, isPublicImageUrl, parseSketchfabUrl, publishBlockers, toChannelProduct, type GroupRow, type VariantRow } from './web-catalog.rules';
 
 const now = new Date('2026-10-28T12:00:00Z');
 const group = (o: Partial<GroupRow> = {}): GroupRow => ({
@@ -174,4 +174,32 @@ test('colecciones del ERP: handles únicos, sin colecciones vacías y relacionad
   }
   const titles = WEB_COLLECTIONS.map((c) => c.title);
   assert.deepEqual([...titles].sort((a, b) => a.localeCompare(b, 'es')), titles);
+});
+
+const SK_ID = '11196cac4baf485a84dfd11d511b9aa0';
+
+test('3D: solo URLs de Sketchfab con identificador de 32 hex; todo lo demás se rechaza', () => {
+  const ok = { modelId: SK_ID, sourceUrl: `https://sketchfab.com/models/${SK_ID}` };
+  assert.deepEqual(parseSketchfabUrl(`https://sketchfab.com/3d-models/joya-vm-${SK_ID}`), ok);
+  assert.deepEqual(parseSketchfabUrl(`https://www.sketchfab.com/3d-models/joya-vm-${SK_ID}/?utm=x#a`), ok);
+  assert.deepEqual(parseSketchfabUrl(`https://sketchfab.com/models/${SK_ID}/embed`), ok);
+  assert.deepEqual(parseSketchfabUrl(`https://sketchfab.com/es/3d-models/${SK_ID}`), ok);
+  for (const bad of [
+    `http://sketchfab.com/3d-models/joya-${SK_ID}`,
+    `https://evil.example/3d-models/joya-${SK_ID}`,
+    `https://sketchfab.com.evil.example/models/${SK_ID}`,
+    `https://user:pw@sketchfab.com/models/${SK_ID}`,
+    'https://sketchfab.com/3d-models/joya-corta-1234',
+    `<iframe src="https://sketchfab.com/models/${SK_ID}/embed"></iframe>`,
+    `javascript:alert(1)//sketchfab.com/models/${SK_ID}`,
+    '', null, 42,
+  ]) assert.equal(parseSketchfabUrl(bad), null, String(bad));
+});
+
+test('3D: el canal expone models3d solo si el producto lo tiene (contrato intacto sin 3D)', () => {
+  const plain = toChannelProduct(group(), [variant()])!;
+  assert.equal('models3d' in plain, false);
+  const withModel = toChannelProduct(group({ media3d: [{ kind: 'SKETCHFAB', modelId: SK_ID, sourceUrl: `https://sketchfab.com/models/${SK_ID}` }] }), [variant()])!;
+  assert.deepEqual(withModel.models3d, [{ kind: 'sketchfab', modelId: SK_ID, sourceUrl: `https://sketchfab.com/models/${SK_ID}`, embedUrl: `https://sketchfab.com/models/${SK_ID}/embed` }]);
+  assert.equal('models3d' in toChannelProduct(group({ media3d: [{ kind: 'SKETCHFAB', modelId: 'x', sourceUrl: 'y' }] }), [variant()])!, false, 'entradas corruptas se ignoran');
 });
