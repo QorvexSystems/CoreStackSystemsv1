@@ -138,6 +138,7 @@ enum SalesOrderPriceLevel {
 enum OrderSource {
   STORE
   SHOPIFY
+  ECOMMERCE
 }
 
 enum ProductionStage {

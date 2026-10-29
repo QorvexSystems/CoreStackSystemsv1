@@ -96,7 +96,7 @@ export type DashboardSummary = {
     invoiceId: string | null;
     productionStage: ProductionStage;
     promisedAt: string | null;
-    source: 'STORE' | 'SHOPIFY';
+    source: 'STORE' | 'SHOPIFY' | 'ECOMMERCE';
     reasons: string[];
   }>;
   salesByChannel: {
@@ -561,7 +561,7 @@ export type SalesOrder = {
   ecfRecipientEmail: string | null;
   orderNumber: string;
   status: string;
-  source: 'STORE' | 'SHOPIFY';
+  source: 'STORE' | 'SHOPIFY' | 'ECOMMERCE';
   externalOrderId: string | null;
   productionStage: ProductionStage;
   isExpress: boolean;

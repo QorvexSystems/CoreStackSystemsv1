@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { markInventoryChanged, changeReservation } from '../../common/utils/stock-reservations';
 import { factoryOrder } from '../../common/utils/factory-view';
 import {
@@ -74,6 +75,15 @@ const openOrderStatuses: SalesOrderStatus[] = [
   SalesOrderStatus.IN_CASHIER,
 ];
 const claimTtlMs = 30 * 60 * 1000;
+
+/** Pedido solicitado desde el e-commerce. Nunca trae precios: se calculan aquí con las reglas del ERP. */
+export type ExternalOrderInput = {
+  reference: string;
+  customer: { name: string; phone: string; email?: string; documentNumber?: string };
+  delivery: { method: 'PICKUP' | 'DELIVERY'; address?: string; addressReference?: string };
+  notes?: string;
+  items: { productId: string; quantity: number; note?: string }[];
+};
 
 type ComputedOrderItem = {
   product: Awaited<ReturnType<PrismaService['product']['findMany']>>[number];
@@ -1794,6 +1804,218 @@ export class OrdersService {
 
       return updated;
     });
+  }
+
+  /**
+   * Crea una solicitud de pedido del e-commerce con el mismo recorrido que una venta tomada en tienda:
+   * `SENT_TO_CASHIER` (visible en Caja y en el tablero de seguimiento), factura borrador `PEND-` y reserva de stock.
+   * Los precios, el impuesto y la disponibilidad salen de `computeOrder` (reglas del ERP). No cobra, no envía a
+   * Fábrica y no descuenta inventario. Idempotente por (tenant, ECOMMERCE, reference).
+   */
+  async createExternalOrder(tenantId: string, input: ExternalOrderInput) {
+    const customerName = input.customer.name.trim().replace(/\s+/g, ' ');
+    const phone = input.customer.phone.trim();
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      throw new BadRequestException('Indica un teléfono válido.');
+    }
+    const documentDigits = input.customer.documentNumber?.trim()
+      ? normalizeDominicanDocument(input.customer.documentNumber)
+      : null;
+    if (documentDigits && !validateDominicanCedula(input.customer.documentNumber as string)) {
+      throw new BadRequestException('La cédula indicada no es válida.');
+    }
+    const isDelivery = input.delivery.method === 'DELIVERY';
+    const address = input.delivery.address?.trim() || '';
+    if (isDelivery && address.length < 8) {
+      throw new BadRequestException('Indica la dirección completa para el delivery.');
+    }
+    const email = input.customer.email?.trim().toLowerCase() || null;
+
+    const actor = await this.prisma.membership.findFirst({
+      where: { tenantId, status: 'ACTIVE', role: { in: [Role.ADMIN, Role.SUPER_ADMIN] } },
+      select: { userId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!actor) {
+      throw new BadRequestException('El tenant no tiene un administrador activo para registrar pedidos web.');
+    }
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+        const duplicate = await tx.salesOrder.findUnique({
+          where: {
+            tenantId_source_externalOrderId: {
+              tenantId,
+              source: OrderSource.ECOMMERCE,
+              externalOrderId: input.reference,
+            },
+          },
+          select: { id: true, orderNumber: true, status: true, createdAt: true },
+        });
+        if (duplicate) return { duplicate: true, order: duplicate };
+
+        // Cliente: por cédula si la hay; si no, por teléfono y nombre. Nunca se modifica un cliente existente.
+        let customer = documentDigits
+          ? await tx.customer.findFirst({
+              where: { tenantId, documentType: DocumentType.CEDULA, documentNumber: documentDigits },
+            })
+          : null;
+        if (!customer && !documentDigits) {
+          const candidates = await tx.customer.findMany({
+            where: { tenantId, name: { equals: customerName, mode: 'insensitive' }, phone: { not: null } },
+            take: 20,
+          });
+          customer =
+            candidates.find((candidate) => (candidate.phone ?? '').replace(/\D/g, '') === phoneDigits) ??
+            null;
+        }
+        if (!customer) {
+          customer = await tx.customer.create({
+            data: {
+              tenantId,
+              name: customerName,
+              documentType: documentDigits ? DocumentType.CEDULA : DocumentType.CONSUMER_FINAL,
+              documentNumber: documentDigits,
+              email,
+              phone,
+              address: isDelivery ? address : null,
+            },
+          });
+        }
+
+        const items = input.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          ...(item.note?.trim() ? { personalization: { instructions: item.note.trim() } } : {}),
+        }));
+        const computed = await this.computeOrder(
+          tenantId,
+          items,
+          tx,
+          SalesOrderPriceLevel.REGULAR,
+          ProductInventoryDestination.SALES_INVENTORY,
+        );
+        await this.reserveStockForOrder(
+          tenantId,
+          computed.items,
+          tx,
+          ProductInventoryDestination.SALES_INVENTORY,
+        );
+
+        let orderNumber = '';
+        for (let attempt = 0; attempt < 8 && !orderNumber; attempt += 1) {
+          const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          const candidate = `WEB-${stamp}-${randomBytes(3).toString('hex').toUpperCase()}`;
+          const taken = await tx.salesOrder.findFirst({
+            where: { tenantId, orderNumber: candidate },
+            select: { id: true },
+          });
+          if (!taken) orderNumber = candidate;
+        }
+        if (!orderNumber) throw new BadRequestException('No se pudo asignar el número del pedido.');
+
+        const draftInvoice = await this.createDraftInvoice(tx, {
+          tenantId,
+          customerId: customer.id,
+          orderNumber,
+          paymentMode: SalePaymentMode.CASH,
+          electronicInvoiceRequested: false,
+          items: computed.items,
+          subtotal: computed.subtotal,
+          taxTotal: computed.taxTotal,
+          discountTotal: computed.discountTotal,
+          total: computed.total,
+          userId: actor.userId,
+        });
+
+        const personalizationNotes = computed.items.flatMap((item) => {
+          const instructions = (item.personalization as { instructions?: string } | undefined)?.instructions;
+          return instructions ? [`Personalización · ${item.product.name}: ${instructions}`] : [];
+        });
+        const deliveryAddress = isDelivery
+          ? [address, input.delivery.addressReference?.trim()].filter(Boolean).join(' — ')
+          : null;
+        const order = await tx.salesOrder.create({
+          data: {
+            tenantId,
+            customerId: customer.id,
+            destination: SalesOrderDestination.CASH_SALE,
+            inventorySource: ProductInventoryDestination.SALES_INVENTORY,
+            clientName: customerName,
+            orderNumber,
+            status: SalesOrderStatus.SENT_TO_CASHIER,
+            source: OrderSource.ECOMMERCE,
+            externalOrderId: input.reference,
+            subtotal: computed.subtotal,
+            taxTotal: computed.taxTotal,
+            discountTotal: computed.discountTotal,
+            total: computed.total,
+            paymentMode: SalePaymentMode.CASH,
+            notes: input.notes?.trim() || undefined,
+            deliveryMethod: isDelivery ? DeliveryMethod.DELIVERY : DeliveryMethod.PICKUP,
+            dispatchLocation: 'STORE',
+            deliveryAddress,
+            deliveryPhone: phone,
+            notificationEmail: email,
+            requiresProduction: computed.items.some((item) => item.product.kind === ProductKind.PERSONALIZED),
+            productionNotes: [
+              `Pedido recibido desde el e-commerce (ref. ${input.reference}). Pendiente de revisión y cobro en caja.`,
+              isDelivery ? `Delivery: ${deliveryAddress}. Tel. ${phone}` : `Recogida en tienda. Tel. ${phone}`,
+              ...personalizationNotes,
+              input.notes?.trim() ? `Comentarios del cliente: ${input.notes.trim()}` : null,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            createdById: actor.userId,
+            sentToCashierAt: new Date(),
+            invoiceId: draftInvoice.id,
+            items: {
+              create: computed.items.map((item) => ({
+                productId: item.product.id,
+                sku: item.product.sku,
+                barcode: item.product.barcode,
+                description: item.product.name,
+                personalization: item.personalization,
+                quantity: item.quantity,
+                reservedQuantity: item.reservedQuantity,
+                unitPrice: item.unitPrice,
+                discountTotal: item.discountTotal,
+                taxRate: item.product.taxRate,
+                taxTotal: item.taxTotal,
+                subtotal: item.subtotal,
+                total: item.total,
+              })),
+            },
+          },
+          select: { id: true, orderNumber: true, status: true, createdAt: true },
+        });
+
+        await tx.orderWorkflowEvent.create({
+          data: {
+            tenantId,
+            salesOrderId: order.id,
+            fromStage: ProductionStage.WAITING,
+            toStage: ProductionStage.WAITING,
+            note: 'Pedido recibido desde el e-commerce. Pendiente de revisión y cobro.',
+            changedById: actor.userId,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            tenantId,
+            userId: actor.userId,
+            action: 'ECOMMERCE_ORDER_RECEIVED',
+            entity: 'SalesOrder',
+            entityId: order.id,
+            metadata: { orderNumber, reference: input.reference, lines: computed.items.length },
+          },
+        });
+        return { duplicate: false, order };
+      },
+      { maxWait: 10_000, timeout: 30_000 },
+    );
   }
 
   private async computeOrder(

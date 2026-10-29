@@ -14,6 +14,7 @@
     "test:http": "pnpm build && dotenv -e ../../.env -- node test/http-smoke.cjs",
     "test:dashboard-performance": "pnpm build && dotenv -e ../../.env -- node test/dashboard-performance.cjs",
     "test:module-performance": "pnpm build && dotenv -e ../../.env -- node test/module-performance.cjs",
+    "test:channel-orders": "node test/channel-orders-integration.cjs",
     "test:web-catalog": "node ../../packages/database/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json --test src/modules/web-catalog/web-catalog.spec.ts"
   },
   "dependencies": {

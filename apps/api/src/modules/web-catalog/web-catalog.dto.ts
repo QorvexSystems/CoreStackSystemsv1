@@ -5,7 +5,9 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsEmail,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -15,6 +17,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -137,4 +140,36 @@ export class SkuReviewQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
   @IsOptional() @IsString() @MaxLength(120) cursor?: string;
   @IsOptional() @IsString() @MaxLength(80) groupId?: string;
+}
+
+// ---- Pedidos solicitados desde el e-commerce (POST /channel/orders). Nunca incluyen precios ni totales. ----
+
+export class ChannelOrderCustomerDto {
+  @IsString() @MinLength(2) @MaxLength(120) name: string;
+  @IsString() @MinLength(7) @MaxLength(24) phone: string;
+  @IsOptional() @IsEmail() @MaxLength(254) email?: string;
+  /** Cédula opcional: si se envía se valida con el mismo algoritmo que Clientes. */
+  @IsOptional() @IsString() @MaxLength(20) documentNumber?: string;
+}
+
+export class ChannelOrderDeliveryDto {
+  @IsIn(['PICKUP', 'DELIVERY']) method: 'PICKUP' | 'DELIVERY';
+  @IsOptional() @IsString() @MaxLength(300) address?: string;
+  @IsOptional() @IsString() @MaxLength(200) addressReference?: string;
+}
+
+export class ChannelOrderItemDto {
+  @IsString() @IsNotEmpty() @MaxLength(64) variantId: string;
+  @IsInt() @Min(1) @Max(20) quantity: number;
+  /** Texto de personalización de la línea (grabado, nombre, fecha...). */
+  @IsOptional() @IsString() @MaxLength(280) note?: string;
+}
+
+export class ChannelCreateOrderDto {
+  /** Clave de idempotencia generada por el e-commerce: el mismo valor nunca crea dos pedidos. */
+  @IsString() @Matches(/^[A-Za-z0-9_-]{16,64}$/) reference: string;
+  @ValidateNested() @Type(() => ChannelOrderCustomerDto) customer: ChannelOrderCustomerDto;
+  @ValidateNested() @Type(() => ChannelOrderDeliveryDto) delivery: ChannelOrderDeliveryDto;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ValidateNested({ each: true }) @Type(() => ChannelOrderItemDto) items: ChannelOrderItemDto[];
 }

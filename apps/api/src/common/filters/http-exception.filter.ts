@@ -34,9 +34,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
         ? exceptionResponse
         : (exceptionResponse as { message?: string | string[] }).message;
 
+    // Solo se reenvían estos dos campos opcionales (códigos de negocio del canal); el resto no se expone.
+    const extra = typeof exceptionResponse === 'object' ? (exceptionResponse as Record<string, unknown>) : {};
+
     response.status(status).json({
       statusCode: status,
       message: message ?? 'Unexpected error',
+      ...(typeof extra.code === 'string' ? { code: extra.code } : {}),
+      ...(Array.isArray(extra.variantIds) && extra.variantIds.every((id) => typeof id === 'string')
+        ? { variantIds: extra.variantIds }
+        : {}),
       path: request.url ?? '',
       timestamp: new Date().toISOString(),
     });

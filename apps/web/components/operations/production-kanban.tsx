@@ -143,11 +143,14 @@ function advanceBlockers(order: ProductionBoardOrder) {
   return reasons;
 }
 
+const SOURCE_LABELS: Record<string, string> = { STORE: 'Tienda', SHOPIFY: 'Shopify', ECOMMERCE: 'Ecommerce' };
+const sourceLabel = (source: string) => SOURCE_LABELS[source] ?? 'Tienda';
+
 export function ProductionKanban() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
-  const [source, setSource] = useState<'ALL' | 'STORE' | 'SHOPIFY'>('ALL');
+  const [source, setSource] = useState<'ALL' | 'STORE' | 'SHOPIFY' | 'ECOMMERCE'>('ALL');
   const [exception, setException] = useState<'ALL' | OrderExceptionStatus>('ALL');
   const [deliveryPeriod, setDeliveryPeriod] = useState<DeliveryPeriod>('ALL');
   const [deliveryMonth, setDeliveryMonth] = useState(() => deliveryDateKey(new Date()).slice(0, 7));
@@ -474,6 +477,7 @@ export function ProductionKanban() {
           >
             <option value="ALL">Todos los canales</option>
             <option value="STORE">Tienda</option>
+            <option value="ECOMMERCE">Ecommerce</option>
             <option value="SHOPIFY">Shopify</option>
           </select>
           <select
@@ -833,15 +837,15 @@ function OrderCard({
         </p>
         <p className="mt-2">
           <span
-            title={order.source === 'SHOPIFY' ? 'Pedido de Ecommerce' : 'Venta de Tienda'}
-            className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-bold ${order.source === 'SHOPIFY' ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-900'}`}
+            title={order.source === 'STORE' ? 'Venta de Tienda' : `Pedido de ${sourceLabel(order.source)}`}
+            className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-bold ${order.source !== 'STORE' ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-900'}`}
           >
-            {order.source === 'SHOPIFY' ? (
+            {order.source !== 'STORE' ? (
               <Globe2 className="h-5 w-5 text-sky-700" aria-hidden="true" />
             ) : (
               <ShoppingCart className="h-5 w-5 text-amber-700" aria-hidden="true" />
             )}
-            {order.source === 'SHOPIFY' ? 'Ecommerce' : 'Tienda'}
+            {sourceLabel(order.source)}
           </span>
         </p>
         {order.requiresProduction ? (
@@ -987,7 +991,7 @@ function OrderDrawer({
               </h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 {formatDate(order.createdAt)} · Canal:{' '}
-                {order.source === 'SHOPIFY' ? 'Shopify' : 'Tienda'}
+                {sourceLabel(order.source)}
               </p>
             </div>
             <Button
@@ -1042,7 +1046,7 @@ function OrderDrawer({
               <DetailSection title="Información de la orden">
                 <DetailRow
                   label="Canal"
-                  value={order.source === 'SHOPIFY' ? 'Shopify' : 'Tienda'}
+                  value={sourceLabel(order.source)}
                 />
                 <DetailRow label="Estado" value={stageLabel(order.productionStage)} />
                 <DetailRow label="Fecha de creación" value={formatDate(order.createdAt)} />

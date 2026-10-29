@@ -649,7 +649,7 @@ export function AttentionOrdersPanel({ summary }: { summary: DashboardSummary })
               <div className="flex items-center gap-2">
                 <p className="truncate text-xs font-semibold text-slate-950">{order.orderNumber}</p>
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600">
-                  {order.source === 'SHOPIFY' ? 'Shopify' : 'Tienda'}
+                  {order.source === 'SHOPIFY' ? 'Shopify' : order.source === 'ECOMMERCE' ? 'Ecommerce' : 'Tienda'}
                 </span>
               </div>
               <p className="truncate text-[10px] text-slate-500">{order.clientName} · {order.reasons.join(' · ')}</p>
