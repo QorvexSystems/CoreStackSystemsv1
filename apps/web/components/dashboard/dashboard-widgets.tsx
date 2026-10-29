@@ -108,7 +108,7 @@ export function KpiCard({
         </span>
         <div className="min-w-0 flex-1 pt-0.5">
           <p className="truncate text-xs font-medium text-slate-600">{title}</p>
-          <p className="mt-1 truncate text-xl font-bold tracking-tight text-slate-950">{value}</p>
+          <p className="mt-1 whitespace-nowrap text-xl font-bold tracking-tight text-slate-950">{value}</p>
           <p className={cn('mt-1 truncate text-[11px] text-slate-500', tone === 'red' && 'text-rose-500')}>
             {detail}
           </p>

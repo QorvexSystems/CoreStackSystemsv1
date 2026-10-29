@@ -207,7 +207,7 @@ export function DashboardView() {
       ) : (
         <>
           <section
-            className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
+            className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3"
             aria-label="Indicadores principales"
           >
             <KpiCard

@@ -4,7 +4,7 @@ export const brand = {
   tagline: 'Detalles únicos para momentos inolvidables',
   descriptor: 'Joyas y regalos personalizados',
   logoPath: '/brand/logo-brand.png',
-  horizontalLogoPath: '/brand/unique-logo-horizontal.png',
+  horizontalLogoPath: '/brand/logo-negro.png',
   stackedLogoPath: '/brand/logo-brand.png',
   wordmarkPath: '/brand/unique-wordmark.png',
   faviconPath: '/icon.png',
