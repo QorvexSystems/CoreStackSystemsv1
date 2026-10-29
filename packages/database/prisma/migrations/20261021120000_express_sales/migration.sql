@@ -1,0 +1,1 @@
+ALTER TABLE "SalesOrder" ADD COLUMN "isExpress" BOOLEAN NOT NULL DEFAULT false;

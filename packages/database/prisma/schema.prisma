@@ -52,9 +52,21 @@ enum ProductStatus {
   DISCONTINUED
 }
 
+enum ProductKind {
+  STANDARD
+  PERSONALIZED
+}
+
+/// Decisión comercial de disponibilidad de una variante web. NULL = producto previo, no gestionado por el catálogo web.
+/// UNDECIDED = importado y todavía sin política: no puede publicarse ni venderse.
+enum WebAvailabilityPolicy {
+  UNDECIDED
+  STOCKED
+  MADE_TO_ORDER
+}
+
 enum ProductInventoryDestination {
   SALES_INVENTORY
-  WAREHOUSE
 }
 
 enum InventoryMovementType {
@@ -121,6 +133,47 @@ enum SalesOrderPriceLevel {
   REGULAR
   DISCOUNT_10
   PREFERRED_18
+}
+
+enum OrderSource {
+  STORE
+  SHOPIFY
+}
+
+enum ProductionStage {
+  WAITING
+  FACTORY
+  READY
+  DELIVERED
+}
+
+enum OrderExceptionStatus {
+  NONE
+  PAUSED
+  PROBLEM
+  CANCELLED
+}
+
+enum OrderPriority {
+  NORMAL
+  URGENT
+}
+
+enum CorporateUnitStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum DeliveryMethod {
+  PICKUP
+  DELIVERY
+  PROVINCE_SHIPPING
+}
+
+enum DispatchLocation {
+  STORE
+  FACTORY
 }
 
 enum ReturnRequestStatus {
@@ -282,6 +335,7 @@ enum ImportType {
   PRODUCTS
   CATEGORIES
   CUSTOMERS
+  OPEN_ORDERS
   INITIAL_INVENTORY
   FISCAL_SEQUENCES
   HISTORICAL_INVOICES
@@ -322,18 +376,6 @@ enum PurchaseOrderStatus {
 
 enum PurchaseOrderDestination {
   SALES_INVENTORY
-  WAREHOUSE
-}
-
-enum WarehouseMovementType {
-  PURCHASE
-  SALE
-  MANUAL_RECEIPT
-  MANUAL_DISPATCH
-  STOCK_COUNT
-  DISPATCH
-  ADJUSTMENT_IN
-  ADJUSTMENT_OUT
 }
 
 enum SupplierInvoiceStatus {
@@ -432,9 +474,8 @@ model Tenant {
   customers                  Customer[]
   categories                 ProductCategory[]
   products                   Product[]
+  webProducts                WebProduct[]
   inventoryMovements         InventoryMovement[]
-  warehouseStocks            WarehouseStock[]
-  warehouseMovements         WarehouseMovement[]
   invoices                   Invoice[]
   payments                   Payment[]
   electronicDocuments        ElectronicDocument[]
@@ -445,6 +486,8 @@ model Tenant {
   cashMovements              CashMovement[]
   employeeActivityLogs       EmployeeActivityLog[]
   salesOrders                SalesOrder[]
+  orderWorkflowEvents        OrderWorkflowEvent[]
+  corporateOrderUnits        CorporateOrderUnit[]
   returnRequests             ReturnRequest[]
   fiscalSequences            FiscalSequence[]
   importBatches              ImportBatch[]
@@ -493,11 +536,16 @@ model User {
   employeeProfiles                    EmployeeProfile[]
   invoicesIssued                      Invoice[]                   @relation("InvoiceIssuedBy")
   inventoryMovementsCreated           InventoryMovement[]         @relation("InventoryMovementCreatedBy")
-  warehouseMovementsCreated           WarehouseMovement[]         @relation("WarehouseMovementCreatedBy")
   payments                            Payment[]
   salesOrdersCreated                  SalesOrder[]                @relation("SalesOrderCreatedBy")
   salesOrdersCompleted                SalesOrder[]                @relation("SalesOrderCompletedBy")
   salesOrdersClaimed                  SalesOrder[]                @relation("SalesOrderClaimedBy")
+  salesOrdersDesignApproved           SalesOrder[]                @relation("SalesOrderDesignApprovedBy")
+  salesOrdersQualityApproved          SalesOrder[]                @relation("SalesOrderQualityApprovedBy")
+  salesOrdersDelivered                SalesOrder[]                @relation("SalesOrderDeliveredBy")
+  orderWorkflowEvents                 OrderWorkflowEvent[]
+  corporateOrderUnitsUpdated          CorporateOrderUnit[]        @relation("CorporateOrderUnitUpdatedBy")
+  corporateOrderUnitsDelivered        CorporateOrderUnit[]        @relation("CorporateOrderUnitDeliveredBy")
   cashSessionsOpened                  CashSession[]               @relation("CashSessionOpenedBy")
   cashSessionsClosed                  CashSession[]               @relation("CashSessionClosedBy")
   cashMovements                       CashMovement[]
@@ -637,6 +685,21 @@ model Product {
   description            String?
   imageUrl               String?
   brand                  String?
+  kind                   ProductKind                 @default(STANDARD)
+  material               String?
+  measurement            String?
+  shopifyProductId       String?
+  shopifyVariantId       String?
+  shopifyInventoryItemId String?
+  shopifySyncedAt        DateTime?
+  webProductId           String?
+  webOptions             Json?
+  webAvailability        WebAvailabilityPolicy?
+  legacyEcommerceVariantId String?
+  legacyShopifyVariantId String?
+  originalSku            String?
+  /// Aprobación del SKU por una persona. NULL = candidato (propuesto por el importador) que bloquea la publicación.
+  skuApprovedAt          DateTime?
   unit                   ProductUnit                 @default(UNIT)
   price                  Decimal                     @db.Decimal(12, 2)
   salePrice              Decimal                     @default(0) @db.Decimal(12, 2)
@@ -656,8 +719,6 @@ model Product {
   tenant                 Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   category               ProductCategory?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   inventoryMovements     InventoryMovement[]
-  warehouseStocks        WarehouseStock[]
-  warehouseMovements     WarehouseMovement[]
   invoiceItems           InvoiceItem[]
   salesOrderItems        SalesOrderItem[]
   returnRequestItems     ReturnRequestItem[]
@@ -666,15 +727,52 @@ model Product {
   supplierInvoiceItems   SupplierInvoiceItem[]
   goodsReceiptItems      GoodsReceiptItem[]
   importRows             ImportBatchRow[]
+  webProduct             WebProduct?                 @relation(fields: [tenantId, webProductId], references: [tenantId, id], onDelete: Restrict)
 
   @@unique([tenantId, sku])
   @@unique([tenantId, barcode])
+  @@unique([tenantId, shopifyVariantId])
+  @@unique([tenantId, legacyEcommerceVariantId])
+  @@index([tenantId, webProductId])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, inventoryDestination, status])
+  @@index([tenantId, kind, status])
   @@index([tenantId, sku])
   @@index([tenantId, stock])
+  @@index([tenantId, reservedStock])
   @@index([createdAt])
+}
+
+/// Producto comercial agrupado del catálogo web. No tiene precio ni existencias: cada variante es un Product.
+/// legacyShopifyProductId es solo procedencia; nunca alimenta la sincronización con Shopify.
+model WebProduct {
+  id                     String     @id @default(cuid())
+  tenantId               String
+  legacyEcommerceId      String
+  legacyShopifyProductId String?
+  slug                   String
+  name                   String
+  description            String?
+  descriptionHtml        String?
+  categoryLabel          String?
+  options                Json
+  personalizationOptions Json?
+  imageUrl               String?
+  imageManifest          Json?
+  publicationIntent      String
+  published              Boolean    @default(false)
+  publishedAt            DateTime?
+  importSourceSha256     String?
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+  tenant                 Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products               Product[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, legacyEcommerceId])
+  @@unique([tenantId, slug])
+  @@index([tenantId, published])
 }
 
 model InventoryMovement {
@@ -706,50 +804,6 @@ model InventoryMovement {
   @@index([productId])
   @@index([invoiceId])
   @@index([supplierInvoiceId])
-  @@index([goodsReceiptId])
-  @@index([createdById])
-}
-
-model WarehouseStock {
-  id        String   @id @default(cuid())
-  tenantId  String
-  productId String
-  quantity  Float    @default(0)
-  unitCost  Decimal? @db.Decimal(12, 2)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, productId])
-  @@index([tenantId])
-  @@index([productId])
-  @@index([tenantId, quantity])
-}
-
-model WarehouseMovement {
-  id                String                @id @default(cuid())
-  tenantId          String
-  productId         String
-  type              WarehouseMovementType
-  quantity          Float
-  previousQuantity  Float?
-  newQuantity       Float?
-  unitCost          Decimal?              @db.Decimal(12, 2)
-  reason            String?
-  reference         String?
-  supplierInvoiceId String?
-  goodsReceiptId    String?
-  createdById       String?
-  createdAt         DateTime              @default(now())
-  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product           Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdBy         User?                 @relation("WarehouseMovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-
-  @@index([tenantId])
-  @@index([tenantId, type])
-  @@index([tenantId, createdAt])
-  @@index([productId])
   @@index([goodsReceiptId])
   @@index([createdById])
 }
@@ -803,6 +857,8 @@ model Invoice {
 }
 
 model InvoiceItem {
+  externalLineId     String?
+  personalization    Json?
   id                 String              @id @default(cuid())
   invoiceId          String
   productId          String?
@@ -837,6 +893,32 @@ model SalesOrder {
   ecfRecipientEmail          String?
   orderNumber                String
   status                     SalesOrderStatus            @default(SENT_TO_CASHIER)
+  source                     OrderSource                 @default(STORE)
+  externalOrderId            String?
+  productionStage            ProductionStage             @default(WAITING)
+  isExpress                  Boolean                     @default(false)
+  exceptionStatus            OrderExceptionStatus        @default(NONE)
+  priority                   OrderPriority               @default(NORMAL)
+  promisedAt                 DateTime?
+  requiresProduction         Boolean                     @default(false)
+  designApprovedAt           DateTime?
+  designApprovedById         String?
+  qualityApprovedAt          DateTime?
+  qualityApprovedById        String?
+  productionNotes            String?
+  deliveredAt                DateTime?
+  deliveredById              String?
+  isCorporate                Boolean                     @default(false)
+  deliveryMethod             DeliveryMethod              @default(PICKUP)
+  dispatchLocation           DispatchLocation            @default(STORE)
+  deliveryAddress            String?
+  deliveryPhone              String?
+  notificationEmail          String?
+  shopifyFulfillmentSyncedAt DateTime?
+  shopifyFulfillmentError    String?
+  readyNotifiedAt            DateTime?
+  readyNotificationId        String?
+  readyNotificationError     String?
   priceLevel                 SalesOrderPriceLevel        @default(REGULAR)
   discountRate               Decimal                     @default(0) @db.Decimal(5, 4)
   subtotal                   Decimal                     @default(0) @db.Decimal(12, 2)
@@ -871,14 +953,23 @@ model SalesOrder {
   createdBy                  User                        @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   completedBy                User?                       @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
   claimedBy                  User?                       @relation("SalesOrderClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  designApprovedBy           User?                       @relation("SalesOrderDesignApprovedBy", fields: [designApprovedById], references: [id], onDelete: SetNull)
+  qualityApprovedBy          User?                       @relation("SalesOrderQualityApprovedBy", fields: [qualityApprovedById], references: [id], onDelete: SetNull)
+  deliveredBy                User?                       @relation("SalesOrderDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull)
   claimedCashSession         CashSession?                @relation("SalesOrderClaimedCashSession", fields: [claimedCashSessionId], references: [id], onDelete: SetNull)
   invoice                    Invoice?                    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   items                      SalesOrderItem[]
   creditApproval             CreditSaleApproval?
+  workflowEvents             OrderWorkflowEvent[]
+  corporateUnits             CorporateOrderUnit[]
 
   @@unique([tenantId, orderNumber])
+  @@unique([tenantId, source, externalOrderId])
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([tenantId, destination, status])
+  @@index([tenantId, productionStage, exceptionStatus])
+  @@index([tenantId, promisedAt])
   @@index([tenantId, status, claimExpiresAt])
   @@index([tenantId, inventorySource, status])
   @@index([tenantId, paymentMode, dueDate])
@@ -890,23 +981,71 @@ model SalesOrder {
   @@index([claimExpiresAt])
 }
 
+model CorporateOrderUnit {
+  salesOrderItemId String?
+  salesOrderItem   SalesOrderItem?     @relation(fields: [salesOrderItemId], references: [id], onDelete: Restrict)
+  id               String              @id @default(cuid())
+  tenantId         String
+  salesOrderId     String
+  recipientName    String
+  message          String?
+  personalization  Json?
+  status           CorporateUnitStatus @default(PENDING)
+  updatedById      String?
+  deliveredAt      DateTime?
+  deliveredById    String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesOrder       SalesOrder          @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  updatedBy        User?               @relation("CorporateOrderUnitUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deliveredBy      User?               @relation("CorporateOrderUnitDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([salesOrderId, status])
+  @@index([updatedById])
+  @@index([deliveredById])
+}
+
+model OrderWorkflowEvent {
+  id              String               @id @default(cuid())
+  tenantId        String
+  salesOrderId    String
+  fromStage       ProductionStage?
+  toStage         ProductionStage
+  exceptionStatus OrderExceptionStatus @default(NONE)
+  note            String?
+  changedById     String
+  createdAt       DateTime             @default(now())
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesOrder      SalesOrder           @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  changedBy       User                 @relation(fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([salesOrderId, createdAt])
+  @@index([changedById])
+}
+
 model SalesOrderItem {
-  id               String     @id @default(cuid())
+  externalLineId   String?
+  corporateUnits   CorporateOrderUnit[]
+  id               String               @id @default(cuid())
   salesOrderId     String
   productId        String?
   sku              String?
   barcode          String?
   description      String
-  quantity         Decimal    @db.Decimal(12, 2)
-  reservedQuantity Float      @default(0)
-  unitPrice        Decimal    @db.Decimal(12, 2)
-  discountTotal    Decimal    @default(0) @db.Decimal(12, 2)
-  taxRate          Decimal    @db.Decimal(5, 4)
-  taxTotal         Decimal    @default(0) @db.Decimal(12, 2)
-  subtotal         Decimal    @db.Decimal(12, 2)
-  total            Decimal    @db.Decimal(12, 2)
-  salesOrder       SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  product          Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  personalization  Json?
+  quantity         Decimal              @db.Decimal(12, 2)
+  reservedQuantity Float                @default(0)
+  unitPrice        Decimal              @db.Decimal(12, 2)
+  discountTotal    Decimal              @default(0) @db.Decimal(12, 2)
+  taxRate          Decimal              @db.Decimal(5, 4)
+  taxTotal         Decimal              @default(0) @db.Decimal(12, 2)
+  subtotal         Decimal              @db.Decimal(12, 2)
+  total            Decimal              @db.Decimal(12, 2)
+  salesOrder       SalesOrder           @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product          Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([salesOrderId])
   @@index([productId])
@@ -1104,6 +1243,7 @@ model PurchaseOrderEvent {
 }
 
 model SupplierInvoice {
+  inventoryDestination           PurchaseOrderDestination    @default(SALES_INVENTORY)
   id                             String                      @id @default(cuid())
   tenantId                       String
   supplierId                     String
@@ -1417,36 +1557,37 @@ model CreditSaleApproval {
 }
 
 model ReturnRequest {
-  id                  String              @id @default(cuid())
+  restockDestination  ProductInventoryDestination?
+  id                  String                       @id @default(cuid())
   tenantId            String
   invoiceId           String
   requestedById       String
   approvedById        String?
   rejectedById        String?
   cashSessionId       String?
-  status              ReturnRequestStatus @default(REQUESTED)
+  status              ReturnRequestStatus          @default(REQUESTED)
   reason              String
   adminNote           String?
   refundMethod        PaymentMethod?
-  refundReference     String?             @db.VarChar(120)
-  refundAmount        Decimal             @default(0) @db.Decimal(12, 2)
-  creditAppliedAmount Decimal             @default(0) @db.Decimal(12, 2)
-  cashRefundAmount    Decimal             @default(0) @db.Decimal(12, 2)
-  debtBefore          Decimal?            @db.Decimal(12, 2)
-  debtAfter           Decimal?            @db.Decimal(12, 2)
-  paidAmountBefore    Decimal?            @db.Decimal(12, 2)
-  paidAmountAfter     Decimal?            @db.Decimal(12, 2)
+  refundReference     String?                      @db.VarChar(120)
+  refundAmount        Decimal                      @default(0) @db.Decimal(12, 2)
+  creditAppliedAmount Decimal                      @default(0) @db.Decimal(12, 2)
+  cashRefundAmount    Decimal                      @default(0) @db.Decimal(12, 2)
+  debtBefore          Decimal?                     @db.Decimal(12, 2)
+  debtAfter           Decimal?                     @db.Decimal(12, 2)
+  paidAmountBefore    Decimal?                     @db.Decimal(12, 2)
+  paidAmountAfter     Decimal?                     @db.Decimal(12, 2)
   approvedAt          DateTime?
   rejectedAt          DateTime?
   completedAt         DateTime?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice             Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  requestedBy         User                @relation("ReturnRequestRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  approvedBy          User?               @relation("ReturnRequestApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  rejectedBy          User?               @relation("ReturnRequestRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
-  cashSession         CashSession?        @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @default(now()) @updatedAt
+  tenant              Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice             Invoice                      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  requestedBy         User                         @relation("ReturnRequestRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy          User?                        @relation("ReturnRequestApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedBy          User?                        @relation("ReturnRequestRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  cashSession         CashSession?                 @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
   items               ReturnRequestItem[]
 
   @@index([tenantId])
@@ -1752,4 +1893,40 @@ model AuditLog {
   @@index([userId])
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+model ShopifyEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  eventId   String
+  type      String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, eventId])
+}
+
+model InventorySyncJob {
+  id        String   @id @default(cuid())
+  tenantId  String
+  productId String
+  revision  Int      @default(1)
+  attempts  Int      @default(0)
+  error     String?
+  pending   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, productId])
+}
+
+/// Nonces de solicitudes firmadas del canal e-commerce. Viven en la base compartida para impedir la repetición de una
+/// solicitud entre instancias sin añadir infraestructura (p. ej. Redis). Se purgan al vencer.
+model ChannelNonce {
+  id        String   @id @default(cuid())
+  keyId     String
+  nonce     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([keyId, nonce])
+  @@index([expiresAt])
 }
