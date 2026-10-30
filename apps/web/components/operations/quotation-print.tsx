@@ -348,10 +348,12 @@ export function QuotationPrint({
           {discountTotal > 0 ? (
             <AmountLine label="Descuentos" value={discountTotal} negative />
           ) : null}
-          <AmountLine
-            label="Subtotal después de descuento"
-            value={subtotalAfterDiscount}
-          />
+          {discountTotal > 0 ? (
+            <AmountLine
+              label="Subtotal después de descuento"
+              value={subtotalAfterDiscount}
+            />
+          ) : null}
           <AmountLine label="ITBIS" value={Number(order.taxTotal)} />
           <div className="mt-2 flex items-end justify-between border-t border-blue-200 pt-2">
             <span

@@ -156,7 +156,12 @@ export class OrdersService {
             }
           : {}),
       },
-      include: { category: true },
+      include: {
+        category: true,
+        ...(inventorySource === ProductInventoryDestination.WAREHOUSE
+          ? { warehouseStocks: { where: { tenantId }, select: { quantity: true } } }
+          : {}),
+      },
       orderBy: [{ stock: 'asc' }, { name: 'asc' }],
     });
   }
@@ -176,7 +181,12 @@ export class OrdersService {
         status: ProductStatus.ACTIVE,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
-      include: { category: true },
+      include: {
+        category: true,
+        ...(inventorySource === ProductInventoryDestination.WAREHOUSE
+          ? { warehouseStocks: { where: { tenantId }, select: { quantity: true } } }
+          : {}),
+      },
     });
 
     if (!product) {
@@ -1173,7 +1183,7 @@ export class OrdersService {
       }
     }
 
-    const [tenant, products] = await Promise.all([
+    const [tenant, products, warehouseStocks] = await Promise.all([
       client.tenant.findUniqueOrThrow({
         where: { id: tenantId },
         select: { salePricesIncludeTax: true },
@@ -1186,6 +1196,12 @@ export class OrdersService {
         status: ProductStatus.ACTIVE,
       },
       }),
+      inventorySource === ProductInventoryDestination.WAREHOUSE
+        ? client.warehouseStock.findMany({
+            where: { tenantId, productId: { in: Array.from(quantitiesByProduct.keys()) } },
+            select: { productId: true, quantity: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     if (products.length !== quantitiesByProduct.size) {
@@ -1254,13 +1270,19 @@ export class OrdersService {
 
     const computedItems = [...computedProductItems, ...computedCommonItems];
 
+    const warehouseQuantityByProduct = new Map(
+      warehouseStocks.map((stock) => [stock.productId, stock.quantity]),
+    );
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
       if (!item.product) continue;
-      const availableStock = item.product.stock - item.product.reservedStock;
+      const isWarehouseProduct = inventorySource === ProductInventoryDestination.WAREHOUSE;
+      const availableStock = isWarehouseProduct
+        ? (warehouseQuantityByProduct.get(item.product.id) ?? 0)
+        : item.product.stock - item.product.reservedStock;
 
       if (
-        item.product.trackInventory &&
+        (item.product.trackInventory || isWarehouseProduct) &&
         requiresWholeQuantity(item.product.unit) &&
         !Number.isInteger(quantity)
       ) {
@@ -1269,7 +1291,7 @@ export class OrdersService {
         );
       }
 
-      if (item.product.trackInventory && availableStock < quantity) {
+      if ((item.product.trackInventory || isWarehouseProduct) && availableStock < quantity) {
         throw new BadRequestException(`Insufficient available stock for ${item.product.name}.`);
       }
     }
@@ -1767,7 +1789,12 @@ export class OrdersService {
       },
       items: {
         include: {
-          product: { include: { category: true } },
+          product: {
+            include: {
+              category: true,
+              warehouseStocks: { select: { quantity: true } },
+            },
+          },
         },
         orderBy: { description: 'asc' as const },
       },

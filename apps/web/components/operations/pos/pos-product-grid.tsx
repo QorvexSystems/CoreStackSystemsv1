@@ -12,6 +12,7 @@ import {
   getAvailableStock,
   getProductInitials,
   getCustomerUnitPrice,
+  isStockLimited,
 } from './pos-utils';
 
 type PosProductGridProps = {
@@ -66,8 +67,8 @@ export function PosProductGrid({
       {products.map((product) => {
         const quantityInCart = quantitiesByProduct[product.id] ?? 0;
         const availableStock = getAvailableStock(product);
-        const lowStock = product.trackInventory && availableStock <= Number(product.minStock);
-        const outOfStock = product.trackInventory && availableStock <= 0;
+        const lowStock = isStockLimited(product) && availableStock <= Number(product.minStock);
+        const outOfStock = isStockLimited(product) && availableStock <= 0;
         const disabled = !canAddProduct(product, quantityInCart);
 
         return (

@@ -268,6 +268,7 @@ export type Product = {
   inventoryDestination: 'SALES_INVENTORY' | 'WAREHOUSE';
   stock: number;
   reservedStock: number;
+  warehouseStocks?: { quantity: number }[];
   minStock: number;
   status: string;
   category?: {

@@ -59,7 +59,14 @@ export function uniqueValues(values: string[]) {
 }
 
 export function getAvailableStock(product: Product) {
+  if (product.inventoryDestination === 'WAREHOUSE') {
+    return Math.max(Number(product.warehouseStocks?.[0]?.quantity ?? 0), 0);
+  }
   return Math.max(Number(product.stock) - Number(product.reservedStock), 0);
+}
+
+export function isStockLimited(product: Product) {
+  return product.trackInventory || product.inventoryDestination === 'WAREHOUSE';
 }
 
 export function allowsFractionalQuantity(product: Pick<Product, 'unit'>) {
@@ -71,7 +78,7 @@ export function getQuantityStep(product: Pick<Product, 'unit'>) {
 }
 
 export function getDefaultQuantity(product: Product) {
-  if (!product.trackInventory) {
+  if (!isStockLimited(product)) {
     return 1;
   }
 
@@ -114,7 +121,7 @@ export function getProductInitials(product: Product) {
 }
 
 export function canAddProduct(product: Product, currentQuantity = 0) {
-  if (!product.trackInventory) {
+  if (!isStockLimited(product)) {
     return true;
   }
 

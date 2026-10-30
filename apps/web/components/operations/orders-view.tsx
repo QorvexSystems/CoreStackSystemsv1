@@ -68,6 +68,7 @@ import {
   canAddProduct,
   calculateSaleAmounts,
   getAvailableStock,
+  isStockLimited,
   getCommonProductUnit,
   getDefaultQuantity,
   getProductPrice,
@@ -561,7 +562,7 @@ export function OrdersView() {
   const filteredProducts = productPool
     .filter((product) => categoryFilter === 'ALL' || product.category?.name === categoryFilter)
     .filter(
-      (product) => !availableOnly || !product.trackInventory || getAvailableStock(product) > 0,
+      (product) => !availableOnly || !isStockLimited(product) || getAvailableStock(product) > 0,
     );
   const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / productPageSize));
   const productRangeStart = filteredProducts.length ? (productPage - 1) * productPageSize + 1 : 0;
@@ -921,7 +922,7 @@ export function OrdersView() {
           item.product.id === product.id
             ? (() => {
                 const nextQuantity = item.quantity + getQuantityStep(item.product);
-                const cappedQuantity = item.product.trackInventory
+                const cappedQuantity = isStockLimited(item.product)
                   ? Math.min(nextQuantity, getAvailableStock(item.product))
                   : nextQuantity;
 
@@ -968,7 +969,7 @@ export function OrdersView() {
 
           const availableStock = getAvailableStock(item.product);
           const quantityStep = getQuantityStep(item.product);
-          const nextQuantity = item.product.trackInventory
+          const nextQuantity = isStockLimited(item.product)
             ? Math.min(Math.max(quantity, quantityStep), availableStock)
             : Math.max(quantity, quantityStep);
 

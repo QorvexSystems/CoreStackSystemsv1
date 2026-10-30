@@ -230,7 +230,7 @@ export function WarehouseProductForm({
                 }
               />
             </Field>
-            <Field id="warehouse-product-price" label="Precio de venta B2B con ITBIS" required>
+            <Field id="warehouse-product-price" label="Precio de venta B2B sin ITBIS" required>
               <Input
                 id="warehouse-product-price"
                 type="number"
