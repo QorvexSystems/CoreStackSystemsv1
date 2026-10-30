@@ -12,6 +12,11 @@ export function getProductPrice(product: Product) {
   return salePrice > 0 ? salePrice : Number(product.price);
 }
 
+export function getCustomerUnitPrice(product: Product, pricesIncludeTax: boolean) {
+  const price = getProductPrice(product);
+  return pricesIncludeTax ? price : roundMoney(price * (1 + Number(product.taxRate)));
+}
+
 export function calculateSaleAmounts(
   advertisedUnitPrice: number,
   quantity: number,

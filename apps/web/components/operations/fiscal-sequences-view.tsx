@@ -73,7 +73,7 @@ export function FiscalSequencesView() {
     enabled: Boolean(session),
   });
   const [form, setForm] = useState<SequenceForm>({
-    documentType: 'CONSUMER_02',
+    documentType: session?.tenantSlug === 'allpa' ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02',
     startNumber: '1',
     endNumber: '1',
     nextNumber: '1',
@@ -82,6 +82,9 @@ export function FiscalSequencesView() {
   });
 
   const sequences = sequencesQuery.data ?? [];
+  const availableTypes = session?.tenantSlug === 'allpa'
+    ? fiscalDocumentTypes.filter((type) => type.prefix.startsWith('E'))
+    : fiscalDocumentTypes;
   const selectedType = fiscalDocumentTypes.find((type) => type.value === form.documentType)!;
   const suggestedStart = useMemo(() => {
     const previousBlocks = sequences.filter((sequence) => sequence.documentType === form.documentType);
@@ -207,7 +210,7 @@ export function FiscalSequencesView() {
                     }
                     className="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    {fiscalDocumentTypes.map((type) => (
+                    {availableTypes.map((type) => (
                       <option key={type.value} value={type.value}>
                         {type.label}
                       </option>

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { translateProductUnit } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
-import { formatQuantity, getAvailableStock, getProductPrice, getQuantityStep } from './pos-utils';
+import { formatQuantity, getAvailableStock, getCustomerUnitPrice, getQuantityStep } from './pos-utils';
 import type { CartItem } from './types';
 
 type PosCartProps = {
@@ -17,6 +17,7 @@ type PosCartProps = {
   readOnly?: boolean;
   showHeader?: boolean;
   emptyMessage?: string;
+  pricesIncludeTax?: boolean;
 };
 
 export function PosCart({
@@ -26,6 +27,7 @@ export function PosCart({
   readOnly = false,
   showHeader = true,
   emptyMessage = 'Agrega productos desde la izquierda o escanea un codigo para empezar.',
+  pricesIncludeTax = true,
 }: PosCartProps) {
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
@@ -55,7 +57,7 @@ export function PosCart({
             const unitPrice =
               item.total !== undefined && item.quantity > 0
                 ? item.total / item.quantity
-                : getProductPrice(item.product);
+                : getCustomerUnitPrice(item.product, pricesIncludeTax);
             const lineTotal = item.total ?? unitPrice * item.quantity;
             const discountTotal = item.discountTotal ?? 0;
             const availableStock = getAvailableStock(item.product);

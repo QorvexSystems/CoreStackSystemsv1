@@ -1373,6 +1373,7 @@ export function OrdersView() {
           <div className="space-y-4">
             <PosProductGrid
               products={visibleProducts}
+              pricesIncludeTax={pricesIncludeTax}
               quantitiesByProduct={quantitiesByProduct}
               inventorySource={inventorySource}
               isLoading={productsQuery.isLoading}
@@ -1425,6 +1426,7 @@ export function OrdersView() {
           </Button>
           <PosCart
             items={cart}
+            pricesIncludeTax={pricesIncludeTax}
             onUpdateQuantity={updateQuantity}
             onClear={() => setCart([])}
             showHeader={false}

@@ -47,7 +47,7 @@ import {
 } from '../../common/utils/dominican-documents';
 import { CompleteSaleDto, PosSaleItemDto } from './dto/complete-sale.dto';
 import { buildEcfSimulation } from './ecf-simulation';
-import { ResendService } from '../notifications/resend.service';
+import { randomUUID } from 'node:crypto';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
 const claimTtlMs = 30 * 60 * 1000;
@@ -78,7 +78,6 @@ type StoreCreditAllocation = {
 export class PosService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly resend: ResendService,
   ) {}
 
   async searchProducts(tenantId: string, user: AuthenticatedUser, q: string) {
@@ -185,9 +184,15 @@ export class PosService {
   async previewSale(tenantId: string, user: AuthenticatedUser, dto: CompleteSaleDto) {
     await this.ensureCanCreateDirectSale(tenantId, user);
     const computed = await this.computeSale(tenantId, dto.items ?? []);
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { slug: true },
+    });
 
     return {
-      documentType: dto.documentType ?? InvoiceDocumentType.CONSUMER_02,
+      documentType: tenant.slug === 'allpa'
+        ? this.resolveAllpaDocumentType(dto.documentType, dto.paymentMethod, false)
+        : this.resolveLegacyDocumentType(dto.documentType, false),
       paymentMethod: dto.paymentMethod,
       subtotal: computed.subtotal.toNumber(),
       discountTotal: computed.discountTotal.toNumber(),
@@ -233,13 +238,13 @@ export class PosService {
         throw new BadRequestException('Sales order totals are inconsistent and must be reviewed.');
       }
 
-      const documentType = order?.electronicInvoiceRequested
-        ? dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
-          ? InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
-          : InvoiceDocumentType.CONSUMER_ELECTRONIC_32
-        : dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_01
-          ? InvoiceDocumentType.FISCAL_CREDIT_01
-          : InvoiceDocumentType.CONSUMER_02;
+      const tenantPolicy = await tx.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { slug: true },
+      });
+      const documentType = tenantPolicy.slug === 'allpa'
+        ? this.resolveAllpaDocumentType(dto.documentType, dto.paymentMethod, Boolean(order?.electronicInvoiceRequested))
+        : this.resolveLegacyDocumentType(dto.documentType, Boolean(order?.electronicInvoiceRequested));
       const requiresFiscalCustomer =
         documentType === InvoiceDocumentType.FISCAL_CREDIT_01 ||
         documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31;
@@ -409,7 +414,9 @@ export class PosService {
       }
 
       await this.lockOpenCashSession(tx, tenantId, cashSession.id);
-      const sequence = await this.reserveFiscalSequence(tx, tenantId, documentType);
+      const sequence = documentType === InvoiceDocumentType.LOCAL_SALE_NOTE
+        ? null
+        : await this.reserveFiscalSequence(tx, tenantId, documentType);
       const requiredPayment = isCreditSale ? order.initialPaymentAmount : computed.total;
       const storeCredit = dto.storeCreditInvoiceNumber?.trim()
         ? await this.resolveStoreCreditForCheckout(
@@ -431,11 +438,15 @@ export class PosService {
       const balance = computed.total.sub(paidAmount).toDecimalPlaces(2);
       const status = this.getInvoiceStatus(paidAmount, computed.total);
       const issuedAt = new Date();
-      const fiscalNumber = this.formatFiscalNumber(sequence.prefix, sequence.number);
+      const fiscalNumber = sequence
+        ? this.formatFiscalNumber(sequence.prefix, sequence.number)
+        : null;
       const isElectronicDocument =
         documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31 ||
         documentType === InvoiceDocumentType.CONSUMER_ELECTRONIC_32;
-      const invoiceNumber = `ALL-${fiscalNumber}`;
+      const invoiceNumber = fiscalNumber
+        ? `ALL-${fiscalNumber}`
+        : `ALL-NV-${randomUUID().replaceAll('-', '').slice(0, 16).toUpperCase()}`;
       const eNcf = isElectronicDocument ? fiscalNumber : null;
       const tenant = isElectronicDocument
         ? await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })
@@ -456,7 +467,9 @@ export class PosService {
           status,
           fiscalStatus: isElectronicDocument
             ? InvoiceFiscalStatus.PENDING_SIGNATURE
-            : InvoiceFiscalStatus.SIGNED,
+            : documentType === InvoiceDocumentType.LOCAL_SALE_NOTE
+              ? InvoiceFiscalStatus.NOT_APPLICABLE
+              : InvoiceFiscalStatus.SIGNED,
           subtotal: computed.subtotal,
           taxTotal: computed.taxTotal,
           discountTotal: computed.discountTotal,
@@ -719,9 +732,9 @@ export class PosService {
             })
           : null;
 
-      const electronicDocument = await tx.electronicDocument.create({
-        data: eCfSimulation
-          ? {
+      if (eCfSimulation) {
+        await tx.electronicDocument.create({
+            data: {
               tenantId,
               invoiceId: invoice.id,
               provider: ElectronicDocumentProvider.MOCK,
@@ -748,17 +761,9 @@ export class PosService {
               responsePayload: {
                 status: 'PENDING_SIGNATURE_AND_RESEND_CONFIGURATION',
               },
-            }
-          : {
-              tenantId,
-              invoiceId: invoice.id,
-              provider: ElectronicDocumentProvider.DGII_DIRECT,
-              status: ElectronicDocumentStatus.SIGNED,
-              trackId: `DEMO-${invoice.invoiceNumber}`,
-              requestPayload: { mode: 'demo', documentType },
-              responsePayload: { mode: 'demo', status: 'SIGNED' },
             },
-      });
+          });
+      }
 
       const issuedInvoice = await tx.invoice.findUniqueOrThrow({
         where: { id: invoice.id },
@@ -782,32 +787,10 @@ export class PosService {
         },
       });
 
-      return {
-        invoice: issuedInvoice,
-        ecfCopy:
-          eCfSimulation && eCfSimulation.recipientEmail
-            ? {
-                electronicDocumentId: electronicDocument.id,
-                invoiceId: invoice.id,
-                recipients: Array.from(
-                  new Set(
-                    ['facturacion@corestack-systems.com', eCfSimulation.recipientEmail].filter(
-                      (email): email is string => Boolean(email?.trim()),
-                    ),
-                  ),
-                ),
-                subject: eCfSimulation.email.subject,
-                templateVariables: eCfSimulation.templateVariables,
-              }
-            : null,
-      };
+      return issuedInvoice;
     });
 
-    if (completedSale.ecfCopy) {
-      await this.resend.sendEcfCopy(completedSale.ecfCopy);
-    }
-
-    return completedSale.invoice;
+    return completedSale;
   }
 
   private async claimOrderForSale(
@@ -1501,6 +1484,44 @@ export class PosService {
 
   private isAdminMembership(membership: AuthenticatedUser['memberships'][number]) {
     return adminRoles.includes(membership.role);
+  }
+
+  private resolveAllpaDocumentType(
+    requested: InvoiceDocumentType | undefined,
+    paymentMethod: PaymentMethod,
+    electronicInvoiceRequested: boolean,
+  ): InvoiceDocumentType {
+    if (requested === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31) {
+      return requested;
+    }
+    const allowedConsumerTypes: InvoiceDocumentType[] = [
+      InvoiceDocumentType.LOCAL_SALE_NOTE,
+      InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
+    ];
+    if (requested && !allowedConsumerTypes.includes(requested)) {
+      throw new BadRequestException('ALLPA solo admite nota de venta, E31 o E32.');
+    }
+    if (paymentMethod === PaymentMethod.CARD || electronicInvoiceRequested) {
+      if (requested === InvoiceDocumentType.LOCAL_SALE_NOTE) {
+        throw new BadRequestException('La tarjeta o una solicitud de e-CF requiere E32.');
+      }
+      return InvoiceDocumentType.CONSUMER_ELECTRONIC_32;
+    }
+    return requested ?? InvoiceDocumentType.LOCAL_SALE_NOTE;
+  }
+
+  private resolveLegacyDocumentType(
+    requested: InvoiceDocumentType | undefined,
+    electronicInvoiceRequested: boolean,
+  ): InvoiceDocumentType {
+    if (electronicInvoiceRequested) {
+      return requested === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
+        ? InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
+        : InvoiceDocumentType.CONSUMER_ELECTRONIC_32;
+    }
+    return requested === InvoiceDocumentType.FISCAL_CREDIT_01
+      ? InvoiceDocumentType.FISCAL_CREDIT_01
+      : InvoiceDocumentType.CONSUMER_02;
   }
 
   private ensureSupportedPaymentMethod(paymentMethod: PaymentMethod) {

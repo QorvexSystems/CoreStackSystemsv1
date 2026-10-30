@@ -1923,6 +1923,7 @@ async function fetchJson<T>(path: string, options?: RequestInit) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'x-corestack-ui-version': 'allpa-net-20261030',
       ...options?.headers,
     },
   });
@@ -1948,7 +1949,7 @@ async function fetchJson<T>(path: string, options?: RequestInit) {
 async function fetchFormData<T>(path: string, formData: FormData, headers: Record<string, string>) {
   const response = await fetch(`${apiUrl}${path}`, {
     method: 'POST',
-    headers,
+    headers: { 'x-corestack-ui-version': 'allpa-net-20261030', ...headers },
     body: formData,
   });
 

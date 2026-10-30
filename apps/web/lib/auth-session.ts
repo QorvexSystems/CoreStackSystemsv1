@@ -61,6 +61,12 @@ export function getSession() {
       return null;
     }
 
+    // The ALLPA price policy is migrated together with this web release.
+    // Refreshing an existing browser session must not keep the old inclusive flag.
+    if (session.tenantSlug === 'allpa' && session.salePricesIncludeTax) {
+      session.salePricesIncludeTax = false;
+    }
+
     return session;
   } catch {
     clearSession();

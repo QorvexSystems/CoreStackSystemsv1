@@ -1,11 +1,14 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
+import { CanActivate, ConflictException, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Role } from '@qorvex/database';
+import { PrismaService } from '../../prisma/prisma.service';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 
 @Injectable()
 export class TenantMembershipGuard implements CanActivate {
-  canActivate(context: ExecutionContext) {
-    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+  constructor(private readonly prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext) {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest & { method: string }>();
     const headerValue = request.headers['x-tenant-id'];
     const tenantId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
@@ -31,6 +34,19 @@ export class TenantMembershipGuard implements CanActivate {
     }
 
     request.tenantId = tenantId;
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { slug: true, salePricesIncludeTax: true },
+      });
+      if (
+        tenant?.slug === 'allpa' &&
+        !tenant.salePricesIncludeTax &&
+        request.headers['x-corestack-ui-version'] !== 'allpa-net-20261030'
+      ) {
+        throw new ConflictException('ALLPA cambió su política de precios. Actualiza la página antes de continuar.');
+      }
+    }
     return true;
   }
 }

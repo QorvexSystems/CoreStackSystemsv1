@@ -17,10 +17,10 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateFiscalSequenceDto } from './dto/create-fiscal-sequence.dto';
 
-const fiscalDocumentConfig: Record<
+const fiscalDocumentConfig: Partial<Record<
   InvoiceDocumentType,
   { prefix: string; digits: number }
-> = {
+>> = {
   [InvoiceDocumentType.FISCAL_CREDIT_01]: { prefix: 'B01', digits: 8 },
   [InvoiceDocumentType.CONSUMER_02]: { prefix: 'B02', digits: 8 },
   [InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31]: { prefix: 'E31', digits: 10 },
@@ -72,16 +72,23 @@ export class FiscalSequencesService {
 
   async getAlerts(tenantId: string) {
     const now = new Date();
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { slug: true },
+    });
+    const relevantTypes = tenant.slug === 'allpa'
+      ? [InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31, InvoiceDocumentType.CONSUMER_ELECTRONIC_32]
+      : [
+          InvoiceDocumentType.FISCAL_CREDIT_01,
+          InvoiceDocumentType.CONSUMER_02,
+          InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
+          InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
+        ];
     const sequences = await this.prisma.fiscalSequence.findMany({
       where: {
         tenantId,
         documentType: {
-          in: [
-            InvoiceDocumentType.FISCAL_CREDIT_01,
-            InvoiceDocumentType.CONSUMER_02,
-            InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
-            InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
-          ],
+          in: relevantTypes,
         },
       },
       orderBy: [{ documentType: 'asc' }, { createdAt: 'desc' }],
@@ -152,15 +159,18 @@ export class FiscalSequencesService {
           sequence.remaining <= sequence.threshold,
       );
 
-    if (
-      !alertableSequences.some(
-        (sequence) => sequence.documentType === InvoiceDocumentType.CONSUMER_02,
-      )
-    ) {
+    const requiredTypes = tenant.slug === 'allpa'
+      ? [
+          { type: InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31, prefix: 'E31' },
+          { type: InvoiceDocumentType.CONSUMER_ELECTRONIC_32, prefix: 'E32' },
+        ]
+      : [{ type: InvoiceDocumentType.CONSUMER_02, prefix: 'B02' }];
+    for (const required of requiredTypes) {
+      if (alertableSequences.some((sequence) => sequence.documentType === required.type)) continue;
       alerts.unshift({
-        id: 'missing-consumer-02-sequence',
-        documentType: InvoiceDocumentType.CONSUMER_02,
-        prefix: 'B02',
+        id: `missing-${required.type.toLowerCase()}-sequence`,
+        documentType: required.type,
+        prefix: required.prefix,
         nextNumber: 0,
         endNumber: 0,
         remaining: 0,

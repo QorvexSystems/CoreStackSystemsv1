@@ -20,6 +20,7 @@ type PosPaymentPanelProps = {
   customerId: string;
   documentType: string;
   electronicInvoiceRequested: boolean;
+  isAllpa: boolean;
   requiresE32Recipient: boolean;
   fiscalDocumentType: 'RNC' | 'CEDULA';
   fiscalDocumentNumber: string;
@@ -55,6 +56,7 @@ export function PosPaymentPanel({
   customerId,
   documentType,
   electronicInvoiceRequested,
+  isAllpa,
   requiresE32Recipient,
   fiscalDocumentType,
   fiscalDocumentNumber,
@@ -136,7 +138,15 @@ export function PosPaymentPanel({
             onChange={(event) => onDocumentTypeChange(event.target.value)}
             className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {electronicInvoiceRequested ? (
+            {isAllpa ? (
+              <>
+                {paymentMethod !== 'CARD' && !electronicInvoiceRequested ? (
+                  <option value="LOCAL_SALE_NOTE">Nota de venta (sin secuencia fiscal)</option>
+                ) : null}
+                <option value="CONSUMER_ELECTRONIC_32">Factura electrónica E32</option>
+                <option value="FISCAL_CREDIT_ELECTRONIC_31">Crédito fiscal electrónico E31</option>
+              </>
+            ) : electronicInvoiceRequested ? (
               <>
                 <option value="CONSUMER_ELECTRONIC_32">Factura de consumo E32</option>
                 <option value="FISCAL_CREDIT_ELECTRONIC_31">Crédito fiscal E31</option>
@@ -148,6 +158,11 @@ export function PosPaymentPanel({
               </>
             )}
           </select>
+          {isAllpa && documentType !== 'LOCAL_SALE_NOTE' ? (
+            <p className="text-[11px] text-amber-700">
+              e-CF en preparación: aún no se firma ni se transmite a la DGII.
+            </p>
+          ) : null}
         </div>
 
         <div className="space-y-1">

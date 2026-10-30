@@ -18,6 +18,7 @@ import {
   uploadProductImage,
 } from '@/lib/api';
 import { brand } from '@/lib/brand';
+import { formatCurrency } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { BarcodeCameraScanner } from './barcode-camera-scanner';
 import {
@@ -410,18 +411,25 @@ export function ProductForm({
               <option value="DISCONTINUED">Descontinuado</option>
             </select>
           </Field>
-          <Field label="Precio de venta con ITBIS (RD$)" required>
-            <Input
-              type="text"
-              inputMode="decimal"
-              value={form.price}
-              onChange={(event) =>
-                updateField('price', sanitizeCurrencyInput(event.target.value))
-              }
-              onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
-              onFocus={(event) => event.currentTarget.select()}
-              required
-            />
+          <Field label={session.salePricesIncludeTax ? 'Precio de venta con ITBIS (RD$)' : 'Precio del producto sin ITBIS (RD$)'} required>
+            <div className="space-y-1.5">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.price}
+                onChange={(event) =>
+                  updateField('price', sanitizeCurrencyInput(event.target.value))
+                }
+                onBlur={(event) => updateField('price', formatCurrencyInput(event.target.value))}
+                onFocus={(event) => event.currentTarget.select()}
+                required
+              />
+              {!session.salePricesIncludeTax && parseCurrencyInput(form.price) > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Precio final con ITBIS en caja: {formatCurrency(Math.round(parseCurrencyInput(form.price) * (1 + Number(productQuery.data?.taxRate ?? 0.18)) * 100) / 100)}
+                </p>
+              ) : null}
+            </div>
           </Field>
           <Field label="Costo unitario (RD$)">
             <Input

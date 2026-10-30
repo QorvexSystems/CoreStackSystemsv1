@@ -172,6 +172,7 @@ enum InvoiceFiscalStatus {
 }
 
 enum InvoiceDocumentType {
+  LOCAL_SALE_NOTE
   FISCAL_CREDIT_01
   CONSUMER_02
   CONSUMER_ELECTRONIC_32

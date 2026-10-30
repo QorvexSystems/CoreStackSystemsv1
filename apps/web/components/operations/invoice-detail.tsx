@@ -142,6 +142,8 @@ function Receipt({
   const hasDiscount = discountTotal > 0.005;
   const grossSubtotal = subtotalAfterDiscount + discountTotal;
   const fiscalNumber = invoice.ncf ?? invoice.eNcf ?? '-';
+  const isSaleNote = invoice.documentType === 'LOCAL_SALE_NOTE';
+  const isPendingEcf = Boolean(invoice.eNcf) && invoice.fiscalStatus !== 'ACCEPTED';
   const issuePoint = invoice.cashSession?.cashRegister;
   const companyName = brand.name;
   const legalName = invoice.tenant?.legalName ?? invoice.tenant?.name ?? companyName;
@@ -150,7 +152,7 @@ function Receipt({
   const showCompanyName =
     normalizedLegalName !== normalizedCompanyName &&
     !normalizedLegalName.includes(normalizedCompanyName);
-  const documentTitle = getInvoiceDocumentTitle(invoice.documentType);
+  const documentTitle = getInvoiceDocumentTitle(invoice.documentType, invoice.fiscalStatus);
   const businessContact = [invoice.tenant?.phone, invoice.tenant?.email]
     .filter((value): value is string => Boolean(value))
     .join(' · ');
@@ -191,12 +193,21 @@ function Receipt({
 
       <div className="border-y border-dashed border-zinc-400 py-2">
         <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
-        <ReceiptRow
-          label={invoice.eNcf ? 'e-NCF' : 'NCF'}
-          value={fiscalNumber}
-          valueClassName="font-semibold"
-        />
-        <ReceiptRow label="Factura interna" value={invoice.invoiceNumber} />
+        {isSaleNote ? (
+          <p className="mb-1 text-center font-semibold">Documento no fiscal · sin NCF</p>
+        ) : (
+          <ReceiptRow
+            label={invoice.eNcf ? 'e-NCF' : 'NCF'}
+            value={fiscalNumber}
+            valueClassName="font-semibold"
+          />
+        )}
+        <ReceiptRow label={isSaleNote ? 'Referencia interna' : 'Factura interna'} value={invoice.invoiceNumber} />
+        {isPendingEcf ? (
+          <p className="mt-1 text-center text-[11px] font-semibold">
+            e-CF pendiente de firma y envío a la DGII. No es una aceptación fiscal.
+          </p>
+        ) : null}
         <ReceiptRow
           label="Fecha de emisión"
           value={formatInvoiceDateTime(invoice.issuedAt ?? invoice.createdAt)}
@@ -276,7 +287,7 @@ function Receipt({
               value={formatCurrency(bucket.tax)}
             />
           ))}
-        <ReceiptRow label="Total factura" value={formatCurrency(Number(invoice.total))} strong />
+        <ReceiptRow label={isSaleNote ? 'Total venta' : 'Total factura'} value={formatCurrency(Number(invoice.total))} strong />
       </div>
 
       <div className="space-y-0.5">
@@ -336,8 +347,13 @@ function ReceiptRow({
   );
 }
 
-function getInvoiceDocumentTitle(documentType: string) {
+function getInvoiceDocumentTitle(documentType: string, fiscalStatus: string) {
+  if (documentType === 'LOCAL_SALE_NOTE') return 'Nota de venta';
   if (documentType === 'FISCAL_CREDIT_01') return 'Factura de crédito fiscal';
+  if (fiscalStatus !== 'ACCEPTED' && documentType === 'FISCAL_CREDIT_ELECTRONIC_31')
+    return 'Borrador e-CF E31';
+  if (fiscalStatus !== 'ACCEPTED' && documentType === 'CONSUMER_ELECTRONIC_32')
+    return 'Borrador e-CF E32';
   if (documentType === 'FISCAL_CREDIT_ELECTRONIC_31')
     return 'Factura de crédito fiscal electrónica';
   if (documentType === 'CONSUMER_ELECTRONIC_32') return 'Factura de consumo electrónica';

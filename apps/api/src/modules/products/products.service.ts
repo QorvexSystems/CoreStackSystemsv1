@@ -442,7 +442,13 @@ export class ProductsService {
   }
 
   async getLabel(tenantId: string, userId: string, id: string) {
-    const product = await this.findOne(tenantId, id);
+    const [product, tenant] = await Promise.all([
+      this.findOne(tenantId, id),
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: { salePricesIncludeTax: true },
+      }),
+    ]);
 
     if (!product.barcode) {
       throw new BadRequestException('Product must have a barcode before printing labels.');
@@ -479,7 +485,11 @@ export class ProductsService {
       sku: updated.sku,
       barcode: updated.barcode,
       barcodeType: updated.barcodeType,
-      price: updated.salePrice.toNumber() || updated.price.toNumber(),
+      price: (tenant.salePricesIncludeTax
+        ? (updated.salePrice.gt(0) ? updated.salePrice : updated.price)
+        : (updated.salePrice.gt(0) ? updated.salePrice : updated.price)
+            .mul(new Prisma.Decimal(1).add(updated.taxRate))
+            .toDecimalPlaces(2)).toNumber(),
       printedAt: updated.barcodeLabelPrintedAt,
       printCount: updated.barcodeLabelPrintCount,
     };

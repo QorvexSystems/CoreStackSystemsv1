@@ -400,7 +400,9 @@ export function ProductsView() {
                   <TableHead>Departamento</TableHead>
                   <TableHead>Unidad</TableHead>
                   <TableHead className="text-right">Costo unitario</TableHead>
-                  <TableHead className="text-right">Precio con ITBIS</TableHead>
+                  <TableHead className="text-right">
+                    {session.salePricesIncludeTax ? 'Precio con ITBIS' : 'Precio sin ITBIS'}
+                  </TableHead>
                   <TableHead>Codigo de barras</TableHead>
                   <TableHead>Existencia</TableHead>
                   <TableHead>Estado</TableHead>

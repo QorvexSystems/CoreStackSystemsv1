@@ -115,6 +115,7 @@ function buildCommonOrderProduct(item: SalesOrder['items'][number]): Product {
 
 export function PosView() {
   const session = useCurrentSession();
+  const isAllpa = session?.tenantSlug === 'allpa';
   const pricesIncludeTax =
     session?.salePricesIncludeTax ?? (session?.tenantSlug ? session.tenantSlug === 'allpa' : true);
   const queryClient = useQueryClient();
@@ -129,7 +130,9 @@ export function PosView() {
   const releaseAfterClaimRef = useRef<string | null>(null);
 
   const [customerId, setCustomerId] = useState('');
-  const [documentType, setDocumentType] = useState('CONSUMER_02');
+  const [documentType, setDocumentType] = useState(
+    isAllpa ? 'LOCAL_SALE_NOTE' : 'CONSUMER_02',
+  );
   const [fiscalDocumentType, setFiscalDocumentType] = useState<'RNC' | 'CEDULA'>('RNC');
   const [fiscalDocumentNumber, setFiscalDocumentNumber] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
@@ -538,12 +541,14 @@ export function PosView() {
     onSuccess: async (invoice) => {
       setMessage(
         invoice.eNcf
-          ? `e-CF ${invoice.eNcf} creada. Su XML y correo de simulación quedaron pendientes de firma y Resend.`
-          : `Factura ${invoice.invoiceNumber} creada correctamente.`,
+          ? `e-CF ${invoice.eNcf} registrada en simulación. Aún no se envió a la DGII.`
+          : invoice.documentType === 'LOCAL_SALE_NOTE'
+            ? `Nota de venta ${invoice.invoiceNumber} creada sin secuencia fiscal.`
+            : `Factura ${invoice.invoiceNumber} creada correctamente.`,
       );
       setCart([]);
       setPaymentMethod('CASH');
-      setDocumentType('CONSUMER_02');
+      setDocumentType(isAllpa ? 'LOCAL_SALE_NOTE' : 'CONSUMER_02');
       setLoadedOrder(null);
       setFiscalDocumentNumber('');
       setAmountReceived(clearCurrencyInput());
@@ -835,6 +840,13 @@ export function PosView() {
 
   function changePaymentMethod(value: string) {
     setPaymentMethod(value);
+    if (isAllpa) {
+      setDocumentType((current) => {
+        if (current === 'FISCAL_CREDIT_ELECTRONIC_31') return current;
+        if (value === 'CARD' || electronicInvoiceRequested) return 'CONSUMER_ELECTRONIC_32';
+        return current;
+      });
+    }
   }
 
   function populateFiscalDocumentFromCustomer(nextCustomerId: string) {
@@ -926,7 +938,9 @@ export function PosView() {
     setAmountReceived(clearCurrencyInput());
     setStoreCreditReference('');
     setStoreCredit(null);
-    setDocumentType(order.electronicInvoiceRequested ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02');
+    setDocumentType(order.electronicInvoiceRequested
+      ? 'CONSUMER_ELECTRONIC_32'
+      : isAllpa ? 'LOCAL_SALE_NOTE' : 'CONSUMER_02');
     setFiscalDocumentType('RNC');
     setCustomerId(order.customerId ?? '');
     setFiscalDocumentNumber('');
@@ -942,7 +956,7 @@ export function PosView() {
     setCart([]);
     setCustomerId('');
     setPaymentMethod('CASH');
-    setDocumentType('CONSUMER_02');
+    setDocumentType(isAllpa ? 'LOCAL_SALE_NOTE' : 'CONSUMER_02');
     setFiscalDocumentType('RNC');
     setFiscalDocumentNumber('');
     setAmountReceived(clearCurrencyInput());
@@ -1245,6 +1259,7 @@ export function PosView() {
                   ) : (
                     <PosProductGrid
                       products={filteredProducts}
+                      pricesIncludeTax={pricesIncludeTax}
                       quantitiesByProduct={quantitiesByProduct}
                       isLoading={productsQuery.isLoading}
                       onAddProduct={addProduct}
@@ -1280,6 +1295,7 @@ export function PosView() {
                 ) : cart.length ? (
                   <PosCart
                     items={cart}
+                    pricesIncludeTax={pricesIncludeTax}
                     onUpdateQuantity={updateQuantity}
                     onClear={clearCart}
                     readOnly={cartReadOnly}
@@ -1321,6 +1337,7 @@ export function PosView() {
                     customerId={customerId}
                     documentType={documentType}
                     electronicInvoiceRequested={electronicInvoiceRequested}
+                    isAllpa={isAllpa}
                     requiresE32Recipient={requiresE32Recipient}
                     fiscalDocumentType={fiscalDocumentType}
                     fiscalDocumentNumber={fiscalDocumentNumber}

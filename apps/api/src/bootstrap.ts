@@ -121,7 +121,7 @@ export async function createQorvexApiApp() {
     origin: getAllowedOrigins(config),
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'x-tenant-id', 'x-mobile-ocr-token', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'x-tenant-id', 'x-mobile-ocr-token', 'x-corestack-ui-version', 'Content-Type'],
   });
 
   app.useGlobalPipes(

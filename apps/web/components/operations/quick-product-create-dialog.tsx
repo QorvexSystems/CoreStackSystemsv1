@@ -14,6 +14,7 @@ import {
   type Product,
 } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
+import { formatCurrency } from '@/lib/utils';
 import { selectClassName } from './procurement-ui';
 import { SupplierInvoiceDialog } from './supplier-invoice-dialog';
 
@@ -32,7 +33,7 @@ type QuickProductCreateDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Alternativa conveniente para pantallas que ya tienen la sesión. */
-  session?: Pick<AuthSession, 'tenantId' | 'accessToken' | 'role'> | null;
+  session?: Pick<AuthSession, 'tenantId' | 'accessToken' | 'role' | 'salePricesIncludeTax'> | null;
   /** También puede utilizarse sin pasar la sesión completa. */
   tenantId?: string;
   accessToken?: string;
@@ -382,7 +383,7 @@ export function QuickProductCreateDialog({
               />
             </Field>
             <Field
-              label="Precio de venta con ITBIS (RD$)"
+              label={session?.salePricesIncludeTax === false ? 'Precio de venta sin ITBIS (RD$)' : 'Precio de venta con ITBIS (RD$)'}
               required
               hint="Se solicita por separado para no asumir un margen de venta sin autorización."
             >
@@ -396,6 +397,11 @@ export function QuickProductCreateDialog({
                 placeholder="0.00"
                 required
               />
+              {session?.salePricesIncludeTax === false && Number(form.salePrice) > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Precio final con ITBIS en caja: {formatCurrency(roundCurrency(Number(form.salePrice) * (1 + Number(form.taxPercent) / 100)))}
+                </p>
+              ) : null}
             </Field>
           </div>
 

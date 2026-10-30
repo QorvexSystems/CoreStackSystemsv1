@@ -11,13 +11,14 @@ import {
   formatQuantity,
   getAvailableStock,
   getProductInitials,
-  getProductPrice,
+  getCustomerUnitPrice,
 } from './pos-utils';
 
 type PosProductGridProps = {
   products: Product[];
   quantitiesByProduct: Record<string, number>;
   inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
+  pricesIncludeTax?: boolean;
   isLoading?: boolean;
   onAddProduct: (product: Product) => void;
 };
@@ -26,6 +27,7 @@ export function PosProductGrid({
   products,
   quantitiesByProduct,
   inventorySource = 'SALES_INVENTORY',
+  pricesIncludeTax = true,
   isLoading,
   onAddProduct,
 }: PosProductGridProps) {
@@ -108,7 +110,7 @@ export function PosProductGrid({
                   {product.category?.name ?? 'Sin departamento'}
                 </p>
                 <p className="mt-0.5 text-lg font-bold tracking-tight text-zinc-950">
-                  {formatCurrency(getProductPrice(product))}
+                  {formatCurrency(getCustomerUnitPrice(product, pricesIncludeTax))}
                 </p>
               </div>
               <Button
