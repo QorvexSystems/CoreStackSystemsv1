@@ -541,7 +541,7 @@ export function PosView() {
     onSuccess: async (invoice) => {
       setMessage(
         invoice.eNcf
-          ? `e-CF ${invoice.eNcf} registrada en simulación. Aún no se envió a la DGII.`
+          ? `Borrador e-CF ${invoice.eNcf} registrado.`
           : invoice.documentType === 'LOCAL_SALE_NOTE'
             ? `Nota de venta ${invoice.invoiceNumber} creada sin secuencia fiscal.`
             : `Factura ${invoice.invoiceNumber} creada correctamente.`,

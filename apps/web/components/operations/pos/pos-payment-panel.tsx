@@ -158,11 +158,6 @@ export function PosPaymentPanel({
               </>
             )}
           </select>
-          {isAllpa && documentType !== 'LOCAL_SALE_NOTE' ? (
-            <p className="text-[11px] text-amber-700">
-              e-CF en preparación: aún no se firma ni se transmite a la DGII.
-            </p>
-          ) : null}
         </div>
 
         <div className="space-y-1">

@@ -143,7 +143,6 @@ function Receipt({
   const grossSubtotal = subtotalAfterDiscount + discountTotal;
   const fiscalNumber = invoice.ncf ?? invoice.eNcf ?? '-';
   const isSaleNote = invoice.documentType === 'LOCAL_SALE_NOTE';
-  const isPendingEcf = Boolean(invoice.eNcf) && invoice.fiscalStatus !== 'ACCEPTED';
   const issuePoint = invoice.cashSession?.cashRegister;
   const companyName = brand.name;
   const legalName = invoice.tenant?.legalName ?? invoice.tenant?.name ?? companyName;
@@ -203,13 +202,8 @@ function Receipt({
           />
         )}
         <ReceiptRow label={isSaleNote ? 'Referencia interna' : 'Factura interna'} value={invoice.invoiceNumber} />
-        {isPendingEcf ? (
-          <p className="mt-1 text-center text-[11px] font-semibold">
-            e-CF pendiente de firma y envío a la DGII. No es una aceptación fiscal.
-          </p>
-        ) : null}
         <ReceiptRow
-          label="Fecha de emisión"
+          label={invoice.eNcf && invoice.fiscalStatus !== 'ACCEPTED' ? 'Fecha de registro' : 'Fecha de emisión'}
           value={formatInvoiceDateTime(invoice.issuedAt ?? invoice.createdAt)}
         />
         <ReceiptRow label="Cajero" value={invoice.issuedBy?.name ?? '-'} />
