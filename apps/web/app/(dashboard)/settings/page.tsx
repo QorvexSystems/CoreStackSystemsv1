@@ -13,7 +13,7 @@ const settings = [
   },
   {
     title: 'Secuencias fiscales',
-    description: 'Preparacion para e-CF/DGII y reserva de numeraciones por tipo.',
+    description: 'Consulta y administra las numeraciones por tipo de comprobante.',
     href: '/settings/fiscal-sequences',
     icon: FileDigit,
   },

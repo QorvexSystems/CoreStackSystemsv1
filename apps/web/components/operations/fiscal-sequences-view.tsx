@@ -172,7 +172,7 @@ export function FiscalSequencesView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Secuencias fiscales"
-        description="Bloques NCF B01/B02 y e-CF E31/E32 autorizados por DGII. E31/E32 se emiten como simulación hasta configurar firma y envío."
+        description="Administra los rangos de numeración NCF y e-CF por tipo de comprobante."
       />
 
       {canManage ? (
