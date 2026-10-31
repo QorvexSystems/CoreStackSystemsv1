@@ -197,7 +197,11 @@ function Receipt({
       </header>
 
       <div className="border-y border-dashed border-zinc-400 py-2">
-        <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
+        {isSaleNote ? (
+          <div className="mb-1 h-[18px]" aria-hidden="true" />
+        ) : (
+          <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
+        )}
         {!isSaleNote ? (
           <ReceiptRow
             label={invoice.eNcf ? 'e-NCF' : 'NCF'}
