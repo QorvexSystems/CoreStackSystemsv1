@@ -82,16 +82,14 @@ function readProducts(path: string) {
   return { hash, products };
 }
 
-function salePrice(product: SourceProduct) {
-  return product.netPrice.mul(ITBIS_MULTIPLIER).toDecimalPlaces(2);
-}
-
-function catalogPrice(product: SourceProduct, pricesIncludeTax: boolean) {
-  return pricesIncludeTax ? salePrice(product) : product.netPrice;
+function catalogPrice(product: SourceProduct) {
+  // ALLPA now treats the price from Abarrotes as the final customer price.
+  return product.netPrice;
 }
 
 function margin(product: SourceProduct) {
-  return product.netPrice.sub(product.cost).div(product.netPrice).toDecimalPlaces(4);
+  const fiscalBase = catalogPrice(product).div(ITBIS_MULTIPLIER);
+  return fiscalBase.sub(product.cost).div(fiscalBase).toDecimalPlaces(4);
 }
 
 async function getCatalog(tenantId: string) {
@@ -127,7 +125,7 @@ async function main() {
   const baselineSkus = new Set(baseline.products.map((product) => product.sku));
   const tenant = await prisma.tenant.findUnique({
     where: { slug: TENANT_SLUG },
-    select: { id: true, name: true, salePricesIncludeTax: true },
+    select: { id: true, name: true },
   });
   if (!tenant) {
     throw new Error('No se encontró el tenant ALLPA.');
@@ -145,7 +143,7 @@ async function main() {
   const updated = matched.filter((product) => {
     const current = bySku.get(product.sku)!;
     const targetCategory = categoryByName.get(product.department.toUpperCase());
-    const grossPrice = catalogPrice(product, tenant.salePricesIncludeTax);
+    const grossPrice = catalogPrice(product);
     return current.name !== product.name || current.categoryId !== targetCategory ||
       current.cost?.toDecimalPlaces(2).toString() !== product.cost.toString() ||
       !current.price.equals(grossPrice) || !current.salePrice.equals(grossPrice) ||
@@ -171,7 +169,7 @@ async function main() {
     newProductSkus: newProducts.map((product) => product.sku),
     retainedProductSkus: retained.map((product) => product.sku),
     nameChanges: matched.filter((product) => bySku.get(product.sku)!.name !== product.name).map((product) => product.sku),
-    priceChanges: matched.filter((product) => !bySku.get(product.sku)!.price.equals(catalogPrice(product, tenant.salePricesIncludeTax))).map((product) => product.sku),
+    priceChanges: matched.filter((product) => !bySku.get(product.sku)!.price.equals(catalogPrice(product))).map((product) => product.sku),
     costChanges: matched.filter((product) => bySku.get(product.sku)!.cost?.toDecimalPlaces(2).toString() !== product.cost.toString()).map((product) => product.sku),
   };
 
@@ -211,7 +209,7 @@ async function main() {
 
     const createdIds = new Map<string, string>();
     for (const product of newProducts) {
-      const grossPrice = catalogPrice(product, tenant.salePricesIncludeTax);
+      const grossPrice = catalogPrice(product);
       const created = await tx.product.create({
         data: {
           tenantId: tenant.id, categoryId: finalCategories.get(product.department.toUpperCase()),
@@ -229,7 +227,7 @@ async function main() {
       createdIds.set(product.sku, created.id);
     }
     for (const product of updated) {
-      const grossPrice = catalogPrice(product, tenant.salePricesIncludeTax);
+      const grossPrice = catalogPrice(product);
       await tx.product.update({
         where: { id: bySku.get(product.sku)!.id },
         data: {
@@ -271,7 +269,7 @@ async function main() {
         rawData: {
           sku: product.sku, name: product.name, department: product.department,
           cost: product.cost.toString(), netPrice: product.netPrice.toString(),
-          priceWithItbis: salePrice(product).toString(), sourceStock: product.rawStock,
+          priceWithItbis: catalogPrice(product).toString(), sourceStock: product.rawStock,
           importedStock: product.stock, minStock: product.minStock,
           action: bySku.has(product.sku) ? 'UPDATE_OR_KEEP' : 'CREATE',
         },
@@ -296,7 +294,7 @@ async function main() {
     const actualBySku = new Map(actual.map((product) => [product.sku, product]));
     for (const product of source.products) {
       const row = actualBySku.get(product.sku);
-      const grossPrice = catalogPrice(product, tenant.salePricesIncludeTax);
+      const grossPrice = catalogPrice(product);
       if (!row || row.name !== product.name || row.categoryId !== finalCategories.get(product.department.toUpperCase()) ||
           !row.price.equals(grossPrice) || !row.salePrice.equals(grossPrice) ||
           !row.cost?.equals(product.cost) || row.stock !== product.stock || row.minStock !== product.minStock) {

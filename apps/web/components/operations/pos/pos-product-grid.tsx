@@ -113,9 +113,9 @@ export function PosProductGrid({
                 <p className="mt-0.5 text-lg font-bold tracking-tight text-zinc-950">
                   {formatCurrency(getProductPrice(product))}
                 </p>
-                {!pricesIncludeTax ? (
-                  <p className="text-xs text-muted-foreground">Precio sin ITBIS</p>
-                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  {pricesIncludeTax ? 'ITBIS incluido' : 'Precio sin ITBIS'}
+                </p>
               </div>
               <Button
                 type="button"

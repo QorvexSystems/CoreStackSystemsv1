@@ -26,7 +26,7 @@ posUtilsModule._compile(
   }).outputText,
   posUtilsPath,
 );
-const { canAddProduct, getAvailableStock, getDefaultQuantity } = posUtilsModule.exports;
+const { calculateSaleAmounts, canAddProduct, getAvailableStock, getDefaultQuantity, getProductPrice } = posUtilsModule.exports;
 
 const product = {
   id: 'warehouse-product',
@@ -42,9 +42,9 @@ const product = {
   reservedStock: 0,
 };
 
-function orderServiceWithWarehouseStock(quantity, reservedStock = 0) {
+function orderServiceWithWarehouseStock(quantity, reservedStock = 0, pricesIncludeTax = false) {
   return new OrdersService({
-    tenant: { findUniqueOrThrow: async () => ({ salePricesIncludeTax: false }) },
+    tenant: { findUniqueOrThrow: async () => ({ salePricesIncludeTax: pricesIncludeTax }) },
     product: { findMany: async () => [{ ...product, reservedStock }] },
     warehouseStock: {
       findMany: async () => quantity === null ? [] : [{ productId: product.id, quantity }],
@@ -87,6 +87,25 @@ test('warehouse order reads WarehouseStock, adds ITBIS once, and preserves the c
     }),
     /reservation is incomplete/,
   );
+});
+
+test('ALLPA treats a catalog price of RD$100 as the final amount and extracts ITBIS', async () => {
+  const service = orderServiceWithWarehouseStock(2, 0, true);
+  const order = await service.computeOrder(
+    'tenant',
+    [{ productId: product.id, quantity: 1 }],
+    undefined,
+    SalesOrderPriceLevel.REGULAR,
+    ProductInventoryDestination.WAREHOUSE,
+  );
+  const preview = calculateSaleAmounts(getProductPrice(product), 1, 0.18, 0, true);
+
+  assert.equal(order.subtotal.toNumber(), 84.75);
+  assert.equal(order.taxTotal.toNumber(), 15.25);
+  assert.equal(order.total.toNumber(), 100);
+  assert.equal(preview.subtotal, 84.75);
+  assert.equal(preview.taxTotal, 15.25);
+  assert.equal(preview.total, 100);
 });
 
 test('warehouse order rejects missing, exhausted, and insufficient stock', async () => {

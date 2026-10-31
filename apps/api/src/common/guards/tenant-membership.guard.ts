@@ -39,11 +39,10 @@ export class TenantMembershipGuard implements CanActivate {
         where: { id: tenantId },
         select: { slug: true, salePricesIncludeTax: true },
       });
-      if (
-        tenant?.slug === 'allpa' &&
-        !tenant.salePricesIncludeTax &&
-        request.headers['x-corestack-ui-version'] !== 'allpa-net-20261030'
-      ) {
+      const expectedAllpaVersion = tenant?.salePricesIncludeTax
+        ? 'allpa-inclusive-20261031'
+        : 'allpa-net-20261030';
+      if (tenant?.slug === 'allpa' && request.headers['x-corestack-ui-version'] !== expectedAllpaVersion) {
         throw new ConflictException('ALLPA cambió su política de precios. Actualiza la página antes de continuar.');
       }
     }
