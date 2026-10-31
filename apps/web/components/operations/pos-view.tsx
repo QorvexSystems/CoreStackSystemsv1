@@ -178,7 +178,7 @@ export function PosView() {
     enabled: Boolean(session && isAdminSession(session)),
   });
   const isAdmin = isAdminSession(session);
-  const canCreateDirectSale = isAdmin;
+  const canCreateDirectSale = isAdmin && !isAllpa;
   const productsQuery = useQuery({
     queryKey: ['pos-products-search', session?.tenantId, search],
     queryFn: () => searchPosProducts(session?.tenantId ?? '', session?.accessToken ?? '', search),
@@ -1068,7 +1068,9 @@ export function PosView() {
           <div>
             <h1 className="text-xl font-bold tracking-tight text-zinc-950">Caja</h1>
             <p className="text-xs text-muted-foreground">
-              Cobro de órdenes, ventas de mostrador y cierre de caja.
+              {isAllpa
+                ? 'Cobro de órdenes y cierre de caja.'
+                : 'Cobro de órdenes, ventas de mostrador y cierre de caja.'}
             </p>
           </div>
         </div>
