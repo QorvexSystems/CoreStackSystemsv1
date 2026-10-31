@@ -9,6 +9,7 @@ export type CartItem = {
   };
   quantity: number;
   unitPrice?: number;
+  regularTotal?: number | null;
   discountTotal?: number;
   reservedQuantity?: number;
   subtotal?: number;

@@ -27,10 +27,12 @@ export function calculateSaleAmounts(
   if (!pricesIncludeTax) {
     const unitPrice = roundMoney(advertisedUnitPrice * (1 - discountRate));
     const regularSubtotal = roundMoney(advertisedUnitPrice * quantity);
+    const regularTotal = roundMoney(regularSubtotal + roundMoney(regularSubtotal * taxRate));
     const subtotal = roundMoney(unitPrice * quantity);
     const taxTotal = roundMoney(subtotal * taxRate);
     return {
       unitPrice,
+      regularTotal,
       regularSubtotal,
       discountTotal: roundMoney(Math.max(regularSubtotal - subtotal, 0)),
       subtotal,
@@ -46,12 +48,30 @@ export function calculateSaleAmounts(
 
   return {
     unitPrice: quantity > 0 ? roundMoney(subtotal / quantity) : 0,
+    regularTotal,
     regularSubtotal,
     discountTotal: roundMoney(Math.max(regularSubtotal - subtotal, 0)),
     subtotal,
     taxTotal: roundMoney(total - subtotal),
     total,
   };
+}
+
+export function customerDiscountForLine(
+  line: {
+    regularTotal?: number | string | null;
+    total: number | string;
+    discountTotal?: number | string | null;
+    taxRate?: number | string | null;
+  },
+  pricesIncludeTax: boolean,
+) {
+  if (!pricesIncludeTax) return roundMoney(Number(line.discountTotal ?? 0));
+  if (line.regularTotal !== null && line.regularTotal !== undefined) {
+    return roundMoney(Math.max(Number(line.regularTotal) - Number(line.total), 0));
+  }
+  // Older records have only the fiscal base discount, not the advertised total.
+  return roundMoney(Number(line.discountTotal ?? 0) * (1 + Number(line.taxRate ?? 0)));
 }
 
 export function uniqueValues(values: string[]) {

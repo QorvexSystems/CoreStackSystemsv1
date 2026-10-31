@@ -343,16 +343,22 @@ export function PosPaymentPanel({
           </div>
 
           <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs">
-            <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Subtotal bruto</span>
-              <span className="font-medium">
-                {formatCurrency(totals.subtotal + totals.discount)}
-              </span>
-            </div>
+            {isAllpa && totals.discount > 0 ? (
+              <div className="flex justify-between py-0.5">
+                <span className="text-muted-foreground">Precio antes de descuento (con ITBIS)</span>
+                <span className="font-medium">{formatCurrency(totals.total + totals.discount)}</span>
+              </div>
+            ) : null}
+            {!isAllpa ? (
+              <div className="flex justify-between py-0.5">
+                <span className="text-muted-foreground">Subtotal bruto</span>
+                <span className="font-medium">{formatCurrency(totals.subtotal + totals.discount)}</span>
+              </div>
+            ) : null}
             {totals.discount > 0 ? (
               <div className="flex justify-between py-0.5 text-emerald-700">
                 <span>
-                  Descuento sobre productos
+                  {isAllpa ? 'Descuento sobre precio final' : 'Descuento sobre productos'}
                   {discountPercent && discountPercent > 0
                     ? ` (${formatDiscountPercent(discountPercent)})`
                     : ''}
@@ -361,7 +367,7 @@ export function PosPaymentPanel({
               </div>
             ) : null}
             <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Subtotal después de descuento</span>
+              <span className="text-muted-foreground">{isAllpa ? 'Subtotal sin ITBIS' : 'Subtotal después de descuento'}</span>
               <span className="font-medium">{formatCurrency(totals.subtotal)}</span>
             </div>
             <div className="flex justify-between py-0.5">

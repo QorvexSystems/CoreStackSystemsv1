@@ -62,6 +62,7 @@ type ComputedSaleLine = {
   quantity: Prisma.Decimal;
   reservedQuantity: number;
   unitPrice: Prisma.Decimal;
+  regularTotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   taxRate: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
@@ -205,6 +206,7 @@ export class PosService {
         barcode: item.barcode,
         quantity: item.quantity.toNumber(),
         unitPrice: item.unitPrice.toNumber(),
+        regularTotal: item.regularTotal.toNumber(),
         discountTotal: item.discountTotal.toNumber(),
         subtotal: item.subtotal.toNumber(),
         taxTotal: item.taxTotal.toNumber(),
@@ -492,6 +494,7 @@ export class PosService {
               description: item.description,
               quantity: item.quantity,
               unitPrice: item.unitPrice,
+              regularTotal: item.regularTotal,
               discountTotal: item.discountTotal,
               taxRate: item.taxRate,
               taxTotal: item.taxTotal,
@@ -930,6 +933,7 @@ export class PosService {
         quantity,
         reservedQuantity: 0,
         unitPrice: amounts.unitPrice,
+        regularTotal: amounts.regularTotal,
         discountTotal: amounts.discountTotal,
         taxRate: product.taxRate,
         subtotal: amounts.subtotal,
@@ -986,6 +990,7 @@ export class PosService {
       quantity: Prisma.Decimal;
       reservedQuantity: number;
       unitPrice: Prisma.Decimal;
+      regularTotal: Prisma.Decimal | null;
       discountTotal: Prisma.Decimal;
       taxRate: Prisma.Decimal;
       taxTotal: Prisma.Decimal;
@@ -1005,6 +1010,7 @@ export class PosService {
         quantity: item.quantity,
         reservedQuantity: item.reservedQuantity,
         unitPrice: item.unitPrice,
+        regularTotal: item.regularTotal ?? item.total.add(item.discountTotal.mul(new Prisma.Decimal(1).add(item.taxRate))).toDecimalPlaces(2),
         discountTotal: item.discountTotal,
         taxRate: item.taxRate,
         taxTotal: item.taxTotal,

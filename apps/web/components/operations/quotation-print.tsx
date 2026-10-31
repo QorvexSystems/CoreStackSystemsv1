@@ -27,7 +27,7 @@ import {
 } from "@/lib/display-labels";
 import { getOrderClientLabel } from "@/lib/order-client";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { formatQuantity, getCommonProductUnit } from "./pos/pos-utils";
+import { customerDiscountForLine, formatQuantity, getCommonProductUnit } from "./pos/pos-utils";
 import { SessionRequired, useCurrentSession } from "./session-required";
 
 const navy = "#102f55";
@@ -104,6 +104,11 @@ export function QuotationPrint({
   const subtotalAfterDiscount = Number(order.subtotal);
   const discountTotal = Number(order.discountTotal ?? 0);
   const grossSubtotal = subtotalAfterDiscount + discountTotal;
+  const isAllpa = session.tenantSlug === "allpa";
+  const customerDiscount = order.items.reduce(
+    (sum, item) => sum + customerDiscountForLine(item, isAllpa),
+    0,
+  );
   const companyName =
     order.tenant.commercialName ??
     order.tenant.legalName ??
@@ -288,7 +293,7 @@ export function QuotationPrint({
                   Cant.
                 </th>
                 <th className="w-[17%] px-3 py-3 text-right font-semibold">
-                  Precio unit.
+                  {isAllpa ? "Precio unit. sin ITBIS" : "Precio unit."}
                 </th>
                 <th className="w-[17%] px-3 py-3 text-right font-semibold">
                   Total
@@ -328,11 +333,11 @@ export function QuotationPrint({
                     )}
                   </td>
                   <td className="px-3 py-3 text-right tabular-nums text-slate-700">
-                    {formatCurrency(
-                      Number(item.quantity) > 0
+                    {formatCurrency(isAllpa
+                      ? Number(item.unitPrice)
+                      : Number(item.quantity) > 0
                         ? Number(item.total) / Number(item.quantity)
-                        : 0,
-                    )}
+                        : 0)}
                   </td>
                   <td className="px-3 py-3 text-right font-bold tabular-nums text-slate-950">
                     {formatCurrency(Number(item.total))}
@@ -344,16 +349,23 @@ export function QuotationPrint({
         </section>
 
         <section className="quotation-summary ml-auto mt-3 w-full max-w-[490px] rounded-xl bg-blue-50 px-5 py-4">
-          <AmountLine label="Subtotal bruto" value={grossSubtotal} />
-          {discountTotal > 0 ? (
-            <AmountLine label="Descuentos" value={discountTotal} negative />
-          ) : null}
-          {discountTotal > 0 ? (
-            <AmountLine
-              label="Subtotal después de descuento"
-              value={subtotalAfterDiscount}
-            />
-          ) : null}
+          {isAllpa ? (
+            <>
+              {customerDiscount > 0 ? (
+                <>
+                  <AmountLine label="Precio antes de descuento (con ITBIS)" value={Number(order.total) + customerDiscount} />
+                  <AmountLine label={`Descuento sobre precio final (${Number(order.discountRate) * 100}%)`} value={customerDiscount} negative />
+                </>
+              ) : null}
+              <AmountLine label="Subtotal sin ITBIS" value={subtotalAfterDiscount} />
+            </>
+          ) : (
+            <>
+              <AmountLine label="Subtotal bruto" value={grossSubtotal} />
+              {discountTotal > 0 ? <AmountLine label="Descuentos" value={discountTotal} negative /> : null}
+              {discountTotal > 0 ? <AmountLine label="Subtotal después de descuento" value={subtotalAfterDiscount} /> : null}
+            </>
+          )}
           <AmountLine label="ITBIS" value={Number(order.taxTotal)} />
           <div className="mt-2 flex items-end justify-between border-t border-blue-200 pt-2">
             <span

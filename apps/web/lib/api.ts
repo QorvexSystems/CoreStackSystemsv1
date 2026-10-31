@@ -449,6 +449,7 @@ export type Invoice = {
     barcode: string | null;
     quantity: string;
     unitPrice: string;
+    regularTotal: string | null;
     discountTotal: string;
     taxRate: string;
     taxTotal: string;
@@ -694,6 +695,7 @@ export type SalesOrder = {
     quantity: string;
     reservedQuantity: number;
     unitPrice: string;
+    regularTotal: string | null;
     discountTotal: string;
     taxRate: string;
     taxTotal: string;

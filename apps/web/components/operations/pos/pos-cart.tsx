@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { translateProductUnit } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
-import { formatQuantity, getAvailableStock, getCustomerUnitPrice, getQuantityStep } from './pos-utils';
+import { customerDiscountForLine, formatQuantity, getAvailableStock, getCustomerUnitPrice, getQuantityStep } from './pos-utils';
 import type { CartItem } from './types';
 
 type PosCartProps = {
@@ -18,6 +18,7 @@ type PosCartProps = {
   showHeader?: boolean;
   emptyMessage?: string;
   pricesIncludeTax?: boolean;
+  showTaxBreakdown?: boolean;
 };
 
 export function PosCart({
@@ -28,6 +29,7 @@ export function PosCart({
   showHeader = true,
   emptyMessage = 'Agrega productos desde la izquierda o escanea un codigo para empezar.',
   pricesIncludeTax = true,
+  showTaxBreakdown = false,
 }: PosCartProps) {
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
@@ -59,7 +61,10 @@ export function PosCart({
                 ? item.total / item.quantity
                 : getCustomerUnitPrice(item.product, pricesIncludeTax);
             const lineTotal = item.total ?? unitPrice * item.quantity;
-            const discountTotal = item.discountTotal ?? 0;
+            const discountTotal = customerDiscountForLine(
+              { ...item, total: lineTotal, taxRate: item.product.taxRate },
+              showTaxBreakdown,
+            );
             const availableStock = getAvailableStock(item.product);
             const quantityStep = getQuantityStep(item.product);
             const stockWarning = item.product.trackInventory && item.quantity >= availableStock;
@@ -81,11 +86,19 @@ export function PosCart({
                       </p>
                     ) : null}
                     <p className="text-xs text-muted-foreground">
-                      {formatCurrency(unitPrice)} x {formatQuantity(item.quantity)}
+                      {formatCurrency(showTaxBreakdown
+                        ? Number(item.unitPrice ?? (item.quantity > 0 ? Number(item.subtotal ?? 0) / item.quantity : 0))
+                        : unitPrice)}
+                      {showTaxBreakdown ? ' sin ITBIS' : ''} × {formatQuantity(item.quantity)}
                     </p>
+                    {showTaxBreakdown ? (
+                      <p className="text-xs text-muted-foreground">
+                        Base {formatCurrency(Number(item.subtotal ?? 0))} · ITBIS {formatCurrency(Number(item.taxTotal ?? 0))}
+                      </p>
+                    ) : null}
                     {discountTotal > 0 ? (
                       <p className="mt-1 text-xs font-medium text-emerald-700">
-                        Descuento aplicado: {formatCurrency(discountTotal)}
+                        {showTaxBreakdown ? 'Descuento sobre precio final' : 'Descuento aplicado'}: {formatCurrency(discountTotal)}
                       </p>
                     ) : null}
                     {stockWarning ? (

@@ -65,6 +65,7 @@ import { PosProductGrid } from './pos/pos-product-grid';
 import {
   canAddProduct,
   calculateSaleAmounts,
+  customerDiscountForLine,
   getAvailableStock,
   getDefaultQuantity,
   getCommonProductUnit,
@@ -288,7 +289,10 @@ export function PosView() {
       lineAmounts.reduce((sum, item) => sum + Math.round(item.subtotal * 100), 0) / 100;
     const tax =
       lineAmounts.reduce((sum, item) => sum + Math.round(item.taxTotal * 100), 0) / 100;
-    const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
+    const discount = cart.reduce((sum, item) => sum + customerDiscountForLine(
+      { ...item, total: item.total ?? 0, taxRate: item.product.taxRate },
+      isAllpa,
+    ), 0);
     const total =
       lineAmounts.reduce((sum, item) => sum + Math.round(item.total * 100), 0) / 100;
     const received = parseCurrencyInput(amountReceived);
@@ -310,7 +314,7 @@ export function PosView() {
       change:
         paymentMethod === 'CASH' && received > requiredPayment ? received - requiredPayment : 0,
     };
-  }, [amountReceived, cart, loadedOrder, paymentMethod, pricesIncludeTax, storeCredit]);
+  }, [amountReceived, cart, isAllpa, loadedOrder, paymentMethod, pricesIncludeTax, storeCredit]);
 
   useEffect(() => {
     if (['CARD', 'TRANSFER'].includes(paymentMethod) && totals.requiredPayment >= 0) {
@@ -920,6 +924,7 @@ export function PosView() {
           : undefined,
         quantity: Number(item.quantity),
         unitPrice: Number(item.unitPrice),
+        regularTotal: item.regularTotal === null ? null : Number(item.regularTotal),
         discountTotal: Number(item.discountTotal ?? 0),
         reservedQuantity: item.reservedQuantity,
         subtotal: Number(item.subtotal),
@@ -1293,7 +1298,7 @@ export function PosView() {
               </CardHeader>
               <CardContent className="surface-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
                 {loadedOrder ? (
-                  <CheckoutOrderSummary order={loadedOrder} />
+                  <CheckoutOrderSummary order={loadedOrder} isAllpa={isAllpa} />
                 ) : cart.length ? (
                   <PosCart
                     items={cart}
@@ -1408,7 +1413,7 @@ export function PosView() {
   );
 }
 
-function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
+function CheckoutOrderSummary({ order, isAllpa }: { order: SalesOrder; isAllpa: boolean }) {
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
       <div className="flex items-start justify-between gap-3 bg-zinc-50/80 p-2.5">
@@ -1437,8 +1442,8 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
             <tr className="border-b border-zinc-200">
               <th className="w-[46%] px-3 py-2 font-semibold">Descripción</th>
               <th className="w-[12%] px-2 py-2 text-right font-semibold">Cant.</th>
-              <th className="w-[20%] px-2 py-2 text-right font-semibold">Precio</th>
-              <th className="w-[22%] px-3 py-2 text-right font-semibold">Subtotal</th>
+              <th className="w-[20%] px-2 py-2 text-right font-semibold">{isAllpa ? 'Precio sin ITBIS' : 'Precio'}</th>
+              <th className="w-[22%] px-3 py-2 text-right font-semibold">{isAllpa ? 'Base' : 'Subtotal'}</th>
             </tr>
           </thead>
           <tbody>

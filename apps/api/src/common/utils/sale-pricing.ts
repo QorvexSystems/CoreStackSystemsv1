@@ -10,6 +10,7 @@ type SaleLineInput = {
 
 export type ComputedSaleAmounts = {
   unitPrice: Prisma.Decimal;
+  regularTotal: Prisma.Decimal;
   regularSubtotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   subtotal: Prisma.Decimal;
@@ -37,12 +38,14 @@ export function computeSaleAmounts({
   if (!pricesIncludeTax) {
     const unitPrice = advertisedUnitPrice.mul(discountMultiplier).toDecimalPlaces(2);
     const regularSubtotal = quantity.mul(advertisedUnitPrice).toDecimalPlaces(2);
+    const regularTotal = regularSubtotal.add(regularSubtotal.mul(taxRate).toDecimalPlaces(2));
     const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
     const discountTotal = regularSubtotal.sub(subtotal).toDecimalPlaces(2);
     const taxTotal = subtotal.mul(taxRate).toDecimalPlaces(2);
 
     return {
       unitPrice,
+      regularTotal,
       regularSubtotal,
       discountTotal,
       subtotal,
@@ -66,6 +69,7 @@ export function computeSaleAmounts({
 
   return {
     unitPrice,
+    regularTotal,
     regularSubtotal,
     discountTotal,
     subtotal,

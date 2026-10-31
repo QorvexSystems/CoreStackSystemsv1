@@ -14,6 +14,7 @@ const {
 } = require('@qorvex/database');
 const { OrdersService } = require('../dist/modules/orders/orders.service');
 const { PosService } = require('../dist/modules/pos/pos.service');
+const { computeSaleAmounts } = require('../dist/common/utils/sale-pricing');
 const { reserveOrderStock } = require('../dist/common/utils/order-stock-reservation');
 
 const posUtilsPath = path.resolve(__dirname, '../../web/components/operations/pos/pos-utils.ts');
@@ -26,7 +27,7 @@ posUtilsModule._compile(
   }).outputText,
   posUtilsPath,
 );
-const { calculateSaleAmounts, canAddProduct, getAvailableStock, getDefaultQuantity, getProductPrice } = posUtilsModule.exports;
+const { calculateSaleAmounts, canAddProduct, customerDiscountForLine, getAvailableStock, getDefaultQuantity, getProductPrice } = posUtilsModule.exports;
 
 const product = {
   id: 'warehouse-product',
@@ -106,6 +107,46 @@ test('ALLPA treats a catalog price of RD$100 as the final amount and extracts IT
   assert.equal(preview.subtotal, 84.75);
   assert.equal(preview.taxTotal, 15.25);
   assert.equal(preview.total, 100);
+});
+
+test('ALLPA deducts 10% from the advertised RD$100 and preserves the exact discount through checkout', async () => {
+  const service = orderServiceWithWarehouseStock(2, 0, true);
+  const order = await service.computeOrder(
+    'tenant',
+    [{ productId: product.id, quantity: 1 }],
+    undefined,
+    SalesOrderPriceLevel.PREFERRED_18,
+    ProductInventoryDestination.WAREHOUSE,
+  );
+  const line = order.items[0];
+  assert.equal(line.regularTotal.toNumber(), 100);
+  assert.equal(line.unitPrice.toNumber(), 76.27);
+  assert.equal(line.subtotal.toNumber(), 76.27);
+  assert.equal(line.taxTotal.toNumber(), 13.73);
+  assert.equal(line.total.toNumber(), 90);
+  assert.equal(customerDiscountForLine(line, true), 10);
+  assert.equal(customerDiscountForLine(line, false), 8.48);
+
+  const pos = Object.create(PosService.prototype);
+  const checkout = await pos.computeSaleFromOrder({
+    inventorySource: ProductInventoryDestination.WAREHOUSE,
+    items: order.items,
+  });
+  assert.equal(checkout.items[0].regularTotal.toNumber(), 100);
+  assert.equal(checkout.items[0].total.toNumber(), 90);
+});
+
+test('ALLPA can display an exact 100% customer discount from the saved regular total', () => {
+  const line = computeSaleAmounts({
+    advertisedUnitPrice: new Prisma.Decimal(100),
+    quantity: new Prisma.Decimal(1),
+    taxRate: new Prisma.Decimal('0.18'),
+    discountRate: new Prisma.Decimal(1),
+    pricesIncludeTax: true,
+  });
+  assert.equal(line.regularTotal.toNumber(), 100);
+  assert.equal(line.total.toNumber(), 0);
+  assert.equal(customerDiscountForLine(line, true), 100);
 });
 
 test('warehouse order rejects missing, exhausted, and insufficient stock', async () => {

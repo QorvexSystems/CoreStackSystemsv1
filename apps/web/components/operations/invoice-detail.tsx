@@ -12,7 +12,7 @@ import { formatBusinessRnc } from '@/lib/dominican-documents';
 import { translatePaymentMethod, translateProductUnit, translateStatus } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
-import { formatQuantity, getCommonProductUnit } from './pos/pos-utils';
+import { customerDiscountForLine, formatQuantity, getCommonProductUnit } from './pos/pos-utils';
 import { SessionRequired, useCurrentSession } from './session-required';
 
 export function InvoiceDetail({
@@ -75,7 +75,7 @@ export function InvoiceDetail({
           }
         `}</style>
         <main className="mx-auto w-[80mm] max-w-full bg-white p-3 text-zinc-950 print:w-[80mm] print:p-0">
-          <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" />
+          <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" isAllpa={session.tenantSlug === 'allpa'} />
           <div className="mt-4 print:hidden">
             <Button className="w-full" onClick={() => window.print()}>
               <Printer className="h-4 w-4" />
@@ -101,7 +101,7 @@ export function InvoiceDetail({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Receipt invoice={invoice} copyLabel="VISTA PREVIA" />
+          <Receipt invoice={invoice} copyLabel="VISTA PREVIA" isAllpa={session.tenantSlug === 'allpa'} />
         </CardContent>
       </Card>
     </div>
@@ -111,9 +111,11 @@ export function InvoiceDetail({
 function Receipt({
   invoice,
   copyLabel,
+  isAllpa,
 }: {
   invoice: NonNullable<Awaited<ReturnType<typeof getInvoice>>>;
   copyLabel: string;
+  isAllpa: boolean;
 }) {
   const storeCreditApplied = (invoice.payments ?? [])
     .filter((payment) => payment.method === 'CREDIT' && payment.status === 'COMPLETED')
@@ -139,7 +141,11 @@ function Receipt({
   const balance = Number(invoice.balance);
   const subtotalAfterDiscount = Number(invoice.subtotal);
   const discountTotal = Number(invoice.discountTotal ?? 0);
-  const hasDiscount = discountTotal > 0.005;
+  const customerDiscount = invoice.items.reduce(
+    (sum, item) => sum + customerDiscountForLine(item, isAllpa),
+    0,
+  );
+  const hasDiscount = discountTotal > 0.005 || customerDiscount > 0.005;
   const grossSubtotal = subtotalAfterDiscount + discountTotal;
   const fiscalNumber = invoice.ncf ?? invoice.eNcf ?? '-';
   const isSaleNote = invoice.documentType === 'LOCAL_SALE_NOTE';
@@ -231,18 +237,19 @@ function Receipt({
             <p className="text-[11px] text-zinc-600">
               {formatQuantity(item.quantity)} {translateProductUnit(getCommonProductUnit(item.sku))}
               {' × '}
-              {formatCurrency(
-                Number(item.quantity) > 0
+              {formatCurrency(isAllpa
+                ? Number(item.unitPrice)
+                : Number(item.quantity) > 0
                   ? Number(item.total) / Number(item.quantity)
-                  : Number(item.total),
-              )}
+                  : Number(item.total))}
+              {isAllpa ? ' sin ITBIS' : ''}
               {Number(item.taxTotal) > 0
-                ? ` · ITBIS incluido ${formatCurrency(Number(item.taxTotal))}`
+                ? ` · ITBIS ${formatCurrency(Number(item.taxTotal))}`
                 : ''}
             </p>
             {Number(item.discountTotal) > 0 ? (
               <p className="text-[11px] font-medium text-emerald-700">
-                Descuento: {formatCurrency(Number(item.discountTotal))}
+                {isAllpa ? 'Descuento sobre precio final' : 'Descuento'}: {formatCurrency(customerDiscountForLine(item, isAllpa))}
               </p>
             ) : null}
           </div>
@@ -250,19 +257,27 @@ function Receipt({
       </div>
 
       <div className="space-y-0.5 border-y border-dashed border-zinc-400 py-2">
-        <ReceiptRow
-          label={hasDiscount ? 'Subtotal bruto' : 'Subtotal'}
-          value={formatCurrency(grossSubtotal)}
-        />
-        {hasDiscount ? (
+        {isAllpa ? (
           <>
-            <ReceiptRow label="Descuento" value={`-${formatCurrency(discountTotal)}`} />
-            <ReceiptRow
-              label="Subtotal después de descuento"
-              value={formatCurrency(subtotalAfterDiscount)}
-            />
+            {hasDiscount ? (
+              <>
+                <ReceiptRow label="Precio antes de descuento (con ITBIS)" value={formatCurrency(Number(invoice.total) + customerDiscount)} />
+                <ReceiptRow label="Descuento sobre precio final" value={`-${formatCurrency(customerDiscount)}`} />
+              </>
+            ) : null}
+            <ReceiptRow label="Subtotal sin ITBIS" value={formatCurrency(subtotalAfterDiscount)} />
           </>
-        ) : null}
+        ) : (
+          <>
+            <ReceiptRow label={hasDiscount ? 'Subtotal bruto' : 'Subtotal'} value={formatCurrency(grossSubtotal)} />
+            {hasDiscount ? (
+              <>
+                <ReceiptRow label="Descuento" value={`-${formatCurrency(discountTotal)}`} />
+                <ReceiptRow label="Subtotal después de descuento" value={formatCurrency(subtotalAfterDiscount)} />
+              </>
+            ) : null}
+          </>
+        )}
         {taxableBase > 0 && exemptBase > 0 ? (
           <>
             <ReceiptRow label="Base gravada" value={formatCurrency(taxableBase)} />

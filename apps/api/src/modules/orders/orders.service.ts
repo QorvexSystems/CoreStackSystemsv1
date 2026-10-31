@@ -66,6 +66,7 @@ type ComputedOrderItem = {
   quantity: Prisma.Decimal;
   reservedQuantity: number;
   unitPrice: Prisma.Decimal;
+  regularTotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   subtotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
@@ -343,6 +344,7 @@ export class OrdersService {
               quantity: item.quantity,
               reservedQuantity: isQuotation || waitsForApproval ? 0 : item.reservedQuantity,
               unitPrice: item.unitPrice,
+              regularTotal: item.regularTotal,
               discountTotal: item.discountTotal,
               taxRate: item.taxRate,
               taxTotal: item.taxTotal,
@@ -1128,6 +1130,7 @@ export class OrdersService {
               quantity: item.quantity,
               reservedQuantity: 0,
               unitPrice: item.unitPrice,
+              regularTotal: item.regularTotal,
               discountTotal: item.discountTotal,
               taxRate: item.taxRate,
               taxTotal: item.taxTotal,
@@ -1245,6 +1248,7 @@ export class OrdersService {
             ? quantity.toNumber()
             : 0,
         unitPrice: amounts.unitPrice,
+        regularTotal: amounts.regularTotal,
         discountTotal: amounts.discountTotal,
         subtotal: amounts.subtotal,
         taxTotal: amounts.taxTotal,
@@ -1275,6 +1279,7 @@ export class OrdersService {
         quantity,
         reservedQuantity: 0,
         unitPrice: amounts.unitPrice,
+        regularTotal: amounts.regularTotal,
         discountTotal: amounts.discountTotal,
         subtotal: amounts.subtotal,
         taxTotal: amounts.taxTotal,

@@ -67,6 +67,7 @@ import { PosProductGrid } from './pos/pos-product-grid';
 import {
   canAddProduct,
   calculateSaleAmounts,
+  customerDiscountForLine,
   getAvailableStock,
   isStockLimited,
   getCommonProductUnit,
@@ -185,6 +186,7 @@ function buildPricedCartItem(
     quantity,
     reservedQuantity,
     unitPrice: amounts.unitPrice,
+    regularTotal: amounts.regularTotal,
     discountTotal: amounts.discountTotal,
     subtotal: amounts.subtotal,
     taxTotal: amounts.taxTotal,
@@ -470,6 +472,7 @@ export function OrdersView() {
               ),
               reservedQuantity: 0,
               unitPrice: Number(item.unitPrice),
+              regularTotal: item.regularTotal === null ? null : Number(item.regularTotal),
               discountTotal,
               subtotal,
               taxTotal: Number(item.taxTotal),
@@ -484,6 +487,7 @@ export function OrdersView() {
             quantity,
             reservedQuantity: item.reservedQuantity,
             unitPrice: Number(item.unitPrice),
+            regularTotal: item.regularTotal === null ? null : Number(item.regularTotal),
             discountTotal,
             subtotal,
             taxTotal: Number(item.taxTotal),
@@ -593,7 +597,10 @@ export function OrdersView() {
       );
     });
     const subtotal = lineAmounts.reduce((sum, item) => sum + item.subtotal, 0);
-    const discount = cart.reduce((sum, item) => sum + (item.discountTotal ?? 0), 0);
+    const discount = cart.reduce((sum, item) => sum + customerDiscountForLine(
+      { ...item, total: item.total ?? 0, taxRate: item.product.taxRate },
+      session?.tenantSlug === 'allpa',
+    ), 0);
     const tax = lineAmounts.reduce((sum, item) => sum + item.taxTotal, 0);
     const total = lineAmounts.reduce((sum, item) => sum + item.total, 0);
 
@@ -603,7 +610,7 @@ export function OrdersView() {
       tax,
       total,
     };
-  }, [cart, customDiscountPercent, priceLevel, pricesIncludeTax]);
+  }, [cart, customDiscountPercent, priceLevel, pricesIncludeTax, session?.tenantSlug]);
   const initialPaymentRate =
     initialPaymentOption === 'PERCENT_30'
       ? 0.3
@@ -1432,6 +1439,7 @@ export function OrdersView() {
           <PosCart
             items={cart}
             pricesIncludeTax={pricesIncludeTax}
+            showTaxBreakdown={session?.tenantSlug === 'allpa'}
             onUpdateQuantity={updateQuantity}
             onClear={() => setCart([])}
             showHeader={false}
@@ -1852,9 +1860,9 @@ export function OrdersView() {
                   </select>
                   {priceLevel !== 'REGULAR' || customDiscountPercent !== null ? (
                     <p className="text-xs font-medium text-emerald-700">
-                      Se aplicara un descuento de{' '}
-                      {getPriceLevelDiscountRate(priceLevel, customDiscountPercent) * 100}% a los
-                      productos de esta orden.
+                      Se aplicará un descuento de{' '}
+                      {getPriceLevelDiscountRate(priceLevel, customDiscountPercent) * 100}% al{' '}
+                      {session?.tenantSlug === 'allpa' ? 'precio final de los productos' : 'subtotal de los productos'} de esta orden.
                     </p>
                   ) : null}
                 </div>
@@ -2136,11 +2144,23 @@ export function OrdersView() {
                 ) : null}
 
                 <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm">
-                  <div className="flex justify-between">
-                    <span>Subtotal</span>
+                  {session?.tenantSlug === 'allpa' && totals.discount > 0 ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Precio antes de descuento (con ITBIS)</span>
+                        <strong>{formatCurrency(totals.total + totals.discount)}</strong>
+                      </div>
+                      <div className="mt-2 flex justify-between text-emerald-700">
+                        <span>Descuento sobre precio final</span>
+                        <strong>-{formatCurrency(totals.discount)}</strong>
+                      </div>
+                    </>
+                  ) : null}
+                  <div className="mt-2 flex justify-between">
+                    <span>{session?.tenantSlug === 'allpa' ? 'Subtotal sin ITBIS' : 'Subtotal'}</span>
                     <strong>{formatCurrency(totals.subtotal)}</strong>
                   </div>
-                  {totals.discount > 0 ? (
+                  {session?.tenantSlug !== 'allpa' && totals.discount > 0 ? (
                     <div className="mt-2 flex justify-between text-emerald-700">
                       <span>Descuento</span>
                       <strong>-{formatCurrency(totals.discount)}</strong>
@@ -2219,6 +2239,7 @@ export function OrdersView() {
         />
         <CustomDiscountDialog
           open={customDiscountOpen}
+          isAllpa={session?.tenantSlug === 'allpa'}
           mode={session?.role === 'ORDER_TAKER' ? 'REQUEST' : 'APPLY'}
           value={customDiscountInput}
           busy={createOrderMutation.isPending}
@@ -2322,6 +2343,7 @@ export function OrdersView() {
 
 function CustomDiscountDialog({
   open,
+  isAllpa,
   mode,
   value,
   busy,
@@ -2330,6 +2352,7 @@ function CustomDiscountDialog({
   onConfirm,
 }: {
   open: boolean;
+  isAllpa: boolean;
   mode: 'REQUEST' | 'APPLY';
   value: string;
   busy: boolean;
@@ -2355,7 +2378,7 @@ function CustomDiscountDialog({
               {mode === 'REQUEST' ? 'Solicitar descuento personalizado' : 'Descuento personalizado'}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Digita el porcentaje que se aplicará al subtotal de los productos.
+              Digita el porcentaje que se aplicará al {isAllpa ? 'precio final' : 'subtotal'} de los productos.
             </p>
           </div>
           <button type="button" onClick={onClose} aria-label="Cerrar">
