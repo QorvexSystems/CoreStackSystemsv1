@@ -11,12 +11,14 @@ import {
   CustomerStatus,
   InvoiceStatus,
   Prisma,
+  ProductInventoryDestination,
   Role,
   SalePaymentMode,
   SalesOrderStatus,
 } from '@qorvex/database';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
 import { PrismaService } from '../../prisma/prisma.service';
+import { reserveOrderStock } from '../../common/utils/order-stock-reservation';
 import { ApproveCreditSaleDto, RejectCreditSaleDto } from './dto/credit-approval.dto';
 
 const accountingRoles: Role[] = [
@@ -194,29 +196,24 @@ export class CreditApprovalsService {
             throw new ConflictException('Credit sales order changed concurrently.');
           }
 
-          const orderedItems = [...approval.salesOrder.items].sort((left, right) =>
-            (left.productId ?? '').localeCompare(right.productId ?? ''),
+          await reserveOrderStock(
+            tx,
+            tenantId,
+            approval.salesOrder.inventorySource,
+            approval.salesOrder.items.map((item) => ({
+              productId: item.productId,
+              description: item.description,
+              quantity: Number(item.quantity),
+              trackInventory: item.product?.trackInventory ?? false,
+            })),
           );
-          for (const item of orderedItems) {
-            if (!item.productId || !item.product?.trackInventory) {
-              continue;
-            }
-            const quantity = Number(item.quantity);
-            const changed = await tx.$executeRaw`
-              UPDATE "Product"
-              SET "reservedStock" = "reservedStock" + ${quantity}
-              WHERE "id" = ${item.productId}
-                AND "tenantId" = ${tenantId}
-                AND ("stock" - "reservedStock") >= ${quantity}
-            `;
-            if (changed !== 1) {
-              throw new BadRequestException(
-                `Insufficient available stock for ${item.description}.`,
-              );
-            }
+          for (const item of approval.salesOrder.items) {
+            if (!item.productId ||
+              (approval.salesOrder.inventorySource !== ProductInventoryDestination.WAREHOUSE &&
+                !item.product?.trackInventory)) continue;
             await tx.salesOrderItem.update({
               where: { id: item.id },
-              data: { reservedQuantity: quantity },
+              data: { reservedQuantity: Number(item.quantity) },
             });
           }
         }

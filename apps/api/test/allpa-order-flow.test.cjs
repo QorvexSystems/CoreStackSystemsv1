@@ -14,6 +14,7 @@ const {
 } = require('@qorvex/database');
 const { OrdersService } = require('../dist/modules/orders/orders.service');
 const { PosService } = require('../dist/modules/pos/pos.service');
+const { reserveOrderStock } = require('../dist/common/utils/order-stock-reservation');
 
 const posUtilsPath = path.resolve(__dirname, '../../web/components/operations/pos/pos-utils.ts');
 const posUtilsModule = new Module(posUtilsPath, module);
@@ -41,18 +42,23 @@ const product = {
   reservedStock: 0,
 };
 
-function orderServiceWithWarehouseStock(quantity) {
+function orderServiceWithWarehouseStock(quantity, reservedStock = 0) {
   return new OrdersService({
     tenant: { findUniqueOrThrow: async () => ({ salePricesIncludeTax: false }) },
-    product: { findMany: async () => [product] },
+    product: { findMany: async () => [{ ...product, reservedStock }] },
     warehouseStock: {
       findMany: async () => quantity === null ? [] : [{ productId: product.id, quantity }],
     },
   });
 }
 
-function computeWarehouseOrder(quantityAvailable, quantity, priceLevel = SalesOrderPriceLevel.REGULAR) {
-  const service = orderServiceWithWarehouseStock(quantityAvailable);
+function computeWarehouseOrder(
+  quantityAvailable,
+  quantity,
+  priceLevel = SalesOrderPriceLevel.REGULAR,
+  reservedStock = 0,
+) {
+  const service = orderServiceWithWarehouseStock(quantityAvailable, reservedStock);
   return service.computeOrder(
     'tenant',
     [{ productId: product.id, quantity }],
@@ -71,9 +77,16 @@ test('warehouse order reads WarehouseStock, adds ITBIS once, and preserves the c
   const pos = Object.create(PosService.prototype);
   const checkout = await pos.computeSaleFromOrder({
     inventorySource: ProductInventoryDestination.WAREHOUSE,
-    items: order.items.map((item) => ({ ...item, reservedQuantity: 0 })),
+    items: order.items,
   });
   assert.equal(checkout.total.toNumber(), order.total.toNumber());
+  await assert.rejects(
+    pos.computeSaleFromOrder({
+      inventorySource: ProductInventoryDestination.WAREHOUSE,
+      items: order.items.map((item) => ({ ...item, reservedQuantity: 0 })),
+    }),
+    /reservation is incomplete/,
+  );
 });
 
 test('warehouse order rejects missing, exhausted, and insufficient stock', async () => {
@@ -93,10 +106,78 @@ test('order-taking cart uses real warehouse quantity and blocks exhausted stock'
   assert.equal(canAddProduct(warehouseProduct, 1), true);
   assert.equal(canAddProduct(warehouseProduct, 2), false);
   assert.equal(canAddProduct({ ...warehouseProduct, warehouseStocks: [] }), false);
+  assert.equal(getAvailableStock({ ...warehouseProduct, reservedStock: 1 }), 1);
+  assert.equal(canAddProduct({ ...warehouseProduct, reservedStock: 2 }), false);
   assert.equal(
     getAvailableStock({ ...warehouseProduct, inventoryDestination: ProductInventoryDestination.SALES_INVENTORY, stock: 5, reservedStock: 2 }),
     3,
   );
+});
+
+test('warehouse reservation holds stock for the first order and rejects the next', async () => {
+  let reservedStock = 0;
+  const tx = {
+    $queryRaw: async () => [{ reservedStock }],
+    warehouseStock: { findUnique: async () => ({ quantity: 2 }) },
+    product: {
+      update: async ({ data }) => {
+        reservedStock += data.reservedStock.increment;
+      },
+    },
+  };
+  const item = {
+    productId: product.id,
+    description: product.name,
+    quantity: 2,
+    trackInventory: false,
+  };
+  await reserveOrderStock(tx, 'tenant', ProductInventoryDestination.WAREHOUSE, [item]);
+  assert.equal(reservedStock, 2);
+  await assert.rejects(
+    reserveOrderStock(tx, 'tenant', ProductInventoryDestination.WAREHOUSE, [
+      { ...item, quantity: 1 },
+    ]),
+    /Insufficient available stock/,
+  );
+  await assert.rejects(computeWarehouseOrder(2, 1, SalesOrderPriceLevel.REGULAR, 2),
+    /Insufficient available stock/);
+});
+
+test('warehouse checkout releases its reservation and decrements physical stock', async () => {
+  let reservedStock = 2;
+  let warehouseQuantity = 2;
+  const tx = {
+    product: {
+      updateMany: async ({ where, data }) => {
+        if (reservedStock < where.reservedStock.gte) return { count: 0 };
+        reservedStock -= data.reservedStock.decrement;
+        return { count: 1 };
+      },
+    },
+    $queryRaw: async () => {
+      warehouseQuantity -= 2;
+      return [{ quantity: warehouseQuantity }];
+    },
+    warehouseMovement: { create: async () => ({}) },
+  };
+  const pos = Object.create(PosService.prototype);
+  await pos.applyInventoryForSale(tx, {
+    tenantId: 'tenant',
+    item: {
+      product: { ...product, reservedStock: 2 },
+      productId: product.id,
+      description: product.name,
+      quantity: new Prisma.Decimal(2),
+      reservedQuantity: 2,
+    },
+    invoiceId: 'invoice',
+    invoiceNumber: 'ALL-NV-1',
+    userId: 'employee',
+    fromOrder: true,
+    inventorySource: ProductInventoryDestination.WAREHOUSE,
+  });
+  assert.equal(reservedStock, 0);
+  assert.equal(warehouseQuantity, 0);
 });
 
 test('warehouse order rejects fractional units and aggregates duplicate product lines', async () => {

@@ -1017,9 +1017,12 @@ export class PosService {
       const quantity = item.quantity.toNumber();
 
       if (!item.product) continue;
+      const requiresReservation =
+        item.product.trackInventory ||
+        order.inventorySource === ProductInventoryDestination.WAREHOUSE;
 
       if (
-        item.product.trackInventory &&
+        requiresReservation &&
         requiresWholeQuantity(item.product.unit) &&
         !Number.isInteger(quantity)
       ) {
@@ -1028,13 +1031,17 @@ export class PosService {
         );
       }
 
-      if (item.product.trackInventory && Math.abs(item.reservedQuantity - quantity) > 1e-9) {
+      if (requiresReservation && Math.abs(item.reservedQuantity - quantity) > 1e-9) {
         throw new BadRequestException(
           `Inventory reservation is incomplete for ${item.description}.`,
         );
       }
 
-      if (item.product.trackInventory && item.product.stock < quantity) {
+      if (
+        order.inventorySource === ProductInventoryDestination.SALES_INVENTORY &&
+        item.product.trackInventory &&
+        item.product.stock < quantity
+      ) {
         throw new BadRequestException(`Insufficient stock for ${item.description}.`);
       }
     }
@@ -1083,10 +1090,26 @@ export class PosService {
 
     const quantity = item.quantity.toNumber();
     if (inventorySource === ProductInventoryDestination.WAREHOUSE) {
+      if (!fromOrder || Math.abs(item.reservedQuantity - quantity) > 1e-9) {
+        throw new BadRequestException(`Warehouse reservation is incomplete for ${item.description}.`);
+      }
       if (requiresWholeQuantity(item.product.unit) && !Number.isInteger(quantity)) {
         throw new BadRequestException(
           `Warehouse product ${item.description} requires whole quantities.`,
         );
+      }
+
+      const released = await tx.product.updateMany({
+        where: {
+          id: item.productId,
+          tenantId,
+          inventoryDestination: ProductInventoryDestination.WAREHOUSE,
+          reservedStock: { gte: quantity },
+        },
+        data: { reservedStock: { decrement: quantity } },
+      });
+      if (released.count !== 1) {
+        throw new BadRequestException(`Warehouse reservation is unavailable for ${item.description}.`);
       }
 
       const updated = await tx.$queryRaw<Array<{ quantity: number }>>`

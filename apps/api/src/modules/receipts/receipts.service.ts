@@ -19,6 +19,7 @@ import {
 } from '@qorvex/database';
 import { randomUUID } from 'crypto';
 import { businessDateKey } from '../../common/utils/business-date';
+import { lockWarehouseProduct } from '../../common/utils/order-stock-reservation';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateReceiptDto,
@@ -737,6 +738,15 @@ export class ReceiptsService {
       }
       const isWarehouseReceipt =
         current.purchaseOrder?.destination === PurchaseOrderDestination.WAREHOUSE;
+      const warehouseReservations = new Map<string, number>();
+      if (isWarehouseReceipt) {
+        for (const productId of [...new Set(current.items.map((item) => item.productId))].sort()) {
+          warehouseReservations.set(
+            productId,
+            await lockWarehouseProduct(tx, tenantId, productId),
+          );
+        }
+      }
 
       for (const item of [...current.items].reverse()) {
         const quantity = this.normalizeQuantity(item.quantityReceived);
@@ -766,6 +776,14 @@ export class ReceiptsService {
           );
         }
         const newStock = previousStock.sub(quantity).toDecimalPlaces(3);
+        if (
+          isWarehouseReceipt &&
+          newStock.lt(warehouseReservations.get(product.id) ?? 0)
+        ) {
+          throw new ConflictException(
+            `No se puede revertir la recepción: ${product.name} tiene existencia reservada en órdenes abiertas.`,
+          );
+        }
         const hasLaterReceipt = isWarehouseReceipt
           ? await tx.warehouseMovement.findFirst({
               where: {

@@ -385,6 +385,7 @@ function InventoryPanel({
             <div className="grid gap-3 lg:hidden">
               {products.map((product) => {
                 const quantity = stockOf(product);
+                const reserved = Number(product.reservedStock);
                 const active = product.status === 'ACTIVE';
                 return (
                   <article
@@ -406,6 +407,11 @@ function InventoryPanel({
                         <p className="font-bold">
                           {formatQuantity(quantity)} {unitShortLabel(product.unit)}
                         </p>
+                        {reserved > 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            {formatQuantity(reserved)} reservado · {formatQuantity(availableStockOf(product))} disponible
+                          </p>
+                        ) : null}
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Precio B2B</p>
@@ -493,6 +499,7 @@ function InventoryPanel({
                 <TableBody>
                   {products.map((product) => {
                     const quantity = stockOf(product);
+                    const reserved = Number(product.reservedStock);
                     const active = product.status === 'ACTIVE';
                     return (
                       <TableRow key={product.id} className={!active ? 'opacity-65' : undefined}>
@@ -510,6 +517,11 @@ function InventoryPanel({
                         </TableCell>
                         <TableCell className="font-semibold">
                           {formatQuantity(quantity)} {unitShortLabel(product.unit)}
+                          {reserved > 0 ? (
+                            <p className="text-xs font-normal text-muted-foreground">
+                              {formatQuantity(reserved)} reservado · {formatQuantity(availableStockOf(product))} disponible
+                            </p>
+                          ) : null}
                         </TableCell>
                         <TableCell>
                           <StockBadge product={product} />
@@ -549,11 +561,11 @@ function InventoryPanel({
                                   type="button"
                                   variant="outline"
                                   size="icon"
-                                  disabled={quantity <= 0}
+                                  disabled={availableStockOf(product) <= 0}
                                   onClick={() => onDispatch(product)}
                                   aria-label={`Registrar salida manual de ${product.name}`}
                                   title={
-                                    quantity <= 0 ? 'Sin existencia disponible' : 'Salida manual'
+                                    availableStockOf(product) <= 0 ? 'Sin existencia disponible' : 'Salida manual'
                                   }
                                 >
                                   <PackageMinus className="h-4 w-4" />
@@ -836,7 +848,7 @@ function TabButton({
 
 function StockBadge({ product }: { product: WarehouseCatalogProduct }) {
   if (product.status !== 'ACTIVE') return <Badge variant="outline">Inactivo</Badge>;
-  const quantity = stockOf(product);
+  const quantity = availableStockOf(product);
   if (quantity <= 0) return <Badge variant="danger">Sin stock</Badge>;
   if (quantity <= Number(product.minStock ?? 0)) return <Badge variant="warning">Stock bajo</Badge>;
   return <Badge variant="success">Disponible</Badge>;
@@ -892,6 +904,10 @@ function EmptyRow({ colSpan, message }: { colSpan: number; message: string }) {
 
 function stockOf(product: WarehouseCatalogProduct) {
   return product.warehouseStocks[0]?.quantity ?? 0;
+}
+
+function availableStockOf(product: WarehouseCatalogProduct) {
+  return Math.max(stockOf(product) - Number(product.reservedStock), 0);
 }
 
 function toDialogProduct(product: WarehouseCatalogProduct) {

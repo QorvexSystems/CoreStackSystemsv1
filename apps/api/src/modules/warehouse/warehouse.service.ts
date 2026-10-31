@@ -15,6 +15,7 @@ import {
   WarehouseMovementType,
 } from '@qorvex/database';
 import { normalizeBarcodeInput } from '../../common/utils/barcode';
+import { lockWarehouseProduct } from '../../common/utils/order-stock-reservation';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DispatchWarehouseProductDto } from './dto/dispatch-warehouse-product.dto';
 import { CreateWarehouseProductDto, UpdateWarehouseProductDto } from './dto/warehouse-product.dto';
@@ -195,6 +196,7 @@ export class WarehouseService {
     const unitCost = dto.unitCost === undefined ? product.cost : new Prisma.Decimal(dto.unitCost);
 
     return this.prisma.$transaction(async (tx) => {
+      await lockWarehouseProduct(tx, tenantId, id);
       const previous = await tx.warehouseStock.findUnique({
         where: { tenantId_productId: { tenantId, productId: id } },
       });
@@ -305,6 +307,12 @@ export class WarehouseService {
     this.ensureCompatibleQuantity(product.unit, dto.countedQuantity);
 
     return this.prisma.$transaction(async (tx) => {
+      const reservedStock = await lockWarehouseProduct(tx, tenantId, id);
+      if (dto.countedQuantity + 1e-9 < reservedStock) {
+        throw new BadRequestException(
+          `No puedes registrar menos de ${reservedStock} unidades: están reservadas en órdenes abiertas.`,
+        );
+      }
       const previous = await tx.warehouseStock.findUnique({
         where: { tenantId_productId: { tenantId, productId: id } },
       });
@@ -361,6 +369,7 @@ export class WarehouseService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      const reservedStock = await lockWarehouseProduct(tx, tenantId, id);
       const stock = await tx.warehouseStock.findUnique({
         where: { tenantId_productId: { tenantId, productId: id } },
       });
@@ -370,13 +379,13 @@ export class WarehouseService {
       }
 
       const updated = await tx.warehouseStock.updateMany({
-        where: { id: stock.id, tenantId, quantity: { gte: dto.quantity } },
+        where: { id: stock.id, tenantId, quantity: { gte: dto.quantity + reservedStock } },
         data: { quantity: { decrement: dto.quantity } },
       });
 
       if (updated.count !== 1) {
         throw new BadRequestException(
-          `No hay existencia suficiente. Disponible: ${stock.quantity}.`,
+          `No hay existencia suficiente. Disponible: ${Math.max(stock.quantity - reservedStock, 0)}.`,
         );
       }
 

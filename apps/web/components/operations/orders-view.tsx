@@ -772,6 +772,7 @@ export function OrdersView() {
           order,
         );
         await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+        await queryClient.invalidateQueries({ queryKey: ['order-products-search'] });
         toast.success('Descuento enviado para aprobación', {
           description: `${percent}% · ${order.orderNumber}`,
         });
@@ -811,6 +812,7 @@ export function OrdersView() {
       loadedEditOrderRef.current = editOrderId ? editOrderId : null;
       editToastShownRef.current = null;
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order-products-search'] });
       toast.success(
         editOrderId
           ? 'Cotizacion actualizada'
@@ -863,6 +865,7 @@ export function OrdersView() {
       setQuotationDocumentNumber('');
       setCartDrawerOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order-products-search'] });
       toast.success('Orden enviada a caja', {
         description: `${order.orderNumber} · descuento ${Number(order.discountRate) * 100}%`,
       });
@@ -883,6 +886,7 @@ export function OrdersView() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['order-products-search'] });
       toast.success('Orden cancelada.');
     },
     onError: (error) => {

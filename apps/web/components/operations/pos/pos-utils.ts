@@ -60,7 +60,10 @@ export function uniqueValues(values: string[]) {
 
 export function getAvailableStock(product: Product) {
   if (product.inventoryDestination === 'WAREHOUSE') {
-    return Math.max(Number(product.warehouseStocks?.[0]?.quantity ?? 0), 0);
+    return Math.max(
+      Number(product.warehouseStocks?.[0]?.quantity ?? 0) - Number(product.reservedStock),
+      0,
+    );
   }
   return Math.max(Number(product.stock) - Number(product.reservedStock), 0);
 }

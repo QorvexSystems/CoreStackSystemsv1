@@ -33,6 +33,7 @@ import {
 } from '../../common/utils/dominican-documents';
 import { getBarcodeLookupCandidates } from '../../common/utils/barcode';
 import { computeSaleAmounts } from '../../common/utils/sale-pricing';
+import { reserveOrderStock } from '../../common/utils/order-stock-reservation';
 import {
   addBusinessDays,
   businessDateKey,
@@ -276,13 +277,18 @@ export class OrdersService {
       const waitsForCreditApproval = isCredit && !isQuotation;
       const waitsForApproval = waitsForCreditApproval || waitsForDiscountApproval;
 
-      if (
-        !isQuotation &&
-        !isCredit &&
-        !waitsForDiscountApproval &&
-        inventorySource === ProductInventoryDestination.SALES_INVENTORY
-      ) {
-        await this.reserveStockForOrder(tenantId, computed.items, tx);
+      if (!isQuotation && !waitsForApproval) {
+        await reserveOrderStock(
+          tx,
+          tenantId,
+          inventorySource,
+          computed.items.map((item) => ({
+            productId: item.productId,
+            description: item.description,
+            quantity: item.quantity.toNumber(),
+            trackInventory: item.product?.trackInventory ?? false,
+          })),
+        );
       }
 
       const now = new Date();
@@ -335,7 +341,7 @@ export class OrdersService {
               barcode: item.barcode,
               description: item.description,
               quantity: item.quantity,
-              reservedQuantity: isQuotation || isCredit ? 0 : item.reservedQuantity,
+              reservedQuantity: isQuotation || waitsForApproval ? 0 : item.reservedQuantity,
               unitPrice: item.unitPrice,
               discountTotal: item.discountTotal,
               taxRate: item.taxRate,
@@ -756,29 +762,25 @@ export class OrdersService {
           throw new BadRequestException('The credit sale must be approved before sending.');
         }
 
-        if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
-          for (const item of [...order.items].sort((left, right) =>
-            (left.productId ?? '').localeCompare(right.productId ?? ''),
-          )) {
-            if (!item.productId || !item.product?.trackInventory) continue;
-            const quantity = Number(item.quantity);
-            const changed = await tx.$executeRaw`
-              UPDATE "Product"
-              SET "reservedStock" = "reservedStock" + ${quantity}
-              WHERE "id" = ${item.productId}
-                AND "tenantId" = ${tenantId}
-                AND ("stock" - "reservedStock") >= ${quantity}
-            `;
-            if (changed !== 1) {
-              throw new BadRequestException(
-                `Insufficient available stock for ${item.description}.`,
-              );
-            }
-            await tx.salesOrderItem.update({
-              where: { id: item.id },
-              data: { reservedQuantity: quantity },
-            });
-          }
+        await reserveOrderStock(
+          tx,
+          tenantId,
+          order.inventorySource,
+          order.items.map((item) => ({
+            productId: item.productId,
+            description: item.description,
+            quantity: Number(item.quantity),
+            trackInventory: item.product?.trackInventory ?? false,
+          })),
+        );
+        for (const item of order.items) {
+          if (!item.productId ||
+            (order.inventorySource !== ProductInventoryDestination.WAREHOUSE &&
+              !item.product?.trackInventory)) continue;
+          await tx.salesOrderItem.update({
+            where: { id: item.id },
+            data: { reservedQuantity: Number(item.quantity) },
+          });
         }
 
         const now = new Date();
@@ -906,9 +908,17 @@ export class OrdersService {
         : null;
 
       // Reserve stock for the order
-      if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
-        await this.reserveStockForOrder(tenantId, computed?.items ?? [], tx);
-      }
+      await reserveOrderStock(
+        tx,
+        tenantId,
+        order.inventorySource,
+        (computed?.items ?? []).map((item) => ({
+          productId: item.productId,
+          description: item.description,
+          quantity: item.quantity.toNumber(),
+          trackInventory: item.product?.trackInventory ?? false,
+        })),
+      );
 
       // Update the reservedQuantity of each item
       for (const item of order.items) {
@@ -918,7 +928,8 @@ export class OrdersService {
           data: {
             reservedQuantity:
               item.productId &&
-              order.inventorySource === ProductInventoryDestination.SALES_INVENTORY
+              (order.inventorySource === ProductInventoryDestination.WAREHOUSE ||
+                item.product?.trackInventory)
                 ? reservedQuantity
                 : 0,
           },
@@ -1229,7 +1240,10 @@ export class OrdersService {
         unitSnapshot: product.unit,
         taxRate: product.taxRate,
         quantity,
-        reservedQuantity: product.trackInventory ? quantity.toNumber() : 0,
+        reservedQuantity:
+          product.trackInventory || inventorySource === ProductInventoryDestination.WAREHOUSE
+            ? quantity.toNumber()
+            : 0,
         unitPrice: amounts.unitPrice,
         discountTotal: amounts.discountTotal,
         subtotal: amounts.subtotal,
@@ -1278,7 +1292,7 @@ export class OrdersService {
       if (!item.product) continue;
       const isWarehouseProduct = inventorySource === ProductInventoryDestination.WAREHOUSE;
       const availableStock = isWarehouseProduct
-        ? (warehouseQuantityByProduct.get(item.product.id) ?? 0)
+        ? (warehouseQuantityByProduct.get(item.product.id) ?? 0) - item.product.reservedStock
         : item.product.stock - item.product.reservedStock;
 
       if (
@@ -1515,33 +1529,6 @@ export class OrdersService {
       _sum: { balance: true },
     });
     return (aggregate._sum.balance ?? new Prisma.Decimal(0)).toDecimalPlaces(2);
-  }
-
-  private async reserveStockForOrder(
-    tenantId: string,
-    items: ComputedOrderItem[],
-    tx: Prisma.TransactionClient,
-  ) {
-    for (const item of [...items].sort((a, b) =>
-      (a.productId ?? '').localeCompare(b.productId ?? ''),
-    )) {
-      if (!item.product || !item.product.trackInventory || item.reservedQuantity <= 0) {
-        continue;
-      }
-
-      const updated = await tx.$executeRaw`
-        UPDATE "Product"
-        SET "reservedStock" = "reservedStock" + ${item.reservedQuantity}
-        WHERE "id" = ${item.product.id}
-          AND "tenantId" = ${tenantId}
-          AND "trackInventory" = TRUE
-          AND ("stock" - "reservedStock") >= ${item.reservedQuantity}
-      `;
-
-      if (updated !== 1) {
-        throw new BadRequestException(`Insufficient available stock for ${item.product.name}.`);
-      }
-    }
   }
 
   private async lockSalesOrder(
