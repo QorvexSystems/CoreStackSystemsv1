@@ -3,7 +3,6 @@
 import {
   Activity,
   BadgeDollarSign,
-  Barcode,
   Boxes,
   ChevronDown,
   ChevronRight,
@@ -75,7 +74,6 @@ export const navigation: NavigationItem[] = [
   },
   { name: 'Cotizaciones', href: '/quotations', icon: FileText, section: 'main' },
   { name: 'Productos', href: '/products', icon: Package, section: 'main' },
-  { name: 'Códigos de barras', href: '/barcodes', icon: Barcode, section: 'main' },
   { name: 'Clientes', href: '/customers', icon: Users, section: 'main' },
   { name: 'Facturas', href: '/invoices', icon: FileText, primary: true, section: 'main' },
   { name: 'Devoluciones', href: '/returns', icon: RotateCcw, primary: true, section: 'main' },

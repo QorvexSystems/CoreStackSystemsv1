@@ -11,7 +11,7 @@ import {
   formatQuantity,
   getAvailableStock,
   getProductInitials,
-  getCustomerUnitPrice,
+  getProductPrice,
   isStockLimited,
 } from './pos-utils';
 
@@ -111,8 +111,11 @@ export function PosProductGrid({
                   {product.category?.name ?? 'Sin departamento'}
                 </p>
                 <p className="mt-0.5 text-lg font-bold tracking-tight text-zinc-950">
-                  {formatCurrency(getCustomerUnitPrice(product, pricesIncludeTax))}
+                  {formatCurrency(getProductPrice(product))}
                 </p>
+                {!pricesIncludeTax ? (
+                  <p className="text-xs text-muted-foreground">Precio sin ITBIS</p>
+                ) : null}
               </div>
               <Button
                 type="button"
