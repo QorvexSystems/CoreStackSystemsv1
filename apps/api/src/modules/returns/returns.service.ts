@@ -964,17 +964,7 @@ export class ReturnsService {
         },
         orderBy: { description: 'asc' as const },
       },
-      storeCredit: {
-        include: {
-          redemptions: {
-            include: {
-              invoice: { select: { id: true, invoiceNumber: true } },
-            },
-            orderBy: { createdAt: 'desc' as const },
-          },
-        },
-      },
-    };
+    } satisfies Prisma.InvoiceInclude;
   }
 
   private returnRequestInclude() {
@@ -998,7 +988,17 @@ export class ReturnsService {
         },
         orderBy: { description: 'asc' as const },
       },
-    };
+      storeCredit: {
+        include: {
+          redemptions: {
+            include: {
+              invoice: { select: { id: true, invoiceNumber: true } },
+            },
+            orderBy: { createdAt: 'desc' as const },
+          },
+        },
+      },
+    } satisfies Prisma.ReturnRequestInclude;
   }
 }
 
