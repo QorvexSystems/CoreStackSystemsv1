@@ -670,6 +670,15 @@ async function main() {
     data: [
       {
         tenantId: allpaTenant.id,
+        documentType: InvoiceDocumentType.SALE_NOTE,
+        prefix: 'NV',
+        startNumber: 1,
+        endNumber: 999999999,
+        nextNumber: 1,
+        status: FiscalSequenceStatus.ACTIVE,
+      },
+      {
+        tenantId: allpaTenant.id,
         documentType: InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
         prefix: 'E32',
         startNumber: 1,

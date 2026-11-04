@@ -1,0 +1,1 @@
+ALTER TYPE "InvoiceDocumentType" ADD VALUE IF NOT EXISTS 'SALE_NOTE';

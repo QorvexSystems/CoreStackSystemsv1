@@ -13,8 +13,6 @@ import {
 } from 'class-validator';
 
 const supportedFiscalDocumentTypes = [
-  InvoiceDocumentType.FISCAL_CREDIT_01,
-  InvoiceDocumentType.CONSUMER_02,
   InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
   InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
 ] as const;

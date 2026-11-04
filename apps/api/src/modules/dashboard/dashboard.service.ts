@@ -428,8 +428,8 @@ export class DashboardService {
           tenantId,
           documentType: {
             in: [
-              InvoiceDocumentType.FISCAL_CREDIT_01,
-              InvoiceDocumentType.CONSUMER_02,
+              InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
+              InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
             ],
           },
           status: {
@@ -732,16 +732,17 @@ export class DashboardService {
         createdAt: log.createdAt,
       })),
       fiscalSequenceAlerts: fiscalSequences
-        .filter((sequence, index, allSequences) =>
-          sequence.status === FiscalSequenceStatus.ACTIVE ||
-          !allSequences.some(
-            (candidate) =>
-              candidate.documentType === sequence.documentType &&
-              candidate.status === FiscalSequenceStatus.ACTIVE,
-          ) &&
-            allSequences.findIndex(
-              (candidate) => candidate.documentType === sequence.documentType,
-            ) === index,
+        .filter(
+          (sequence, index, allSequences) =>
+            sequence.status === FiscalSequenceStatus.ACTIVE ||
+            (!allSequences.some(
+              (candidate) =>
+                candidate.documentType === sequence.documentType &&
+                candidate.status === FiscalSequenceStatus.ACTIVE,
+            ) &&
+              allSequences.findIndex(
+                (candidate) => candidate.documentType === sequence.documentType,
+              ) === index),
         )
         .map((sequence) => {
           const total = sequence.endNumber - sequence.startNumber + 1;
@@ -762,14 +763,18 @@ export class DashboardService {
             threshold,
             validUntil: sequence.validUntil,
             status: sequence.status,
-            severity: expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
-              ? 'critical'
-              : 'warning',
+            severity:
+              expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
+                ? 'critical'
+                : 'warning',
             expired,
             exhausted,
           };
         })
-        .filter((sequence) => sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold),
+        .filter(
+          (sequence) =>
+            sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold,
+        ),
       employeeSummary: {
         activeEmployees,
         openCashSessions,
@@ -843,7 +848,8 @@ export class DashboardService {
       generatedAt: new Date(),
       productCount: products.length,
       productsWithSales: ranking.mostSold.filter((product) => product.quantitySold > 0).length,
-      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0).length,
+      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0)
+        .length,
       mostSold: ranking.mostSold,
       leastSold: ranking.leastSold,
     };
@@ -1017,11 +1023,19 @@ export class DashboardService {
     return {
       mostSold: [...ranking].sort((first, second) => {
         const quantityDiff = second.quantitySold - first.quantitySold;
-        return quantityDiff || second.grossAmount - first.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          second.grossAmount - first.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
       leastSold: [...ranking].sort((first, second) => {
         const quantityDiff = first.quantitySold - second.quantitySold;
-        return quantityDiff || first.grossAmount - second.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          first.grossAmount - second.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
     };
   }
@@ -1066,10 +1080,7 @@ export class DashboardService {
         overdueBalance += balance;
       } else if (dueDateKey === boundaries.todayKey) {
         dueTodayCount += 1;
-      } else if (
-        dueDateKey >= boundaries.tomorrowKey &&
-        dueDateKey < boundaries.dueSoonEndKey
-      ) {
+      } else if (dueDateKey >= boundaries.tomorrowKey && dueDateKey < boundaries.dueSoonEndKey) {
         dueSoonCount += 1;
       }
     }

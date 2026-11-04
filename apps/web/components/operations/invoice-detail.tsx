@@ -39,7 +39,27 @@ export function InvoiceDetail({
   useEffect(() => {
     if (printMode && autoPrint && invoice && !autoPrintTriggeredRef.current) {
       autoPrintTriggeredRef.current = true;
-      window.setTimeout(() => window.print(), 500);
+      void (async () => {
+        const imagesReady = Promise.all(
+          Array.from(document.images).map((image) =>
+            image.complete
+              ? Promise.resolve()
+              : new Promise<void>((resolve) => {
+                  image.addEventListener('load', () => resolve(), { once: true });
+                  image.addEventListener('error', () => resolve(), { once: true });
+                }),
+          ),
+        );
+        await Promise.race([
+          Promise.all([document.fonts?.ready ?? Promise.resolve(), imagesReady]),
+          new Promise<void>((resolve) => window.setTimeout(resolve, 1200)),
+        ]);
+        await new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+        );
+        window.focus();
+        window.print();
+      })();
     }
   }, [autoPrint, invoice, printMode]);
 
@@ -88,7 +108,10 @@ export function InvoiceDetail({
       />
       {!['DRAFT', 'CANCELLED', 'VOID', 'VOIDED'].includes(invoice.status) ? (
         <div className="flex justify-end">
-          <Button onClick={() => setEmailOpen(true)}><Mail className="h-4 w-4" />Enviar factura por email</Button>
+          <Button onClick={() => setEmailOpen(true)}>
+            <Mail className="h-4 w-4" />
+            Enviar factura por email
+          </Button>
         </div>
       ) : null}
       <Card>
@@ -175,11 +198,20 @@ function Receipt({
       <div className="border-y border-dashed border-zinc-400 py-2">
         <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
         <ReceiptRow
-          label={invoice.eNcf ? 'e-NCF' : 'NCF'}
+          label={
+            invoice.documentType === 'SALE_NOTE'
+              ? 'Secuencia'
+              : invoice.eNcf
+                ? 'e-NCF'
+                : 'NCF'
+          }
           value={fiscalNumber}
           valueClassName="font-semibold"
         />
-        <ReceiptRow label="Factura interna" value={invoice.invoiceNumber} />
+        <ReceiptRow
+          label={invoice.documentType === 'SALE_NOTE' ? 'Factura' : 'Factura interna'}
+          value={invoice.invoiceNumber}
+        />
         <ReceiptRow
           label="Fecha de emisión"
           value={formatInvoiceDateTime(invoice.issuedAt ?? invoice.createdAt)}
@@ -292,6 +324,7 @@ function ReceiptRow({
 }
 
 function getInvoiceDocumentTitle(documentType: string) {
+  if (documentType === 'SALE_NOTE') return 'Nota de venta';
   if (documentType === 'FISCAL_CREDIT_01') return 'Factura de crédito fiscal';
   if (documentType === 'FISCAL_CREDIT_ELECTRONIC_31')
     return 'Factura de crédito fiscal electrónica';

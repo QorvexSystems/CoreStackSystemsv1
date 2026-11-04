@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateFiscalSequenceDto } from './dto/create-fiscal-sequence.dto';
 
 const fiscalDocumentConfig: Record<InvoiceDocumentType, { prefix: string; digits: number }> = {
+  [InvoiceDocumentType.SALE_NOTE]: { prefix: 'NV', digits: 10 },
   [InvoiceDocumentType.FISCAL_CREDIT_01]: { prefix: 'B01', digits: 8 },
   [InvoiceDocumentType.CONSUMER_02]: { prefix: 'B02', digits: 8 },
   [InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31]: { prefix: 'E31', digits: 10 },
@@ -41,7 +42,15 @@ export class FiscalSequencesService {
   async findAll(tenantId: string) {
     const [sequences, tenant] = await Promise.all([
       this.prisma.fiscalSequence.findMany({
-        where: { tenantId },
+        where: {
+          tenantId,
+          documentType: {
+            in: [
+              InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
+              InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
+            ],
+          },
+        },
         orderBy: [{ documentType: 'asc' }, { createdAt: 'asc' }],
       }),
       this.prisma.tenant.findUnique({
@@ -64,8 +73,6 @@ export class FiscalSequencesService {
         tenantId,
         documentType: {
           in: [
-            InvoiceDocumentType.FISCAL_CREDIT_01,
-            InvoiceDocumentType.CONSUMER_02,
             InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
             InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
           ],
@@ -127,24 +134,6 @@ export class FiscalSequencesService {
           sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold,
       );
 
-    if (!sequences.some((sequence) => sequence.documentType === InvoiceDocumentType.CONSUMER_02)) {
-      alerts.unshift({
-        id: 'missing-consumer-02-sequence',
-        documentType: InvoiceDocumentType.CONSUMER_02,
-        prefix: 'B02',
-        nextNumber: 0,
-        endNumber: 0,
-        remaining: 0,
-        threshold: 0,
-        validUntil: null,
-        status: FiscalSequenceStatus.EXHAUSTED,
-        severity: 'critical',
-        expired: false,
-        exhausted: false,
-        missing: true,
-      });
-    }
-
     return alerts;
   }
 
@@ -180,7 +169,6 @@ export class FiscalSequencesService {
 
     const validUntil = dto.validUntil ? this.parseValidUntil(dto.validUntil) : null;
     const requiresDgiiAuthorization =
-      dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_01 ||
       dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31;
     if (requiresDgiiAuthorization && !validUntil) {
       throw new BadRequestException(

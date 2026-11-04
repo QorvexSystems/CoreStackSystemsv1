@@ -453,24 +453,38 @@ export class WorkshopService {
   }
 
   async convertAppointmentToReception(tenantId: string, userId: string, id: string) {
-    const appointment = await this.getAppointment(tenantId, id);
-    if (appointment.convertedTicketId) {
-      throw new BadRequestException('Esta cita ya fue convertida en una recepción.');
-    }
-    const receivableStatuses: WorkshopAppointmentStatus[] = [
-      WorkshopAppointmentStatus.SCHEDULED,
-      WorkshopAppointmentStatus.CONFIRMED,
-      WorkshopAppointmentStatus.ARRIVED,
-    ];
-    if (!receivableStatuses.includes(appointment.status)) {
-      throw new BadRequestException(
-        'Solo una cita programada, confirmada o llegada puede recibirse.',
-      );
-    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "WorkshopAppointment"
+        WHERE "id" = ${id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `;
+      if (!locked.length) throw new NotFoundException('Cita no encontrada.');
 
-    const ticket = await this.prisma.$transaction(async (tx) => {
-      const sequence = await tx.workshopTicket.count({ where: { tenantId } });
-      const ticketNumber = `OT-${String(sequence + 1).padStart(6, '0')}`;
+      const appointment = await tx.workshopAppointment.findUniqueOrThrow({
+        where: { id },
+        include: appointmentInclude,
+      });
+      if (appointment.convertedTicketId) {
+        const existingTicket = await tx.workshopTicket.findFirstOrThrow({
+          where: { id: appointment.convertedTicketId, tenantId },
+          include: ticketInclude,
+        });
+        return { ticket: existingTicket, created: false };
+      }
+
+      const receivableStatuses: WorkshopAppointmentStatus[] = [
+        WorkshopAppointmentStatus.SCHEDULED,
+        WorkshopAppointmentStatus.CONFIRMED,
+        WorkshopAppointmentStatus.ARRIVED,
+      ];
+      if (!receivableStatuses.includes(appointment.status)) {
+        throw new BadRequestException(
+          'Solo una cita programada, confirmada o llegada puede recibirse.',
+        );
+      }
+
+      const ticketNumber = await this.nextWorkshopTicketNumber(tx, tenantId);
       const promisedAt = new Date(
         appointment.startsAt.getTime() + appointment.estimatedMinutes * 60 * 1000,
       );
@@ -509,17 +523,19 @@ export class WorkshopService {
           convertedTicketId: createdTicket.id,
         },
       });
-      return createdTicket;
+      return { ticket: createdTicket, created: true };
     });
-    await this.audit.log({
-      tenantId,
-      userId,
-      action: 'WORKSHOP_APPOINTMENT_CONVERTED_TO_RECEPTION',
-      entity: 'WorkshopAppointment',
-      entityId: id,
-      metadata: { ticketId: ticket.id, ticketNumber: ticket.ticketNumber },
-    });
-    return ticket;
+    if (result.created) {
+      await this.audit.log({
+        tenantId,
+        userId,
+        action: 'WORKSHOP_APPOINTMENT_CONVERTED_TO_RECEPTION',
+        entity: 'WorkshopAppointment',
+        entityId: id,
+        metadata: { ticketId: result.ticket.id, ticketNumber: result.ticket.ticketNumber },
+      });
+    }
+    return result.ticket;
   }
 
   async createReception(
@@ -1095,50 +1111,50 @@ export class WorkshopService {
       );
     }
     const totals = this.calculateTotals(lines);
-    const sequence = await this.prisma.workshopTicket.count({ where: { tenantId } });
-    const ticketNumber = `OT-${String(sequence + 1).padStart(6, '0')}`;
-
     try {
-      const ticket = await this.prisma.workshopTicket.create({
-        data: {
-          tenantId,
-          customerId: dto.customerId,
-          vehicleId: dto.vehicleId,
-          ticketNumber,
-          complaint: dto.complaint.trim(),
-          priority: dto.priority,
-          diagnosis: this.cleanOptional(dto.diagnosis),
-          internalNotes: this.cleanOptional(dto.internalNotes),
-          customerNotes: this.cleanOptional(dto.customerNotes),
-          promisedAt: dto.promisedAt ? new Date(dto.promisedAt) : undefined,
-          estimatedTotal: this.money(dto.estimatedTotal ?? totals.total),
-          laborTotal: totals.laborTotal,
-          partsTotal: totals.partsTotal,
-          total: totals.total,
-          createdById: userId,
-          statusEvents: {
-            create: {
-              tenantId,
-              toStatus: WorkshopTicketStatus.RECEIVED,
-              note: 'Orden de trabajo creada.',
-              createdById: userId,
+      const ticket = await this.prisma.$transaction(async (tx) => {
+        const ticketNumber = await this.nextWorkshopTicketNumber(tx, tenantId);
+        return tx.workshopTicket.create({
+          data: {
+            tenantId,
+            customerId: dto.customerId,
+            vehicleId: dto.vehicleId,
+            ticketNumber,
+            complaint: dto.complaint.trim(),
+            priority: dto.priority,
+            diagnosis: this.cleanOptional(dto.diagnosis),
+            internalNotes: this.cleanOptional(dto.internalNotes),
+            customerNotes: this.cleanOptional(dto.customerNotes),
+            promisedAt: dto.promisedAt ? new Date(dto.promisedAt) : undefined,
+            estimatedTotal: this.money(dto.estimatedTotal ?? totals.total),
+            laborTotal: totals.laborTotal,
+            partsTotal: totals.partsTotal,
+            total: totals.total,
+            createdById: userId,
+            statusEvents: {
+              create: {
+                tenantId,
+                toStatus: WorkshopTicketStatus.RECEIVED,
+                note: 'Orden de trabajo creada.',
+                createdById: userId,
+              },
+            },
+            assignments: { create: (dto.mechanicIds ?? []).map((employeeId) => ({ employeeId })) },
+            lines: { create: this.lineData(lines) },
+            areaFindings: {
+              create: (dto.areaFindings ?? []).map((finding) => ({
+                tenantId,
+                areaId: finding.areaId.trim(),
+                areaLabel: finding.areaLabel.trim(),
+                view: finding.view,
+                condition: finding.condition,
+                finding: this.cleanOptional(finding.finding),
+                notes: this.cleanOptional(finding.notes),
+              })),
             },
           },
-          assignments: { create: (dto.mechanicIds ?? []).map((employeeId) => ({ employeeId })) },
-          lines: { create: this.lineData(lines) },
-          areaFindings: {
-            create: (dto.areaFindings ?? []).map((finding) => ({
-              tenantId,
-              areaId: finding.areaId.trim(),
-              areaLabel: finding.areaLabel.trim(),
-              view: finding.view,
-              condition: finding.condition,
-              finding: this.cleanOptional(finding.finding),
-              notes: this.cleanOptional(finding.notes),
-            })),
-          },
-        },
-        include: ticketInclude,
+          include: ticketInclude,
+        });
       });
       await this.audit.log({
         tenantId,
@@ -1146,7 +1162,11 @@ export class WorkshopService {
         action: 'WORKSHOP_TICKET_CREATED',
         entity: 'WorkshopTicket',
         entityId: ticket.id,
-        metadata: { ticketNumber, vehicleId: dto.vehicleId, mechanicIds: dto.mechanicIds ?? [] },
+        metadata: {
+          ticketNumber: ticket.ticketNumber,
+          vehicleId: dto.vehicleId,
+          mechanicIds: dto.mechanicIds ?? [],
+        },
       });
       return ticket;
     } catch (error) {
@@ -3190,6 +3210,20 @@ export class WorkshopService {
     if (status === 'READY_FOR_DELIVERY') return { completedAt: now };
     if (status === 'CANCELLED') return { cancelledAt: now };
     return {};
+  }
+
+  private async nextWorkshopTicketNumber(tx: Prisma.TransactionClient, tenantId: string) {
+    await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+    const [result] = await tx.$queryRaw<Array<{ maxNumber: number }>>`
+      SELECT COALESCE(
+        MAX((SUBSTRING("ticketNumber" FROM '^OT-([0-9]+)'))::integer),
+        0
+      )::integer AS "maxNumber"
+      FROM "WorkshopTicket"
+      WHERE "tenantId" = ${tenantId}
+    `;
+    const nextNumber = Number(result?.maxNumber ?? 0) + 1;
+    return `OT-${String(nextNumber).padStart(6, '0')}`;
   }
 
   private generateWorkshopOrderNumber(ticketNumber: string) {

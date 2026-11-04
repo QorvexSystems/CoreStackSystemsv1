@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { Customer } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
+import { getAllowedPosDocumentTypes } from '@/lib/pos-document-type';
 import {
   formatCurrencyInput,
   formatCurrencyInputFromNumber,
@@ -19,7 +20,6 @@ type PosPaymentPanelProps = {
   customers: Customer[];
   customerId: string;
   documentType: string;
-  electronicInvoiceRequested: boolean;
   requiresE32Recipient: boolean;
   fiscalDocumentType: 'RNC' | 'CEDULA';
   fiscalDocumentNumber: string;
@@ -49,7 +49,6 @@ export function PosPaymentPanel({
   customers,
   customerId,
   documentType,
-  electronicInvoiceRequested,
   requiresE32Recipient,
   fiscalDocumentType,
   fiscalDocumentNumber,
@@ -80,12 +79,11 @@ export function PosPaymentPanel({
     totals.received < totals.requiredPayment;
   const cashPayment = paymentMethod === 'CASH';
   const creditSale = salePaymentMode === 'CREDIT';
-  const requiresFiscalDocument = ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(
-    documentType,
-  );
+  const requiresFiscalDocument = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
   const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
   const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
-  const fiscalLabel = requiresRnc ? 'E31' : requiresE32Recipient ? 'E32' : 'B01';
+  const fiscalLabel = requiresRnc ? 'E31' : 'E32';
+  const documentTypes = getAllowedPosDocumentTypes(paymentMethod);
 
   return (
     <div className="space-y-2">
@@ -124,26 +122,17 @@ export function PosPaymentPanel({
               onChange={(event) => onDocumentTypeChange(event.target.value)}
               className="h-8 w-full rounded-md border border-input bg-card px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {electronicInvoiceRequested ? (
-                <>
-                  <option value="CONSUMER_ELECTRONIC_32">Factura de consumo electrónica E32</option>
-                  <option value="FISCAL_CREDIT_ELECTRONIC_31">
-                    Factura de crédito fiscal electrónica E31
-                  </option>
-                </>
-              ) : (
-                <>
-                  <option value="CONSUMER_02">Factura de consumo B02</option>
-                  <option value="FISCAL_CREDIT_01">Factura de crédito fiscal B01</option>
-                </>
-              )}
+              {documentTypes.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
-            {electronicInvoiceRequested ? (
-              <p className="text-xs text-muted-foreground">
-                Esta orden solicita e-CF; la copia se enviará al correo configurado cuando Resend
-                esté activo.
-              </p>
-            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {paymentMethod === 'CASH'
+                ? 'Efectivo permite Nota de venta o Fiscal E31.'
+                : 'Este método permite Consumo E32 o Fiscal E31.'}
+            </p>
           </div>
 
           <div className="space-y-1">
@@ -281,7 +270,11 @@ export function PosPaymentPanel({
             onChange={(event) => onAmountReceivedChange(sanitizeCurrencyInput(event.target.value))}
             onBlur={(event) => onAmountReceivedChange(formatCurrencyInput(event.target.value))}
             onFocus={(event) => event.currentTarget.select()}
-            placeholder={totals.requiredPayment ? formatCurrencyInputFromNumber(totals.requiredPayment) : '0.00'}
+            placeholder={
+              totals.requiredPayment
+                ? formatCurrencyInputFromNumber(totals.requiredPayment)
+                : '0.00'
+            }
             className="h-14 text-2xl font-semibold"
           />
           <p className="text-xs text-muted-foreground">
@@ -325,19 +318,42 @@ function PaymentTotalsSummary({
   return (
     <div className="rounded-md border border-zinc-200 bg-zinc-50/60 p-2">
       <div className="space-y-1 text-[11px]">
-        <div className="flex justify-between"><span>Subtotal</span><span>{formatCurrency(totals.subtotal)}</span></div>
-        <div className="flex justify-between"><span>Descuento</span><span>{formatCurrency(totals.discount)}</span></div>
-        <div className="flex justify-between"><span>ITBIS</span><span>{formatCurrency(totals.tax)}</span></div>
-        <div className="flex justify-between border-t border-zinc-200 pt-1.5 text-sm font-bold text-zinc-950"><span>Total</span><span>{formatCurrency(totals.total)}</span></div>
+        <div className="flex justify-between">
+          <span>Subtotal</span>
+          <span>{formatCurrency(totals.subtotal)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Descuento</span>
+          <span>{formatCurrency(totals.discount)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>ITBIS</span>
+          <span>{formatCurrency(totals.tax)}</span>
+        </div>
+        <div className="flex justify-between border-t border-zinc-200 pt-1.5 text-sm font-bold text-zinc-950">
+          <span>Total</span>
+          <span>{formatCurrency(totals.total)}</span>
+        </div>
         {creditSale ? (
           <>
-            <div className="flex justify-between font-semibold text-sky-800"><span>Inicial a cobrar</span><span>{formatCurrency(totals.requiredPayment)}</span></div>
-            <div className="flex justify-between font-semibold text-amber-800"><span>Saldo pendiente</span><span>{formatCurrency(totals.remainingBalance)}</span></div>
+            <div className="flex justify-between font-semibold text-sky-800">
+              <span>Inicial a cobrar</span>
+              <span>{formatCurrency(totals.requiredPayment)}</span>
+            </div>
+            <div className="flex justify-between font-semibold text-amber-800">
+              <span>Saldo pendiente</span>
+              <span>{formatCurrency(totals.remainingBalance)}</span>
+            </div>
           </>
         ) : null}
-        <div className="flex justify-between font-semibold text-success"><span>Devuelta</span><span>{formatCurrency(totals.change)}</span></div>
+        <div className="flex justify-between font-semibold text-success">
+          <span>Devuelta</span>
+          <span>{formatCurrency(totals.change)}</span>
+        </div>
       </div>
-      {message ? <p className="mt-1.5 line-clamp-1 text-[10px] text-muted-foreground">{message}</p> : null}
+      {message ? (
+        <p className="mt-1.5 line-clamp-1 text-[10px] text-muted-foreground">{message}</p>
+      ) : null}
     </div>
   );
 }
@@ -353,7 +369,12 @@ function CompleteSaleAction({
 }) {
   return (
     <div>
-      <Button type="button" className="h-10 w-full text-xs font-bold" disabled={disabled} onClick={onComplete}>
+      <Button
+        type="button"
+        className="h-10 w-full text-xs font-bold"
+        disabled={disabled}
+        onClick={onComplete}
+      >
         <ReceiptText className="h-4 w-4" />
         {isCompleting ? 'Facturando...' : 'Facturar e imprimir'}
       </Button>

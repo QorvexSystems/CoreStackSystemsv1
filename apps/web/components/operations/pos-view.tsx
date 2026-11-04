@@ -49,6 +49,11 @@ import { hasPermission, isAdminSession } from '@/lib/authorization';
 import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
 import { translateStatus } from '@/lib/display-labels';
 import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
+import {
+  getDefaultPosDocumentType,
+  isElectronicPosDocument,
+  normalizePosDocumentType,
+} from '@/lib/pos-document-type';
 import { BarcodeInput } from './pos/barcode-input';
 import {
   clearCurrencyInput,
@@ -97,13 +102,11 @@ export function PosView() {
   const knownReadyOrdersRef = useRef<{ cashSessionId: string; ids: Set<string> } | null>(null);
 
   const [customerId, setCustomerId] = useState('');
-  const [documentType, setDocumentType] = useState('CONSUMER_02');
+  const [documentType, setDocumentType] = useState('SALE_NOTE');
   const [fiscalDocumentType, setFiscalDocumentType] = useState<'RNC' | 'CEDULA'>('RNC');
   const [fiscalDocumentNumber, setFiscalDocumentNumber] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [splitPayments, setSplitPayments] = useState<SplitPaymentRow[]>([]);
-  const [directElectronic, setDirectElectronic] = useState(false);
-  const [directRecipientEmail, setDirectRecipientEmail] = useState('');
   const [amountReceived, setAmountReceived] = useState(clearCurrencyInput());
   const [barcode, setBarcode] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
@@ -142,9 +145,7 @@ export function PosView() {
     queryFn: () => getCashSessions(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session && isAdminSession(session)),
   });
-  const canCreateDirectSale = Boolean(
-    session && hasPermission(session, 'pos.sell'),
-  );
+  const canCreateDirectSale = Boolean(session && hasPermission(session, 'pos.sell'));
   const isAdmin = isAdminSession(session);
   const productsQuery = useQuery({
     queryKey: ['pos-products-search', session?.tenantId, search],
@@ -166,16 +167,13 @@ export function PosView() {
 
   const currentCashSession = currentSessionQuery.data;
   const canUsePos = Boolean(session && hasPermission(session, 'pos.sell'));
-  const canOpenCashSession =
-    Boolean(session && hasPermission(session, 'cash.open'));
+  const canOpenCashSession = Boolean(session && hasPermission(session, 'cash.open'));
   const canCloseCashSession = Boolean(session && hasPermission(session, 'cash.close'));
   const cartReadOnly = Boolean(loadedOrder);
   const readyOrders = (pendingOrdersQuery.data ?? []).filter((order) =>
     ['SENT_TO_CASHIER', 'IN_CASHIER'].includes(order.status),
   );
-  const electronicInvoiceRequested = loadedOrder
-    ? loadedOrder.electronicInvoiceRequested
-    : directElectronic;
+  const electronicInvoiceRequested = isElectronicPosDocument(documentType);
   const todayLabel = new Intl.DateTimeFormat('es-DO', {
     weekday: 'long',
     day: 'numeric',
@@ -312,9 +310,7 @@ export function PosView() {
     : undefined;
   const fiscalCustomerMatchesOrder =
     !loadedOrder?.customerId || fiscalCustomer?.id === loadedOrder.customerId;
-  const requiresFiscalDocument = ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(
-    documentType,
-  );
+  const requiresFiscalDocument = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
   const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
   const requiresE32Recipient = documentType === 'CONSUMER_ELECTRONIC_32' && totals.total >= 250000;
   const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
@@ -332,11 +328,7 @@ export function PosView() {
     (Boolean(loadedOrder) || canCreateDirectSale) &&
     (paymentMethod !== 'MIXED' ||
       splitPaymentSummary(splitPayments, totals.requiredPayment).valid) &&
-    (paymentMethod !== 'TRANSFER' ||
-      Math.abs(totals.received - totals.requiredPayment) < 0.005) &&
-    (!directElectronic ||
-      Boolean(loadedOrder) ||
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(directRecipientEmail.trim())) &&
+    (paymentMethod !== 'TRANSFER' || Math.abs(totals.received - totals.requiredPayment) < 0.005) &&
     canCompleteFiscalDocument;
   const selectedOpenSession = (cashSessionsQuery.data ?? []).find(
     (cashSession) =>
@@ -480,9 +472,7 @@ export function PosView() {
             }),
         cashSessionId: currentCashSession?.id,
         orderId: loadedOrder?.id,
-        electronicInvoiceRequested: loadedOrder ? undefined : directElectronic,
-        ecfRecipientEmail:
-          !loadedOrder && directElectronic ? directRecipientEmail.trim() : undefined,
+        electronicInvoiceRequested,
         items: loadedOrder
           ? undefined
           : cart.map((item) => ({
@@ -491,32 +481,10 @@ export function PosView() {
             })),
       });
     },
-    onSuccess: async (invoice) => {
-      setMessage(
-        invoice.eNcf
-          ? `e-CF ${invoice.eNcf} creada. Su XML y correo de simulación quedaron pendientes de firma y Resend.`
-          : `Factura ${invoice.invoiceNumber} creada correctamente.`,
-      );
-      setCart([]);
-      checkoutKeyRef.current = null;
-      setPaymentMethod('CASH');
-      setSplitPayments([]);
-      setDirectElectronic(false);
-      setDirectRecipientEmail('');
-      setDocumentType('CONSUMER_02');
-      setLoadedOrder(null);
-      setFiscalDocumentNumber('');
-      setAmountReceived(clearCurrencyInput());
-      await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
-      await queryClient.invalidateQueries({ queryKey: ['products'] });
-      await queryClient.invalidateQueries({ queryKey: ['pos-products-search'] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['cash-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['employee-logs'] });
-      await invalidateCashQueries();
+    onSuccess: (invoice) => {
       toast.dismiss();
+      // Keep this as client-side navigation. A full page unload activates the open-cash
+      // session guard and the browser asks the cashier whether they want to leave.
       router.push(`/invoices/${invoice.id}/print?autoPrint=1`);
     },
     onError: (error) => {
@@ -561,9 +529,7 @@ export function PosView() {
         checkoutKeyRef.current = null;
         setPaymentMethod('CASH');
         setSplitPayments([]);
-        setDirectElectronic(false);
-        setDirectRecipientEmail('');
-        setDocumentType('CONSUMER_02');
+        setDocumentType('SALE_NOTE');
         setFiscalDocumentNumber('');
         setAmountReceived(clearCurrencyInput());
         setMessage(`Orden ${order.orderNumber} quitada. Ya puedes seleccionar otra.`);
@@ -676,6 +642,8 @@ export function PosView() {
 
   function changePaymentMethod(value: string) {
     setPaymentMethod(value);
+    setDocumentType((current) => normalizePosDocumentType(value, current));
+    setAmountReceived(clearCurrencyInput());
     if (value === 'MIXED')
       setSplitPayments([
         { id: crypto.randomUUID(), method: 'CASH', amount: '', amountReceived: '', reference: '' },
@@ -698,17 +666,14 @@ export function PosView() {
 
   function handleCustomerChange(nextCustomerId: string) {
     setCustomerId(nextCustomerId);
-    if (['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(documentType)) {
+    if (documentType === 'FISCAL_CREDIT_ELECTRONIC_31') {
       populateFiscalDocumentFromCustomer(nextCustomerId);
     }
   }
 
   function handleDocumentTypeChange(nextDocumentType: string) {
     setDocumentType(nextDocumentType);
-    if (
-      ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(nextDocumentType) &&
-      customerId
-    ) {
+    if (nextDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31' && customerId) {
       populateFiscalDocumentFromCustomer(customerId);
     }
     if (nextDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31') {
@@ -763,12 +728,10 @@ export function PosView() {
 
     setLoadedOrder(order);
     checkoutKeyRef.current = null;
-    setDirectElectronic(false);
-    setDirectRecipientEmail('');
     setPaymentMethod('CASH');
     setSplitPayments([]);
     setAmountReceived(clearCurrencyInput());
-    setDocumentType(order.electronicInvoiceRequested ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02');
+    setDocumentType(getDefaultPosDocumentType('CASH'));
     setFiscalDocumentType('RNC');
     setCustomerId(order.customerId ?? '');
     setFiscalDocumentNumber('');
@@ -880,7 +843,9 @@ export function PosView() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <p className="hidden text-xs font-medium capitalize text-muted-foreground sm:block">{todayLabel}</p>
+          <p className="hidden text-xs font-medium capitalize text-muted-foreground sm:block">
+            {todayLabel}
+          </p>
           {currentCashSession && canCreateDirectSale && !loadedOrder ? (
             <Button
               type="button"
@@ -888,7 +853,8 @@ export function PosView() {
               variant="outline"
               onClick={() => setCounterSaleOpen((current) => !current)}
             >
-              <Plus className="h-4 w-4" /> {counterSaleOpen ? 'Ocultar mostrador' : 'Venta de mostrador'}
+              <Plus className="h-4 w-4" />{' '}
+              {counterSaleOpen ? 'Ocultar mostrador' : 'Venta de mostrador'}
             </Button>
           ) : null}
         </div>
@@ -995,7 +961,9 @@ export function PosView() {
           isOpening={openSessionMutation.isPending}
           message={message}
           occupiedBy={
-            selectedRegisterOccupied ? (selectedOpenSession?.openedBy?.name ?? 'otro usuario') : null
+            selectedRegisterOccupied
+              ? (selectedOpenSession?.openedBy?.name ?? 'otro usuario')
+              : null
           }
           onRegisterChange={setSelectedRegisterId}
           onOpeningAmountChange={setOpeningAmount}
@@ -1080,7 +1048,9 @@ export function PosView() {
                   size="sm"
                   variant="outline"
                   onClick={clearCart}
-                  disabled={!cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending}
+                  disabled={
+                    !cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending
+                  }
                 >
                   Limpiar
                 </Button>
@@ -1099,81 +1069,45 @@ export function PosView() {
                   <div className="grid min-h-44 place-items-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-6 text-center">
                     <div>
                       <ReceiptText className="mx-auto h-8 w-8 text-zinc-400" />
-                      <p className="mt-3 font-semibold text-zinc-800">Selecciona una orden pendiente</p>
-                      <p className="mt-1 text-sm text-muted-foreground">Se cargará aquí el cobro actual sin salir de esta pantalla.</p>
+                      <p className="mt-3 font-semibold text-zinc-800">
+                        Selecciona una orden pendiente
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Se cargará aquí el cobro actual sin salir de esta pantalla.
+                      </p>
                     </div>
                   </div>
                 )}
-            {loadedOrder ? (
-                <label className="flex min-h-8 items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 text-xs">
-                <input type="checkbox" checked={loadedOrder.electronicInvoiceRequested} disabled />
-                <span>
-                  Factura electrónica (e-CF)
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {loadedOrder.electronicInvoiceRequested ? 'Solicitada en la orden' : 'No solicitada'}
-                  </span>
-                </span>
-              </label>
-            ) : canCreateDirectSale && cart.length ? (
-              <div className="space-y-3 rounded-md border bg-card p-4">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={directElectronic}
-                    onChange={(event) => {
-                      setDirectElectronic(event.target.checked);
-                      setDocumentType(
-                        event.target.checked ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02',
-                      );
-                    }}
+                {cart.length ? (
+                  <PosPaymentPanel
+                    customers={activeCustomers}
+                    customerId={customerId}
+                    documentType={documentType}
+                    requiresE32Recipient={requiresE32Recipient}
+                    fiscalDocumentType={fiscalDocumentType}
+                    fiscalDocumentNumber={fiscalDocumentNumber}
+                    fiscalDocumentValid={fiscalDocumentValid}
+                    fiscalCustomerName={fiscalCustomer?.name}
+                    paymentMethod={paymentMethod}
+                    splitPayments={splitPayments}
+                    onSplitPaymentsChange={setSplitPayments}
+                    salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
+                    dueDate={loadedOrder?.dueDate}
+                    customerLocked={Boolean(loadedOrder?.customerId)}
+                    amountReceived={amountReceived}
+                    totals={totals}
+                    message={message}
+                    canCompleteSale={canCompleteSale}
+                    isCompleting={completeSaleMutation.isPending}
+                    onCustomerChange={handleCustomerChange}
+                    onDocumentTypeChange={handleDocumentTypeChange}
+                    onFiscalDocumentTypeChange={handleFiscalDocumentTypeChange}
+                    onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
+                    onPaymentMethodChange={changePaymentMethod}
+                    onAmountReceivedChange={setAmountReceived}
+                    onCompleteSale={() => completeSaleMutation.mutate()}
                   />
-                  Factura electrónica (e-CF)
-                </label>
-                {directElectronic ? (
-                  <div className="space-y-2">
-                    <Label htmlFor="direct-ecf-email">Correo para la copia</Label>
-                    <Input
-                      id="direct-ecf-email"
-                      type="email"
-                      value={directRecipientEmail}
-                      onChange={(event) => setDirectRecipientEmail(event.target.value)}
-                      placeholder="cliente@correo.com"
-                    />
-                  </div>
                 ) : null}
-              </div>
-            ) : null}
-            {cart.length ? (
-              <PosPaymentPanel
-                customers={activeCustomers}
-                customerId={customerId}
-                documentType={documentType}
-                electronicInvoiceRequested={electronicInvoiceRequested}
-                requiresE32Recipient={requiresE32Recipient}
-                fiscalDocumentType={fiscalDocumentType}
-                fiscalDocumentNumber={fiscalDocumentNumber}
-                fiscalDocumentValid={fiscalDocumentValid}
-                fiscalCustomerName={fiscalCustomer?.name}
-                paymentMethod={paymentMethod}
-                splitPayments={splitPayments}
-                onSplitPaymentsChange={setSplitPayments}
-                salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
-                dueDate={loadedOrder?.dueDate}
-                customerLocked={Boolean(loadedOrder?.customerId)}
-                amountReceived={amountReceived}
-                totals={totals}
-                message={message}
-                canCompleteSale={canCompleteSale}
-                isCompleting={completeSaleMutation.isPending}
-                onCustomerChange={handleCustomerChange}
-                onDocumentTypeChange={handleDocumentTypeChange}
-                onFiscalDocumentTypeChange={handleFiscalDocumentTypeChange}
-                onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
-                onPaymentMethodChange={changePaymentMethod}
-                onAmountReceivedChange={setAmountReceived}
-                onCompleteSale={() => completeSaleMutation.mutate()}
-              />
-            ) : null}
               </CardContent>
             </Card>
 
@@ -1208,24 +1142,30 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
       <div className="flex items-start justify-between gap-3 bg-zinc-50/80 p-2.5">
         <div className="flex min-w-0 gap-3">
-          <div className={cn(
-            'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
-            vehicle ? 'bg-blue-50 text-blue-700' : 'bg-violet-50 text-violet-700',
-          )}>
+          <div
+            className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+              vehicle ? 'bg-blue-50 text-blue-700' : 'bg-violet-50 text-violet-700',
+            )}
+          >
             {vehicle ? <Wrench className="h-5 w-5" /> : <ShoppingBag className="h-5 w-5" />}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
-              <Badge variant={vehicle ? 'default' : 'outline'}>{vehicle ? 'Taller' : 'Mostrador'}</Badge>
+              <Badge variant={vehicle ? 'default' : 'outline'}>
+                {vehicle ? 'Taller' : 'Mostrador'}
+              </Badge>
             </div>
             {vehicle ? (
               <p className="mt-1 text-sm text-zinc-700">
-                {vehicle.make} {vehicle.model}{vehicle.year ? ` ${vehicle.year}` : ''} · {vehicle.licensePlate ?? 'Sin placa'}
+                {vehicle.make} {vehicle.model}
+                {vehicle.year ? ` ${vehicle.year}` : ''} · {vehicle.licensePlate ?? 'Sin placa'}
               </p>
             ) : null}
             <p className="mt-1 text-xs text-muted-foreground">
-              {order.workshopTicket?.ticketNumber ?? order.orderNumber} · {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
+              {order.workshopTicket?.ticketNumber ?? order.orderNumber} ·{' '}
+              {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
             </p>
           </div>
         </div>
@@ -1245,10 +1185,21 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
           <tbody>
             {order.items.map((item) => (
               <tr key={item.id} className="border-b border-zinc-100 last:border-0">
-                <td className="truncate px-3 py-1.5 font-medium text-zinc-800" title={item.description}>{item.description}</td>
-                <td className="px-2 py-1.5 text-right text-zinc-600">{Number(item.quantity).toLocaleString('es-DO')}</td>
-                <td className="px-2 py-1.5 text-right text-zinc-600">{formatCurrency(Number(item.unitPrice))}</td>
-                <td className="px-3 py-1.5 text-right font-semibold">{formatCurrency(Number(item.subtotal))}</td>
+                <td
+                  className="truncate px-3 py-1.5 font-medium text-zinc-800"
+                  title={item.description}
+                >
+                  {item.description}
+                </td>
+                <td className="px-2 py-1.5 text-right text-zinc-600">
+                  {Number(item.quantity).toLocaleString('es-DO')}
+                </td>
+                <td className="px-2 py-1.5 text-right text-zinc-600">
+                  {formatCurrency(Number(item.unitPrice))}
+                </td>
+                <td className="px-3 py-1.5 text-right font-semibold">
+                  {formatCurrency(Number(item.subtotal))}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1263,8 +1214,11 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
       </div>
       {order.paymentMode === 'CREDIT' ? (
         <div className="border-t border-sky-100 bg-sky-50 px-3.5 py-2 text-xs text-sky-900">
-          Crédito aprobado · Inicial <strong>{formatCurrency(Number(order.initialPaymentAmount))}</strong> · Saldo{' '}
-          <strong>{formatCurrency(Number(order.total) - Number(order.initialPaymentAmount))}</strong>
+          Crédito aprobado · Inicial{' '}
+          <strong>{formatCurrency(Number(order.initialPaymentAmount))}</strong> · Saldo{' '}
+          <strong>
+            {formatCurrency(Number(order.total) - Number(order.initialPaymentAmount))}
+          </strong>
         </div>
       ) : null}
     </div>
@@ -1367,11 +1321,13 @@ function SalesOrdersQueuePanel({
         </div>
         {filtersOpen ? (
           <div className="mb-3 flex flex-wrap gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2">
-            {([
-              ['ALL', 'Todos'],
-              ['WORKSHOP', 'Taller'],
-              ['COUNTER', 'Mostrador'],
-            ] as const).map(([value, label]) => (
+            {(
+              [
+                ['ALL', 'Todos'],
+                ['WORKSHOP', 'Taller'],
+                ['COUNTER', 'Mostrador'],
+              ] as const
+            ).map(([value, label]) => (
               <Button
                 key={value}
                 type="button"
@@ -1416,60 +1372,76 @@ function SalesOrdersQueuePanel({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 gap-3">
-                    <div className={cn(
-                      'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
-                      order.workshopTicket ? 'bg-blue-50 text-blue-700' : 'bg-violet-50 text-violet-700',
-                    )}>
-                      {order.workshopTicket ? <Wrench className="h-5 w-5" /> : <ShoppingBag className="h-5 w-5" />}
+                    <div
+                      className={cn(
+                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+                        order.workshopTicket
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'bg-violet-50 text-violet-700',
+                      )}
+                    >
+                      {order.workshopTicket ? (
+                        <Wrench className="h-5 w-5" />
+                      ) : (
+                        <ShoppingBag className="h-5 w-5" />
+                      )}
                     </div>
                     <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
-                      <Badge variant={order.workshopTicket ? 'default' : 'outline'}>
-                        {order.workshopTicket ? 'Orden de taller' : 'Mostrador'}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-zinc-950">{getOrderClientLabel(order)}</p>
+                        <Badge variant={order.workshopTicket ? 'default' : 'outline'}>
+                          {order.workshopTicket ? 'Orden de taller' : 'Mostrador'}
+                        </Badge>
+                        {order.paymentMode === 'CREDIT' ? (
+                          <Badge variant="outline">
+                            {order.creditApproval?.status === 'APPROVED'
+                              ? 'Crédito aprobado'
+                              : 'Crédito pendiente'}
+                          </Badge>
+                        ) : null}
+                        {order.sentToCashierAt ? (
+                          <Badge variant={getWaitingVariant(order)}>
+                            {getWaitingMinutes(order)} min
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {order.workshopTicket ? (
+                        <p className="mt-1 text-sm font-medium text-zinc-700">
+                          {order.workshopTicket.vehicle.make} {order.workshopTicket.vehicle.model}
+                          {order.workshopTicket.vehicle.year
+                            ? ` ${order.workshopTicket.vehicle.year}`
+                            : ''}
+                          {' · '}
+                          {order.workshopTicket.vehicle.licensePlate ?? 'Sin placa'}
+                        </p>
+                      ) : null}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {order.workshopTicket?.ticketNumber ?? order.orderNumber} ·{' '}
+                        {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
+                      </p>
+                      <p className="mt-2 line-clamp-2 text-sm text-zinc-600">
+                        {order.notes ||
+                          order.items
+                            .map((item) => item.description)
+                            .slice(0, 2)
+                            .join(' · ')}
+                      </p>
+                      {order.claimedBy ? (
+                        <p className="mt-1 text-xs text-warning">
+                          Tomada por {order.claimedBy.name}
+                          {order.claimedCashSession?.cashRegister.name
+                            ? ` en ${order.claimedCashSession.cashRegister.name}`
+                            : ''}
+                        </p>
+                      ) : null}
                       {order.paymentMode === 'CREDIT' ? (
-                        <Badge variant="outline">
-                          {order.creditApproval?.status === 'APPROVED'
-                            ? 'Crédito aprobado'
-                            : 'Crédito pendiente'}
-                        </Badge>
+                        <p className="mt-1 text-xs text-sky-800">
+                          Inicial {formatCurrency(Number(order.initialPaymentAmount))} · Saldo{' '}
+                          {formatCurrency(
+                            Number(order.total) - Number(order.initialPaymentAmount ?? 0),
+                          )}
+                        </p>
                       ) : null}
-                      {order.sentToCashierAt ? (
-                        <Badge variant={getWaitingVariant(order)}>
-                          {getWaitingMinutes(order)} min
-                        </Badge>
-                      ) : null}
-                    </div>
-                    {order.workshopTicket ? (
-                      <p className="mt-1 text-sm font-medium text-zinc-700">
-                        {order.workshopTicket.vehicle.make} {order.workshopTicket.vehicle.model}
-                        {order.workshopTicket.vehicle.year ? ` ${order.workshopTicket.vehicle.year}` : ''}
-                        {' · '}{order.workshopTicket.vehicle.licensePlate ?? 'Sin placa'}
-                      </p>
-                    ) : null}
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {order.workshopTicket?.ticketNumber ?? order.orderNumber} · {formatDateTime(order.sentToCashierAt ?? order.createdAt)}
-                    </p>
-                    <p className="mt-2 line-clamp-2 text-sm text-zinc-600">
-                      {order.notes || order.items.map((item) => item.description).slice(0, 2).join(' · ')}
-                    </p>
-                    {order.claimedBy ? (
-                      <p className="mt-1 text-xs text-warning">
-                        Tomada por {order.claimedBy.name}
-                        {order.claimedCashSession?.cashRegister.name
-                          ? ` en ${order.claimedCashSession.cashRegister.name}`
-                          : ''}
-                      </p>
-                    ) : null}
-                    {order.paymentMode === 'CREDIT' ? (
-                      <p className="mt-1 text-xs text-sky-800">
-                        Inicial {formatCurrency(Number(order.initialPaymentAmount))} · Saldo{' '}
-                        {formatCurrency(
-                          Number(order.total) - Number(order.initialPaymentAmount ?? 0),
-                        )}
-                      </p>
-                    ) : null}
                     </div>
                   </div>
                   <p className="shrink-0 text-base font-bold text-zinc-950">
@@ -1524,7 +1496,8 @@ function SalesOrdersQueuePanel({
           </div>
         )}
         <div className="mt-3 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
-          <ShieldCheck className="h-4 w-4 shrink-0" /> Solo se muestran órdenes aprobadas y listas para cobro.
+          <ShieldCheck className="h-4 w-4 shrink-0" /> Solo se muestran órdenes aprobadas y listas
+          para cobro.
         </div>
       </CardContent>
     </Card>
@@ -1556,24 +1529,32 @@ function CashStatusHeader({
         </div>
       </div>
       <div className="flex items-center gap-2 px-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><ShieldCheck className="h-4 w-4" /></div>
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+          <ShieldCheck className="h-4 w-4" />
+        </div>
         <div>
           <p className="text-xs text-muted-foreground">Responsable</p>
           <p className="font-semibold">{sessionName}</p>
         </div>
       </div>
       <div className="flex items-center gap-2 px-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><CalendarClock className="h-4 w-4" /></div>
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+          <CalendarClock className="h-4 w-4" />
+        </div>
         <div>
           <p className="text-xs text-muted-foreground">Apertura</p>
           <p className="font-semibold">{openedAt ? formatDateTime(openedAt) : 'Pendiente'}</p>
         </div>
       </div>
       <div className="flex items-center gap-2 px-3 py-2">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Banknote className="h-4 w-4" /></div>
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+          <Banknote className="h-4 w-4" />
+        </div>
         <div>
           <p className="text-xs text-muted-foreground">Caja / monto inicial</p>
-          <p className="font-semibold">{registerName ?? 'Sin caja'} - {formatCurrency(Number(openingAmount ?? 0))}</p>
+          <p className="font-semibold">
+            {registerName ?? 'Sin caja'} - {formatCurrency(Number(openingAmount ?? 0))}
+          </p>
         </div>
       </div>
     </div>
@@ -1759,14 +1740,19 @@ function CashCloseDialog({
     0,
   );
   const inflows = cashMovements
-    .filter((movement) => !['OPENING', 'CLOSING'].includes(movement.type) && !negativeTypes.has(movement.type))
+    .filter(
+      (movement) =>
+        !['OPENING', 'CLOSING'].includes(movement.type) && !negativeTypes.has(movement.type),
+    )
     .reduce((total, movement) => total + Number(movement.amount), 0);
   const outflows = cashMovements
     .filter((movement) => negativeTypes.has(movement.type))
     .reduce((total, movement) => total + Number(movement.amount), 0);
   const counted = parseCurrencyInput(closingAmount);
   const difference = counted - expected;
-  const invoiceCount = (cashSession?.invoices ?? []).filter((invoice) => invoice.status !== 'CANCELLED').length;
+  const invoiceCount = (cashSession?.invoices ?? []).filter(
+    (invoice) => invoice.status !== 'CANCELLED',
+  ).length;
 
   return (
     <ActionDialog
@@ -1795,7 +1781,10 @@ function CashCloseDialog({
       }
     >
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <CloseSummaryMetric label="Fondo inicial" value={formatCurrency(Number(cashSession?.openingAmount ?? 0))} />
+        <CloseSummaryMetric
+          label="Fondo inicial"
+          value={formatCurrency(Number(cashSession?.openingAmount ?? 0))}
+        />
         <CloseSummaryMetric label="Entradas en efectivo" value={formatCurrency(inflows)} />
         <CloseSummaryMetric label="Salidas en efectivo" value={formatCurrency(outflows)} />
         <CloseSummaryMetric label="Facturas emitidas" value={String(invoiceCount)} />
@@ -1805,9 +1794,13 @@ function CashCloseDialog({
           <span className="text-sm text-muted-foreground">Efectivo esperado</span>
           <strong className="text-lg">{formatCurrency(expected)}</strong>
         </div>
-        <Label className="mt-4 block" htmlFor="closing-dialog-amount">Efectivo contado</Label>
+        <Label className="mt-4 block" htmlFor="closing-dialog-amount">
+          Efectivo contado
+        </Label>
         <div className="relative mt-2">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">RD$</span>
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+            RD$
+          </span>
           <Input
             id="closing-dialog-amount"
             data-dialog-autofocus
@@ -1819,19 +1812,22 @@ function CashCloseDialog({
             className="h-12 pl-12 text-lg font-semibold"
           />
         </div>
-        <div className={cn(
-          'mt-3 flex items-center justify-between rounded-md px-3 py-2 text-sm',
-          Math.abs(difference) < 0.005
-            ? 'bg-emerald-50 text-emerald-800'
-            : 'bg-amber-50 text-amber-900',
-        )}>
+        <div
+          className={cn(
+            'mt-3 flex items-center justify-between rounded-md px-3 py-2 text-sm',
+            Math.abs(difference) < 0.005
+              ? 'bg-emerald-50 text-emerald-800'
+              : 'bg-amber-50 text-amber-900',
+          )}
+        >
           <span>Diferencia</span>
           <strong>{formatCurrency(difference)}</strong>
         </div>
       </div>
       {counted === 0 ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          El monto contado está en RD$0.00. Confirma solamente si la caja física realmente no tiene efectivo.
+          El monto contado está en RD$0.00. Confirma solamente si la caja física realmente no tiene
+          efectivo.
         </p>
       ) : null}
     </ActionDialog>
@@ -1868,7 +1864,8 @@ function getWaitingVariant(order: SalesOrder) {
 
 function getWaitingCardClass(order: SalesOrder, selected = false) {
   const minutes = getWaitingMinutes(order);
-  const base = 'cursor-pointer rounded-xl border p-3.5 outline-none transition focus-visible:ring-2 focus-visible:ring-primary/40';
+  const base =
+    'cursor-pointer rounded-xl border p-3.5 outline-none transition focus-visible:ring-2 focus-visible:ring-primary/40';
 
   if (selected) {
     return `${base} border-primary bg-primary/[0.06] shadow-sm`;

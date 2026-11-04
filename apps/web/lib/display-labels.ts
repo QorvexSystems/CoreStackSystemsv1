@@ -126,6 +126,7 @@ const documentTypeLabels: Record<string, string> = {
 };
 
 const invoiceDocumentTypeLabels: Record<string, string> = {
+  SALE_NOTE: 'Nota de venta',
   FISCAL_CREDIT_01: 'Factura de crédito fiscal B01',
   CONSUMER_02: 'Factura de consumo B02',
   CONSUMER_ELECTRONIC_32: 'Factura de consumo e-CF 32',

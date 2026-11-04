@@ -50,6 +50,7 @@ import { buildEcfSimulation } from './ecf-simulation';
 import { ResendService } from '../notifications/resend.service';
 import { createHash } from 'node:crypto';
 import { buildPaymentPlan } from './payment-plan';
+import { isElectronicPosDocument, resolvePosDocumentType } from './pos-document-type';
 
 const receiptInclude = {
   customer: true,
@@ -148,7 +149,7 @@ export class PosService {
     const computed = await this.computeSale(tenantId, dto.items ?? []);
 
     return {
-      documentType: dto.documentType ?? InvoiceDocumentType.CONSUMER_02,
+      documentType: resolvePosDocumentType(dto),
       paymentMethod: dto.paymentMethod,
       subtotal: computed.subtotal.toNumber(),
       discountTotal: computed.discountTotal.toNumber(),
@@ -226,23 +227,8 @@ export class PosService {
         throw new BadRequestException('Sales order totals are inconsistent and must be reviewed.');
       }
 
-      const electronicInvoiceRequested = order
-        ? order.electronicInvoiceRequested
-        : dto.electronicInvoiceRequested === true;
-      const documentType = electronicInvoiceRequested
-        ? dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
-          ? InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
-          : InvoiceDocumentType.CONSUMER_ELECTRONIC_32
-        : dto.documentType === InvoiceDocumentType.FISCAL_CREDIT_01
-          ? InvoiceDocumentType.FISCAL_CREDIT_01
-          : InvoiceDocumentType.CONSUMER_02;
-      if (dto.documentType && dto.documentType !== documentType) {
-        throw new BadRequestException(
-          'El comprobante seleccionado no corresponde al tipo local/electrónico solicitado.',
-        );
-      }
+      const documentType = resolvePosDocumentType(dto);
       const requiresFiscalCustomer =
-        documentType === InvoiceDocumentType.FISCAL_CREDIT_01 ||
         documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31;
       const requiresRnc = documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31;
       const requiresE32Recipient =
@@ -279,7 +265,7 @@ export class PosService {
               ? 'La factura E31 requiere el RNC del cliente.'
               : requiresE32Recipient
                 ? 'La factura E32 de RD$250,000 o más requiere el RNC o la cédula y nombre del comprador.'
-                : 'La factura B01 requiere el RNC o la cédula del cliente.',
+                : 'El comprobante seleccionado requiere identificar al cliente.',
           );
         }
 
@@ -307,7 +293,7 @@ export class PosService {
               ? 'No existe un cliente activo con ese RNC. Regístralo antes de emitir la E31.'
               : requiresE32Recipient
                 ? 'No existe un cliente activo con ese RNC o cédula. Regístralo antes de emitir la E32.'
-                : 'No existe un cliente activo con ese RNC o cédula. Regístralo antes de emitir la B01.',
+                : 'No existe un cliente activo con ese documento.',
           );
         }
 
@@ -409,9 +395,7 @@ export class PosService {
       const status = this.getInvoiceStatus(paidAmount, computed.total);
       const issuedAt = new Date();
       const fiscalNumber = this.formatFiscalNumber(sequence.prefix, sequence.number);
-      const isElectronicDocument =
-        documentType === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31 ||
-        documentType === InvoiceDocumentType.CONSUMER_ELECTRONIC_32;
+      const isElectronicDocument = isElectronicPosDocument(documentType);
       const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
       const invoiceNumber = `${this.invoicePrefix(tenant.slug)}-${fiscalNumber}`;
       const eNcf = isElectronicDocument ? fiscalNumber : null;
@@ -427,9 +411,12 @@ export class PosService {
           ncf: isElectronicDocument ? null : fiscalNumber,
           eNcf,
           status,
-          fiscalStatus: isElectronicDocument
-            ? InvoiceFiscalStatus.PENDING_SIGNATURE
-            : InvoiceFiscalStatus.SIGNED,
+          fiscalStatus:
+            documentType === InvoiceDocumentType.SALE_NOTE
+              ? InvoiceFiscalStatus.NOT_APPLICABLE
+              : isElectronicDocument
+                ? InvoiceFiscalStatus.PENDING_SIGNATURE
+                : InvoiceFiscalStatus.SIGNED,
           subtotal: computed.subtotal,
           taxTotal: computed.taxTotal,
           discountTotal: computed.discountTotal,
@@ -459,12 +446,6 @@ export class PosService {
               total: item.total,
             })),
           },
-        },
-        include: {
-          customer: true,
-          items: true,
-          payments: true,
-          electronicDocument: true,
         },
       });
 
@@ -499,35 +480,33 @@ export class PosService {
         }
       }
 
-      for (const part of payment.payments) {
-        await tx.payment.create({
-          data: {
-            tenantId,
-            invoiceId: invoice.id,
-            method: part.method,
-            amount: part.amount,
-            reference: part.reference,
-            status: PaymentStatus.COMPLETED,
-            userId: user.id,
-            cashSessionId: cashSession.id,
-            paidAt: issuedAt,
-          },
-        });
+      await tx.payment.createMany({
+        data: payment.payments.map((part) => ({
+          tenantId,
+          invoiceId: invoice.id,
+          method: part.method,
+          amount: part.amount,
+          reference: part.reference,
+          status: PaymentStatus.COMPLETED,
+          userId: user.id,
+          cashSessionId: cashSession.id,
+          paidAt: issuedAt,
+        })),
+      });
 
-        await tx.cashMovement.create({
-          data: {
-            tenantId,
-            cashSessionId: cashSession.id,
-            userId: user.id,
-            type: CashMovementType.SALE_PAYMENT,
-            amount: part.amount,
-            method: part.method,
-            reason: 'Pago de venta POS',
-            reference: invoice.invoiceNumber,
-            invoiceId: invoice.id,
-          },
-        });
-      }
+      await tx.cashMovement.createMany({
+        data: payment.payments.map((part) => ({
+          tenantId,
+          cashSessionId: cashSession.id,
+          userId: user.id,
+          type: CashMovementType.SALE_PAYMENT,
+          amount: part.amount,
+          method: part.method,
+          reason: 'Pago de venta POS',
+          reference: invoice.invoiceNumber,
+          invoiceId: invoice.id,
+        })),
+      });
 
       await tx.employeeActivityLog.createMany({
         data: [

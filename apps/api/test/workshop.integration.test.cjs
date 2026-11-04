@@ -13,6 +13,7 @@ const { InventoryService } = require('../dist/modules/inventory/inventory.servic
 const { ProductsService } = require('../dist/modules/products/products.service');
 const { CashService } = require('../dist/modules/cash/cash.service');
 const { buildPaymentPlan } = require('../dist/modules/pos/payment-plan');
+const { resolvePosDocumentType } = require('../dist/modules/pos/pos-document-type');
 const { Prisma } = require('@qorvex/database');
 const { taskTimeTotals } = require('../dist/modules/workshop/task-time');
 const { EmployeesService } = require('../dist/modules/employees/employees.service');
@@ -743,8 +744,8 @@ async function cashierFixture(f) {
   const sequence = await db.fiscalSequence.create({
     data: {
       tenantId: f.tenant.id,
-      documentType: 'CONSUMER_02',
-      prefix: 'B02',
+      documentType: 'SALE_NOTE',
+      prefix: 'NV',
       startNumber: 1,
       nextNumber: 1,
       endNumber: 10,
@@ -753,7 +754,7 @@ async function cashierFixture(f) {
   return { user: { ...user, memberships: [membership] }, cashSession, sequence };
 }
 
-test('OT → repuesto → Caja → factura B02 y pago → cierre entregado sin descontar dos veces', async () => {
+test('OT → repuesto → Caja → nota de venta y pago → cierre entregado sin descontar dos veces', async () => {
   const f = await fixture({ count: 1, stock: 1 });
   const c = await cashierFixture(f);
   const pos = new PosService(db, {
@@ -772,7 +773,7 @@ test('OT → repuesto → Caja → factura B02 y pago → cierre entregado sin d
   const payload = {
     orderId: order.id,
     cashSessionId: c.cashSession.id,
-    documentType: 'CONSUMER_02',
+    documentType: 'SALE_NOTE',
     paymentMethod: 'CASH',
     amountReceived: 200,
   };
@@ -789,7 +790,7 @@ test('OT → repuesto → Caja → factura B02 y pago → cierre entregado sin d
   );
   assert.equal(await db.invoice.count({ where: { tenantId: f.tenant.id } }), 0);
   const invoice = await pos.completeSale(f.tenant.id, c.user, payload);
-  assert.equal(invoice.ncf, 'B0200000001');
+  assert.equal(invoice.ncf, 'NV0000000001');
   assert.equal(invoice.status, 'PAID');
   assert.equal(invoice.total.toString(), '118');
   assert.equal(invoice.paidAmount.toString(), '118');
@@ -1039,13 +1040,37 @@ function directSale(f, c, overrides = {}) {
   return {
     checkoutKey: randomUUID(),
     cashSessionId: c.cashSession.id,
-    documentType: 'CONSUMER_02',
+    documentType: 'SALE_NOTE',
     paymentMethod: 'CASH',
     amountReceived: 118,
     items: [{ productId: f.products[0].id, quantity: 1 }],
     ...overrides,
   };
 }
+
+test('POS limita el comprobante según el método de pago', () => {
+  assert.equal(resolvePosDocumentType({ paymentMethod: 'CASH' }), 'SALE_NOTE');
+  assert.equal(resolvePosDocumentType({ paymentMethod: 'CARD' }), 'CONSUMER_ELECTRONIC_32');
+  assert.equal(
+    resolvePosDocumentType({
+      paymentMethod: 'CASH',
+      documentType: 'FISCAL_CREDIT_ELECTRONIC_31',
+    }),
+    'FISCAL_CREDIT_ELECTRONIC_31',
+  );
+  assert.throws(
+    () => resolvePosDocumentType({ paymentMethod: 'CASH', documentType: 'CONSUMER_ELECTRONIC_32' }),
+    /efectivo solo puedes emitir Nota de venta o Fiscal E31/,
+  );
+  assert.throws(
+    () => resolvePosDocumentType({ paymentMethod: 'CARD', documentType: 'SALE_NOTE' }),
+    /solo puedes emitir Consumo E32 o Fiscal E31/,
+  );
+  assert.throws(
+    () => resolvePosDocumentType({ paymentMethod: 'CASH', documentType: 'CONSUMER_02' }),
+    /efectivo solo puedes emitir Nota de venta o Fiscal E31/,
+  );
+});
 
 test('venta directa con tres medios registra cada pago, devuelta y cierre solo en efectivo', async () => {
   const f = await fixture({ count: 1, stock: 2 });
@@ -1510,7 +1535,7 @@ test('calidad exige mano de obra ejecutada y múltiples técnicos no duplican la
   const invoice = await new PosService(db, {}).completeSale(f.tenant.id, c.user, {
     orderId: order.id,
     cashSessionId: c.cashSession.id,
-    documentType: 'CONSUMER_02',
+    documentType: 'SALE_NOTE',
     paymentMethod: 'CASH',
     amountReceived: Number(order.total),
   });
@@ -2689,7 +2714,7 @@ test('devolución: cajero solicita sin aprobar, gerencia autoriza y no se duplic
   const sale = await new PosService(db, {}).completeSale(f.tenant.id, cashier.user, {
     checkoutKey: randomUUID(),
     cashSessionId: cashier.cashSession.id,
-    documentType: 'CONSUMER_02',
+    documentType: 'SALE_NOTE',
     items: [{ productId: f.products[0].id, quantity: 1 }],
     paymentMethod: 'CASH',
     amountReceived: 118,

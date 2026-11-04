@@ -26,20 +26,6 @@ import { SessionRequired, useCurrentSession } from './session-required';
 
 const fiscalDocumentTypes = [
   {
-    value: 'FISCAL_CREDIT_01',
-    label: 'Factura de crédito fiscal B01',
-    prefix: 'B01',
-    requiresRnc: true,
-    description: 'NCF local para empresas o contratistas que necesitan sustentar el gasto.',
-  },
-  {
-    value: 'CONSUMER_02',
-    label: 'Factura de consumo B02',
-    prefix: 'B02',
-    requiresRnc: false,
-    description: 'NCF local para consumidores finales y compras regulares.',
-  },
-  {
     value: 'FISCAL_CREDIT_ELECTRONIC_31',
     label: 'Factura de crédito fiscal electrónica E31',
     prefix: 'E31',
@@ -77,7 +63,7 @@ export function FiscalSequencesView() {
     enabled: Boolean(session),
   });
   const [form, setForm] = useState<SequenceForm>({
-    documentType: 'CONSUMER_02',
+    documentType: 'CONSUMER_ELECTRONIC_32',
     startNumber: '1',
     endNumber: '1',
     nextNumber: '1',
@@ -87,7 +73,11 @@ export function FiscalSequencesView() {
     issuerDocumentNumber: '',
   });
 
-  const sequences = sequencesQuery.data ?? [];
+  const sequences = (sequencesQuery.data ?? []).filter((sequence) =>
+    ['FISCAL_CREDIT_ELECTRONIC_31', 'CONSUMER_ELECTRONIC_32'].includes(
+      sequence.documentType,
+    ),
+  );
   const selectedType = fiscalDocumentTypes.find((type) => type.value === form.documentType)!;
   const suggestedStart = useMemo(() => {
     const previousBlocks = sequences.filter(
@@ -194,7 +184,7 @@ export function FiscalSequencesView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Secuencias fiscales"
-        description="Bloques NCF B01/B02 y e-CF E31/E32 autorizados por DGII. E31/E32 se emiten como simulación hasta configurar firma y envío."
+        description="Bloques e-CF E31/E32 autorizados por DGII. La secuencia de Nota de venta es interna y se administra automáticamente."
       />
 
       {canManage ? (
