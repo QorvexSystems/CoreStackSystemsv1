@@ -16,6 +16,7 @@ services:
     cpus: 0.65
     mem_limit: 512m
     memswap_limit: 512m
+    mem_reservation: 192m
     pids_limit: 128
     env_file: /opt/corestack/apps/solucionesautomotriz/secrets/api.env
     ports:
@@ -54,6 +55,7 @@ services:
     cpus: 0.35
     mem_limit: 512m
     memswap_limit: 512m
+    mem_reservation: 128m
     pids_limit: 128
     environment:
       NODE_ENV: production
