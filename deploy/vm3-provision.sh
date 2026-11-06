@@ -5,10 +5,15 @@ set -euo pipefail
 
 secrets=/opt/corestack/secrets/solucionesautomotriz-db-provision.env
 [[ -f "$secrets" && "$(stat -c %a "$secrets")" == 600 ]] || { echo 'Falta db-provision.env (modo 600)' >&2; exit 1; }
-source "$secrets"
-for value in "$MIGRATOR_PASSWORD" "$RUNTIME_PASSWORD"; do
-  [[ "$value" =~ ^[A-Za-z0-9_-]{48,128}$ ]] || { echo 'Contraseña inválida' >&2; exit 1; }
-done
+read_secret() {
+  local key="$1" value
+  [[ "$(grep -c "^${key}=" "$secrets")" == 1 ]] || { echo "Falta $key o está duplicada" >&2; return 1; }
+  value=$(sed -n "s/^${key}=//p" "$secrets")
+  [[ "$value" =~ ^[A-Za-z0-9_-]{48,128}$ ]] || { echo "Formato inválido: $key" >&2; return 1; }
+  printf '%s' "$value"
+}
+migrator_password=$(read_secret MIGRATOR_PASSWORD)
+runtime_password=$(read_secret RUNTIME_PASSWORD)
 
 psql_admin=(runuser -u postgres -- psql --no-psqlrc -X -v ON_ERROR_STOP=1)
 [[ "$(pg_lsclusters --no-header | awk '$1==17 && $2=="main" {print $4}')" == online ]] || { echo 'PostgreSQL 17/main no está activo' >&2; exit 1; }
@@ -22,14 +27,17 @@ marker='# BEGIN CORESTACK SOLUCIONESAUTOMOTRIZ PRODUCTION'
 backup="${hba}.before-solucionesautomotriz.$(date -u +%Y%m%dT%H%M%SZ)"
 install -m 600 -o "$(stat -c %U "$hba")" -g "$(stat -c %G "$hba")" "$hba" "$backup"
 
-"${psql_admin[@]}" -q \
-  -v "migrator_password=$MIGRATOR_PASSWORD" \
-  -v "runtime_password=$RUNTIME_PASSWORD" <<'SQL'
+{
+  printf "\\set migrator_password '%s'\n" "$migrator_password"
+  printf "\\set runtime_password '%s'\n" "$runtime_password"
+  cat <<'SQL'
 BEGIN;
 CREATE ROLE solucionesautomotriz_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'migrator_password';
 CREATE ROLE solucionesautomotriz_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD :'runtime_password';
 COMMIT;
 SQL
+} | "${psql_admin[@]}" -q
+unset migrator_password runtime_password
 runuser -u postgres -- createdb --owner=solucionesautomotriz_migrator --template=template0 --encoding=UTF8 solucionesautomotriz_production
 "${psql_admin[@]}" -q -c 'REVOKE ALL ON DATABASE solucionesautomotriz_production FROM PUBLIC'
 "${psql_admin[@]}" -q -c 'GRANT CONNECT ON DATABASE solucionesautomotriz_production TO solucionesautomotriz_runtime'
