@@ -18,7 +18,7 @@ services:
     memswap_limit: 512m
     mem_reservation: 192m
     pids_limit: 128
-    env_file: /opt/corestack/apps/solucionesautomotriz/secrets/api.env
+    env_file: /opt/corestack/apps/solucionesautomotrizcyr/secrets/api.env
     ports:
       - "10.0.0.3:4003:4000"
     networks:

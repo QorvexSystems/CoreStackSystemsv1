@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-root=/opt/corestack/apps/solucionesautomotriz
+root=/opt/corestack/apps/solucionesautomotrizcyr
 env_file="$root/secrets/migrator.env"
 backup_dir="$root/backups"
 [[ -f "$env_file" ]] || { echo 'Falta migrator.env' >&2; exit 1; }
@@ -10,7 +10,7 @@ install -d -m 700 "$backup_dir"
 exec 9>"$backup_dir/.backup.lock"
 flock -n 9 || exit 0
 
-name="solucionesautomotriz-$(date -u +%Y%m%dT%H%M%SZ).dump"
+name="solucionesautomotrizcyr-$(date -u +%Y%m%dT%H%M%SZ).dump"
 partial="$backup_dir/$name.part"
 trap 'rm -f "$partial"' EXIT
 
@@ -24,5 +24,5 @@ docker run --rm --network host \
 
 mv "$partial" "$backup_dir/$name"
 (cd "$backup_dir" && sha256sum "$name" > "$name.sha256")
-find "$backup_dir" -maxdepth 1 -type f \( -name 'solucionesautomotriz-*.dump' -o -name 'solucionesautomotriz-*.dump.sha256' \) -mtime +30 -delete
+find "$backup_dir" -maxdepth 1 -type f \( -name 'solucionesautomotrizcyr-*.dump' -o -name 'solucionesautomotrizcyr-*.dump.sha256' \) -mtime +30 -delete
 echo "$backup_dir/$name"

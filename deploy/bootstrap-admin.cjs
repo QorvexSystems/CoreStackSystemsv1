@@ -14,7 +14,7 @@ const prisma = new PrismaClient();
 async function main() {
   const hash = await bcrypt.hash(password, 12);
   const result = await prisma.$transaction(async (tx) => {
-    const slug = 'solucionesautomotriz';
+    const slug = 'solucionesautomotrizcyr';
     if (await tx.tenant.findUnique({ where: { slug } })) {
       throw new Error('Tenant already exists; refusing to bootstrap twice');
     }
