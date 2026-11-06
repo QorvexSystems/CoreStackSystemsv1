@@ -9,7 +9,7 @@ export const brand = {
   appleTouchIconPath: '/brand/logo-taller-180.png',
   pwaIconPath: '/brand/logo-taller-192.png',
   pwaLargeIconPath: '/brand/logo-taller-512.png',
-  loginEmailPlaceholder: 'usuario@x.local',
+  loginEmailPlaceholder: 'usuario@solucionesautomotriz.local',
   businessType: 'Taller automotriz',
 } as const;
 
