@@ -69,4 +69,5 @@ install -m "$(stat -c %a "$hba")" -o "$(stat -c %U "$hba")" -g "$(stat -c %G "$h
 rm -f "$temp"
 "${psql_admin[@]}" -q -c 'SELECT pg_reload_conf()' >/dev/null
 [[ "$("${psql_admin[@]}" -Atqc 'SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL')" == 0 ]] || { echo "HBA inválido. Restaurar desde $backup" >&2; exit 1; }
+rm -f "$secrets"
 echo "Base y roles creados; respaldo HBA: $backup"
