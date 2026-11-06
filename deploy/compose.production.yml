@@ -1,0 +1,83 @@
+name: solucionesautomotriz
+
+services:
+  api:
+    image: corestack/solucionesautomotriz-api:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+    container_name: solucionesautomotriz-api
+    init: true
+    restart: unless-stopped
+    cpus: 0.65
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    env_file: /opt/corestack/apps/solucionesautomotriz/secrets/api.env
+    ports:
+      - "10.0.0.3:4003:4000"
+    networks:
+      - customer
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    image: corestack/solucionesautomotriz-web:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL is required}
+    container_name: solucionesautomotriz-web
+    init: true
+    restart: unless-stopped
+    cpus: 0.35
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    environment:
+      NODE_ENV: production
+    ports:
+      - "10.0.0.3:3003:3000"
+    networks:
+      - customer
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r => { if (r.status >= 500) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  customer:
+    name: solucionesautomotriz-network
