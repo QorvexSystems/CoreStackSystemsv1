@@ -1,25 +1,27 @@
 # Soluciones Automotriz C&R — despliegue CoreStack
 
-## Destino
+## Direcciones y puertos
 
-- VM1 `10.0.0.2`: Nginx, TLS y `solucionesautomotriz.corestack-systems.com`.
-- VM2 `10.0.0.3`: web `3003`, API `4003`, imágenes y secretos exclusivos.
-- VM3 `10.0.0.4`: PostgreSQL `solucionesautomotriz_production`, roles separados para migración y ejecución.
-- El navegador usa `https://solucionesautomotriz.corestack-systems.com/api` para la API.
+- Web pública: `https://solucionesautomotrizcyr.corestack-systems.com`.
+- API pública: `https://solucionesautomotrizcyr-api.corestack-systems.com`.
+- VM1 (`10.0.0.2`) → VM2 (`10.0.0.3`): web `3003`, API `4003`.
+- VM2 → VM3 (`10.0.0.4`): PostgreSQL `5432`.
+- Los contenedores son `solucionesautomotrizcyr-web` y `solucionesautomotrizcyr-api`, en la red `solucionesautomotrizcyr-network`.
+- La base `solucionesautomotriz_production`, sus roles y la ruta `/opt/corestack/apps/solucionesautomotriz/` conservan sus nombres originales. Cambiar el dominio no requiere migrar datos ni recrear la base.
 
-## Alta inicial
+## Estado de instalación
 
-El origen Supabase contenía datos de prueba. Esta instalación parte de una base nueva. No ejecutar `pnpm db:seed`: elimina registros y crea usuarios y operaciones ficticias.
+La base de VM3 está aprovisionada con 60 migraciones. Hay un único tenant y administrador iniciales; la base Supabase anterior contenía datos de prueba y no se migró. El respaldo inicial se restauró correctamente en una base temporal. El `crontab` de VM2 ejecuta `deploy/backup-vm2.sh` diariamente a las 02:20 AST; conserva los archivos durante 30 días.
 
-1. Crear en Cloudflare un registro A `solucionesautomotriz` hacia `185.187.235.29`, con proxy como los demás clientes.
-2. En VM3, ejecutar `sudo /opt/corestack/scripts/vm3-provision.sh`. El archivo de credenciales ya está en `/opt/corestack/secrets/solucionesautomotriz-db-provision.env` con modo `600`. El script rechaza una base o roles existentes.
-3. En VM2, aplicar las migraciones usando la imagen del taller y `/opt/corestack/apps/solucionesautomotriz/secrets/migrator.env`.
-4. En VM2, ejecutar `deploy/bootstrap-admin.cjs` una sola vez con el rol de migración y `/opt/corestack/apps/solucionesautomotriz/secrets/bootstrap.env`. Crea únicamente empresa, administrador y secuencia de notas de venta. No configura RNC ni rangos fiscales.
-5. Arrancar los contenedores con `docker compose --env-file /opt/corestack/apps/solucionesautomotriz/secrets/deploy.env -f deploy/compose.production.yml up -d --no-build`.
-6. Comprobar desde VM1 `http://10.0.0.3:3003/login` y `http://10.0.0.3:4003/health`. Si UFW bloquea, permitir solo VM1 hacia `3003/tcp` y `4003/tcp` en VM2.
-7. En VM1, ejecutar `sudo /opt/corestack/scripts/vm1-install.sh`. Instala la configuración ya preparada, obtiene el certificado y verifica web y API por HTTPS.
-8. Ejecutar `deploy/backup-vm2.sh` para el primer respaldo y programarlo a diario en el `crontab` de VM2. Conserva respaldos con suma SHA-256 por 30 días, en una carpeta privada.
+Las imágenes Docker se construyen con `NEXT_PUBLIC_API_URL` y `NEXT_PUBLIC_APP_URL`; tras cambiar cualquiera de esos valores, reconstruir la web. La API toma `CORS_ORIGIN` de `/opt/corestack/apps/solucionesautomotriz/secrets/api.env` al arrancar. Los secretos `api.env`, `migrator.env`, `deploy.env` y `bootstrap.env` permanecen fuera de Git, con permisos `600`.
 
-Los archivos `api.env`, `migrator.env`, `deploy.env` y `bootstrap.env` viven fuera de Git, en `/opt/corestack/apps/solucionesautomotriz/secrets/`, con modo `600`.
+Fabio administra la configuración de Nginx y los certificados en VM1. Sus bloques HTTP actuales usan los dos nombres nuevos. La configuración HTTPS debe enviar la web a `http://10.0.0.3:3003` y la API a `http://10.0.0.3:4003`, con certificados válidos para ambos nombres. No usar el script antiguo `vm1-install.sh` ni la configuración anterior de un solo dominio.
 
-Antes de recibir usuarios reales, sustituir la clave inicial elegida para el administrador. Configurar RNC, rangos fiscales, almacenamiento de imágenes y correo con los datos reales del taller. Comprobar que un respaldo se restaura correctamente en un entorno aislado.
+## Comprobación posterior a HTTPS
+
+1. `https://solucionesautomotrizcyr.corestack-systems.com/login` responde `200`.
+2. `https://solucionesautomotrizcyr-api.corestack-systems.com/health` responde `200`.
+3. El inicio de sesión desde la web carga el dashboard sin error CORS.
+4. La clave inicial elegida para el administrador debe cambiarse antes del uso real.
+
+No ejecutar `pnpm db:seed`: borra registros y crea operaciones ficticias. RNC, rangos fiscales, correo y almacenamiento de imágenes requieren la configuración real del taller antes de usar esas funciones.
