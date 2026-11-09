@@ -158,6 +158,29 @@ enum DocumentType {
   OTHER
 }
 
+enum DgiiRegistrySource {
+  DGII_OFFICIAL
+  TEST_FIXTURE
+}
+
+enum DgiiRegistryDatasetStatus {
+  IMPORTING
+  READY
+  ACTIVE
+  SUPERSEDED
+  FAILED
+}
+
+enum DgiiTaxpayerStatus {
+  ACTIVE
+  SUSPENDED
+  DEREGISTERED
+  TEMPORARY_CESSATION
+  ANNULLED
+  REJECTED
+  UNKNOWN
+}
+
 enum InvoiceFiscalStatus {
   NOT_APPLICABLE
   PENDING_SEQUENCE
@@ -614,6 +637,42 @@ model Customer {
   @@index([tenantId, creditEnabled, creditStatus])
   @@index([creditEnabledById])
   @@index([createdAt])
+}
+
+/// Instantánea versionada del padrón oficial DGII para verificar RNC en caja.
+model DgiiRegistryDataset {
+  id                 String                    @id @default(cuid())
+  version            String                    @unique
+  source             DgiiRegistrySource
+  status             DgiiRegistryDatasetStatus @default(IMPORTING)
+  filename           String?
+  checksumSha256     String?                   @unique
+  sourceUpdatedAt    DateTime
+  startedAt          DateTime                  @default(now())
+  importedAt         DateTime?
+  activatedAt        DateTime?
+  deactivatedAt      DateTime?
+  recordCount        Int                       @default(0)
+  invalidRecordCount Int                       @default(0)
+  failureCode        String?
+  records            DgiiTaxpayerRecord[]
+
+  @@index([status])
+  @@index([source, sourceUpdatedAt])
+  @@index([activatedAt])
+}
+
+model DgiiTaxpayerRecord {
+  datasetId      String
+  documentType   DocumentType
+  documentNumber String
+  fiscalName     String
+  registryStatus String
+  status         DgiiTaxpayerStatus
+  dataset        DgiiRegistryDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@id([datasetId, documentType, documentNumber])
+  @@index([datasetId, status])
 }
 
 model ProductCategory {

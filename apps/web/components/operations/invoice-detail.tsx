@@ -197,11 +197,9 @@ function Receipt({
       </header>
 
       <div className="border-y border-dashed border-zinc-400 py-2">
-        {isSaleNote ? (
-          <div className="mb-1 h-[18px]" aria-hidden="true" />
-        ) : (
-          <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
-        )}
+        <h2 className="mb-1 text-center text-sm font-bold uppercase">
+          {isSaleNote ? 'Factura' : documentTitle}
+        </h2>
         {!isSaleNote ? (
           <ReceiptRow
             label={invoice.eNcf ? 'e-NCF' : 'NCF'}
@@ -209,7 +207,7 @@ function Receipt({
             valueClassName="font-semibold"
           />
         ) : null}
-        <ReceiptRow label={isSaleNote ? 'Referencia interna' : 'Factura interna'} value={invoice.invoiceNumber} />
+        <ReceiptRow label={isSaleNote ? 'Referencia' : 'Factura interna'} value={invoice.invoiceNumber} />
         <ReceiptRow
           label={invoice.eNcf && invoice.fiscalStatus !== 'ACCEPTED' ? 'Fecha de registro' : 'Fecha de emisión'}
           value={formatInvoiceDateTime(invoice.issuedAt ?? invoice.createdAt)}

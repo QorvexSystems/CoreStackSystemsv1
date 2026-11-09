@@ -38,6 +38,7 @@ import {
   getSalesOrders,
   getSalesOrder,
   lookupPosStoreCredit,
+  lookupPosRnc,
   openCashSession,
   releaseSalesOrder,
   searchPosProducts,
@@ -162,6 +163,18 @@ export function PosView() {
     queryKey: ['pos-customers', session?.tenantId],
     queryFn: () => getCustomers(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
+  });
+  const rncLookupQuery = useQuery({
+    queryKey: ['pos-rnc-lookup', session?.tenantId, normalizeDominicanDocument(fiscalDocumentNumber)],
+    queryFn: () => lookupPosRnc(
+      session?.tenantId ?? '',
+      session?.accessToken ?? '',
+      fiscalDocumentNumber,
+    ),
+    enabled: Boolean(session && isAllpa && documentType === 'FISCAL_CREDIT_ELECTRONIC_31' &&
+      fiscalDocumentType === 'RNC' && validateDominicanDocument('RNC', fiscalDocumentNumber)),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
   });
   const registersQuery = useQuery({
     queryKey: ['cash-registers', session?.tenantId],
@@ -357,14 +370,18 @@ export function PosView() {
     documentType,
   );
   const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
+  const verifiedRnc = isAllpa && requiresRnc &&
+    rncLookupQuery.data?.documentNumber === normalizeDominicanDocument(fiscalDocumentNumber) &&
+    rncLookupQuery.data.outcome === 'VERIFIED';
   const requiresE32Recipient = documentType === 'CONSUMER_ELECTRONIC_32' && totals.total >= 250000;
   const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
   const canCompleteFiscalDocument =
     !requiresRecipientDocument ||
     Boolean(
       fiscalDocumentValid &&
-        fiscalCustomer &&
+        (isAllpa && requiresRnc ? verifiedRnc : fiscalCustomer) &&
         fiscalCustomerMatchesOrder &&
+        (!isAllpa || !requiresRnc || !customerId || customerId === fiscalCustomer?.id) &&
         (!requiresRnc || fiscalDocumentType === 'RNC'),
     );
   const canCompleteSale =
@@ -562,6 +579,7 @@ export function PosView() {
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
       await queryClient.invalidateQueries({ queryKey: ['products'] });
+      await queryClient.invalidateQueries({ queryKey: ['pos-customers'] });
       await queryClient.invalidateQueries({ queryKey: ['pos-products-search'] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       await queryClient.invalidateQueries({ queryKey: ['cash-movements'] });
@@ -903,6 +921,8 @@ export function PosView() {
       (!loadedOrder?.customerId || matchingCustomer.id === loadedOrder.customerId)
     ) {
       setCustomerId(matchingCustomer.id);
+    } else if (isAllpa && documentType === 'FISCAL_CREDIT_ELECTRONIC_31' && !loadedOrder?.customerId) {
+      setCustomerId('');
     }
   }
 
@@ -1349,7 +1369,13 @@ export function PosView() {
                     fiscalDocumentType={fiscalDocumentType}
                     fiscalDocumentNumber={fiscalDocumentNumber}
                     fiscalDocumentValid={fiscalDocumentValid}
-                    fiscalCustomerName={fiscalCustomer?.name}
+                    fiscalCustomerName={isAllpa && requiresRnc
+                      ? rncLookupQuery.data?.fiscalName
+                      : fiscalCustomer?.name}
+                    rncLookup={isAllpa && requiresRnc ? rncLookupQuery.data : undefined}
+                    isRncLookupLoading={rncLookupQuery.isFetching}
+                    rncLookupError={rncLookupQuery.error instanceof Error ? rncLookupQuery.error.message : null}
+                    onVerifyRnc={() => void rncLookupQuery.refetch()}
                     paymentMethod={paymentMethod}
                     salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
                     dueDate={loadedOrder?.dueDate}

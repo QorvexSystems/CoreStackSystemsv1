@@ -1,10 +1,10 @@
 'use client';
 
-import { Delete, ReceiptText } from 'lucide-react';
+import { Delete, ReceiptText, Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Customer, StoreCreditLookup } from '@/lib/api';
+import type { Customer, RncLookup, StoreCreditLookup } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 import {
   appendCurrencyInput,
@@ -26,6 +26,10 @@ type PosPaymentPanelProps = {
   fiscalDocumentNumber: string;
   fiscalDocumentValid: boolean;
   fiscalCustomerName?: string | null;
+  rncLookup?: RncLookup;
+  isRncLookupLoading?: boolean;
+  rncLookupError?: string | null;
+  onVerifyRnc?: () => void;
   paymentMethod: string;
   salePaymentMode: 'CASH' | 'CREDIT';
   dueDate?: string | null;
@@ -62,6 +66,10 @@ export function PosPaymentPanel({
   fiscalDocumentNumber,
   fiscalDocumentValid,
   fiscalCustomerName,
+  rncLookup,
+  isRncLookupLoading = false,
+  rncLookupError,
+  onVerifyRnc,
   paymentMethod,
   salePaymentMode,
   dueDate,
@@ -211,7 +219,37 @@ export function PosPaymentPanel({
               />
             </div>
           </div>
-          {fiscalDocumentNumber ? (
+          {requiresRnc && isAllpa && fiscalDocumentValid ? (
+            <div className="mt-2 flex justify-end">
+              <Button type="button" variant="outline" size="sm" onClick={onVerifyRnc} disabled={isRncLookupLoading}>
+                <Search className="mr-1.5 size-4" />
+                {isRncLookupLoading ? 'Consultando...' : 'Verificar nuevamente'}
+              </Button>
+            </div>
+          ) : null}
+          {requiresRnc && isAllpa && rncLookup?.documentNumber === fiscalDocumentNumber.replace(/\D/g, '') && rncLookup.outcome === 'VERIFIED' ? (
+            <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">
+                <ShieldCheck className="size-4" /> Razón social verificada por DGII
+              </div>
+              <p className="mt-1 font-semibold">{rncLookup.fiscalName}</p>
+              <div className="mt-2 grid gap-2 border-t border-emerald-200 pt-2 text-xs sm:grid-cols-2">
+                <span>Estado en padrón: <strong>{rncLookup.registryStatus}</strong></span>
+                <span>Fuente: Padrón oficial DGII · {rncLookup.sourceUpdatedAt ? new Date(rncLookup.sourceUpdatedAt).toLocaleDateString('es-DO') : ''}</span>
+              </div>
+            </div>
+          ) : null}
+          {requiresRnc && isAllpa && fiscalDocumentValid && !isRncLookupLoading &&
+            rncLookup?.documentNumber === fiscalDocumentNumber.replace(/\D/g, '') &&
+            rncLookup.outcome !== 'VERIFIED' ? (
+              <p className="mt-2 text-xs text-danger">
+                {rncLookup.outcome === 'NOT_FOUND' ? 'El RNC no figura en el padrón DGII.' :
+                  rncLookup.outcome === 'NON_ACTIVE' ? `El RNC figura como ${rncLookup.registryStatus ?? 'no activo'}.` :
+                    'La consulta del padrón necesita actualizarse o no está disponible.'}
+              </p>
+            ) : null}
+          {requiresRnc && isAllpa && rncLookupError ? <p className="mt-2 text-xs text-danger">{rncLookupError}</p> : null}
+          {fiscalDocumentNumber && !(requiresRnc && isAllpa && fiscalDocumentValid) ? (
             <p
               className={
                 fiscalDocumentValid && fiscalCustomerName

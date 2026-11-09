@@ -39,6 +39,15 @@ export class PosController {
     return this.posService.lookupStoreCredit(tenantId, user, q);
   }
 
+  @Get('rnc/lookup')
+  lookupRnc(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('rnc') rnc = '',
+  ) {
+    return this.posService.lookupRnc(tenantId, user, rnc);
+  }
+
   @Post('sales/preview')
   previewSale(
     @TenantId() tenantId: string,

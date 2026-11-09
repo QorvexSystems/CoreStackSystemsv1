@@ -47,6 +47,7 @@ import {
 } from '../../common/utils/dominican-documents';
 import { CompleteSaleDto, PosSaleItemDto } from './dto/complete-sale.dto';
 import { buildEcfSimulation } from './ecf-simulation';
+import { DgiiRegistryService } from '../dgii-registry/dgii-registry.service';
 import { randomUUID } from 'node:crypto';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
@@ -79,7 +80,17 @@ type StoreCreditAllocation = {
 export class PosService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly dgiiRegistry: DgiiRegistryService,
   ) {}
+
+  async lookupRnc(tenantId: string, user: AuthenticatedUser, rnc: string) {
+    await this.ensureCanUsePos(tenantId, user);
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { slug: true } });
+    if (tenant.slug !== 'allpa') {
+      throw new ForbiddenException('La consulta del RNC está disponible solo en ALLPA.');
+    }
+    return this.dgiiRegistry.lookupRnc(rnc);
+  }
 
   async searchProducts(tenantId: string, user: AuthenticatedUser, q: string) {
     await this.ensureCanCreateDirectSale(tenantId, user);
@@ -298,7 +309,7 @@ export class PosService {
         }
 
         const fiscalDocumentNumber = normalizeDominicanDocument(dto.fiscalDocumentNumber);
-        const fiscalCustomer = await tx.customer.findFirst({
+        let fiscalCustomer = await tx.customer.findFirst({
           where: {
             tenantId,
             documentType: dto.fiscalDocumentType,
@@ -306,6 +317,34 @@ export class PosService {
             status: CustomerStatus.ACTIVE,
           },
         });
+
+        if (requiresRnc && tenantPolicy.slug === 'allpa') {
+          const verified = await this.dgiiRegistry.requireActiveRnc(fiscalDocumentNumber, tx);
+          if (customer && (customer.documentType !== DocumentType.RNC ||
+            normalizeDominicanDocument(customer.documentNumber ?? '') !== fiscalDocumentNumber)) {
+            throw new BadRequestException('El RNC no corresponde al cliente asignado a la orden.');
+          }
+          const existing = await tx.customer.findUnique({
+            where: { tenantId_documentType_documentNumber: {
+              tenantId,
+              documentType: DocumentType.RNC,
+              documentNumber: fiscalDocumentNumber,
+            } },
+          });
+          if (existing?.status !== undefined && existing.status !== CustomerStatus.ACTIVE) {
+            throw new BadRequestException('El cliente con este RNC está inactivo.');
+          }
+          fiscalCustomer = existing
+            ? existing.name === verified.fiscalName
+              ? existing
+              : await tx.customer.update({ where: { id: existing.id }, data: { name: verified.fiscalName } })
+            : await tx.customer.create({ data: {
+                tenantId,
+                name: verified.fiscalName,
+                documentType: DocumentType.RNC,
+                documentNumber: fiscalDocumentNumber,
+              } });
+        }
 
         if (!fiscalCustomer) {
           throw new BadRequestException(

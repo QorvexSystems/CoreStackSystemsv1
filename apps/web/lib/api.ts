@@ -495,6 +495,15 @@ export type StoreCreditLookup = {
   expiresAt: string;
 };
 
+export type RncLookup = {
+  outcome: 'VERIFIED' | 'NOT_FOUND' | 'NON_ACTIVE' | 'REGISTRY_STALE' | 'UNAVAILABLE';
+  documentNumber: string;
+  fiscalName: string | null;
+  registryStatus: string | null;
+  sourceUpdatedAt: string | null;
+  checkedAt: string;
+};
+
 export type ReturnInvoiceLookup = Omit<Invoice, 'items'> & {
   salesOrder?: {
     id: string;
@@ -2403,6 +2412,12 @@ export function lookupPosStoreCredit(tenantId: string, accessToken: string, invo
     `/pos/store-credits/lookup?q=${encodeURIComponent(invoiceNumber)}`,
     { headers: tenantHeaders(tenantId, accessToken) },
   );
+}
+
+export function lookupPosRnc(tenantId: string, accessToken: string, rnc: string) {
+  return fetchJson<RncLookup>(`/pos/rnc/lookup?rnc=${encodeURIComponent(rnc)}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
 }
 
 export function getEmployees(tenantId: string, accessToken: string) {
