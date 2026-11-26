@@ -172,8 +172,17 @@ async function fixture({ count = 2, stock = 10 } = {}) {
   return { tenant, user, customer, vehicle, products, ticket };
 }
 
-async function sendQuote(f) {
+async function receiveSignedFixture(f) {
   await workshop.createReception(f.tenant.id, f.user.id, f.ticket.id, { mileage: 1000 });
+  // Seed consent for unrelated workflow tests; image/signature persistence is tested separately.
+  await db.workshopReception.update({
+    where: { ticketId: f.ticket.id },
+    data: { signatureUrl: 'https://example.test/fixture-signature.png', signedAt: new Date() },
+  });
+}
+
+async function sendQuote(f) {
+  await receiveSignedFixture(f);
   await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, { status: 'DIAGNOSIS' });
   await workshop.saveInspection(f.tenant.id, f.user.id, f.ticket.id, {
     items: [{ code: 'BRAKES', label: 'Frenos', result: 'REQUIRES_REPAIR' }],
@@ -234,7 +243,7 @@ async function issueAll(f) {
 
 test('no se puede saltar del diagnóstico a aprobación o reparación', async () => {
   const f = await fixture();
-  await workshop.createReception(f.tenant.id, f.user.id, f.ticket.id, { mileage: 1000 });
+  await receiveSignedFixture(f);
   await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, { status: 'DIAGNOSIS' });
   for (const status of ['APPROVED', 'IN_PROGRESS', 'READY_FOR_DELIVERY']) {
     await assert.rejects(
@@ -762,12 +771,8 @@ test('OT → repuesto → Caja → nota de venta y pago → cierre entregado sin
       throw new Error('No external emails in this test');
     },
   });
-  await repairing(f);
-  await issueAll(f);
-  await workshop.saveQualityCheck(f.tenant.id, f.user.id, f.ticket.id, quality);
-  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
-    status: 'READY_FOR_DELIVERY',
-  });
+  await sendQuote(f);
+  await approve(f);
   const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
   assert.equal(await db.invoice.count({ where: { tenantId: f.tenant.id } }), 0);
   const payload = {
@@ -815,14 +820,31 @@ test('OT → repuesto → Caja → nota de venta y pago → cierre entregado sin
   assert.equal(await db.invoice.count({ where: { tenantId: f.tenant.id } }), 1);
   assert.equal(
     (await db.workshopTicket.findUniqueOrThrow({ where: { id: f.ticket.id } })).status,
-    'DELIVERED',
+    'APPROVED',
   );
   assert.equal(
     await db.workshopTicketStatusEvent.count({
       where: { ticketId: f.ticket.id, toStatus: 'DELIVERED' },
     }),
-    1,
+    0,
   );
+  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'IN_PROGRESS',
+    promisedAt: '2026-12-01T14:00:00Z',
+  });
+  await workshop.saveQualityCheck(f.tenant.id, f.user.id, f.ticket.id, quality);
+  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'READY_FOR_DELIVERY',
+  });
+  await workshop.createDelivery(f.tenant.id, f.user.id, f.ticket.id, {
+    recipientName: f.customer.name,
+    mileageOut: 1005,
+  });
+  assert.equal(
+    (await db.workshopTicket.findUniqueOrThrow({ where: { id: f.ticket.id } })).status,
+    'DELIVERED',
+  );
+  assert.equal((await db.product.findUniqueOrThrow({ where: { id: f.products[0].id } })).stock, 0);
 });
 
 test('ajustes manuales no fabrican movimientos de OT ni utilizan stock reservado', async () => {
@@ -1060,7 +1082,7 @@ test('POS limita el comprobante según el método de pago', () => {
   );
   assert.throws(
     () => resolvePosDocumentType({ paymentMethod: 'CASH', documentType: 'CONSUMER_ELECTRONIC_32' }),
-    /efectivo solo puedes emitir Nota de venta o Fiscal E31/,
+    /efectivo o transferencia solo puedes emitir Nota de venta o Fiscal E31/,
   );
   assert.throws(
     () => resolvePosDocumentType({ paymentMethod: 'CARD', documentType: 'SALE_NOTE' }),
@@ -1068,7 +1090,7 @@ test('POS limita el comprobante según el método de pago', () => {
   );
   assert.throws(
     () => resolvePosDocumentType({ paymentMethod: 'CASH', documentType: 'CONSUMER_02' }),
-    /efectivo solo puedes emitir Nota de venta o Fiscal E31/,
+    /efectivo o transferencia solo puedes emitir Nota de venta o Fiscal E31/,
   );
 });
 
@@ -1460,7 +1482,7 @@ test('diagnóstico previo sin cobro debe terminar antes de solicitar aprobación
     workshop.updateTask(f.tenant.id, m.actor, f.ticket.id, task.id, { status: 'IN_PROGRESS' }),
     /durante el diagnóstico/,
   );
-  await workshop.createReception(f.tenant.id, f.user.id, f.ticket.id, { mileage: 1000 });
+  await receiveSignedFixture(f);
   await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, { status: 'DIAGNOSIS' });
   await workshop.saveInspection(f.tenant.id, f.user.id, f.ticket.id, {
     items: [{ code: 'BRAKES', label: 'Frenos', result: 'REQUIRES_REPAIR' }],
@@ -2812,4 +2834,597 @@ test('retiros de caja y exceso de crédito no se habilitan por simple acceso de 
       ),
     /permiso/,
   );
+});
+
+test('códigos de empleado opcionales admiten varios mecánicos y rechazan duplicados con conflicto', async () => {
+  const f = await employeeAdminFixture();
+  const service = new EmployeesService(db);
+  const payload = (employeeCode) => ({
+    name: 'Mecánico de pruebas',
+    email: `${randomUUID()}@example.test`,
+    password: 'Integration-only-123!',
+    role: 'MECHANIC',
+    employeeCode,
+  });
+  const first = await service.create(f.tenant.id, f.actor, payload(''));
+  const second = await service.create(f.tenant.id, f.actor, payload('   '));
+  assert.equal(first.employeeCode, null);
+  assert.equal(second.employeeCode, null);
+  const coded = await service.create(f.tenant.id, f.actor, payload(' MEC-01 '));
+  assert.equal(coded.employeeCode, 'MEC-01');
+  await assert.rejects(
+    service.create(f.tenant.id, f.actor, payload('MEC-01')),
+    (error) => error.getStatus() === 409,
+  );
+  await assert.rejects(
+    service.update(f.tenant.id, f.actor, second.id, { employeeCode: ' MEC-01 ' }),
+    (error) => error.getStatus() === 409,
+  );
+  const cleared = await service.update(f.tenant.id, f.actor, coded.id, { employeeCode: '' });
+  assert.equal(cleared.employeeCode, null);
+  const preserved = await service.update(f.tenant.id, f.actor, first.id, { jobTitle: 'Mecánico' });
+  assert.equal(preserved.employeeCode, null);
+});
+
+test('repuesto exclusivo de OT llega a factura sin crear producto ni mover inventario', async () => {
+  const f = await fixture({ count: 1, stock: 3 });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    areaFindings: [
+      {
+        areaId: 'rear_glass',
+        areaLabel: 'Cristal trasero',
+        view: 'back',
+        condition: 'ATTENTION',
+        finding: 'Cristal con soporte dañado',
+      },
+    ],
+    lines: [
+      {
+        type: 'PART',
+        productId: f.products[0].id,
+        description: f.products[0].name,
+        quantity: 1,
+        unitPrice: 100,
+      },
+      {
+        type: 'PART',
+        description: 'Soporte especial exclusivo de esta OT',
+        quantity: 1,
+        unitPrice: 250,
+        vehicleAreaId: 'rear_glass',
+      },
+    ],
+  });
+  const local = f.ticket.lines.find((line) => !line.productId);
+  assert.ok(local);
+  assert.equal(local.taxRate.toString(), '0.18');
+  await sendQuote(f);
+  await approve(f);
+  const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  const c = await cashierFixture(f);
+  const invoice = await new PosService(db, {}).completeSale(f.tenant.id, c.user, {
+    orderId: order.id,
+    cashSessionId: c.cashSession.id,
+    documentType: 'SALE_NOTE',
+    paymentMethod: 'CASH',
+    amountReceived: 500,
+  });
+  assert.equal(invoice.status, 'PAID');
+  assert.equal(invoice.total.toString(), '413');
+  const invoiceLocal = invoice.items.find((line) => !line.productId);
+  assert.equal(invoiceLocal.description, local.description);
+  assert.equal(invoiceLocal.unitPrice.toString(), '250');
+  assert.equal(await db.product.count({ where: { tenantId: f.tenant.id } }), 1);
+  assert.equal(
+    await db.inventoryMovement.count({
+      where: { tenantId: f.tenant.id, productId: { not: f.products[0].id } },
+    }),
+    0,
+  );
+  assert.equal((await db.product.findUniqueOrThrow({ where: { id: f.products[0].id } })).stock, 2);
+  const other = await fixture({ count: 0 });
+  assert.equal(other.ticket.lines.length, 0);
+  assert.equal(
+    (
+      await workshop.findTickets(other.tenant.id, {
+        id: f.user.id,
+        memberships: [{ tenantId: other.tenant.id, role: 'ADMIN' }],
+      })
+    ).some((ticket) => ticket.lines.some((line) => line.description === local.description)),
+    false,
+  );
+});
+
+test('repuesto exclusivo no admite producto inexistente ni omite validaciones del cobro', async () => {
+  const f = await fixture({ count: 0 });
+  await assert.rejects(
+    workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+      lines: [
+        {
+          type: 'PART',
+          productId: randomUUID(),
+          description: 'Inválido',
+          quantity: 1,
+          unitPrice: 10,
+        },
+      ],
+    }),
+    /inventario activo/,
+  );
+  const pos = new PosService(db, {});
+  const D = (value) => new Prisma.Decimal(value);
+  const item = {
+    productId: null,
+    product: null,
+    description: 'Sin catálogo',
+    quantity: D(1),
+    reservedQuantity: 0,
+    inventoryConsumedQuantity: D(0),
+    workshopTicketLineId: 'line',
+    unitPrice: D(10),
+    discountTotal: D(0),
+    taxRate: D('.18'),
+    taxTotal: D('1.8'),
+    subtotal: D(10),
+    total: D('11.8'),
+    sku: null,
+    barcode: null,
+  };
+  await assert.rejects(
+    pos.computeSaleFromOrder({
+      inventorySource: 'SALES_INVENTORY',
+      workshopTicket: null,
+      items: [item],
+    }),
+    /unavailable product/,
+  );
+  await assert.rejects(
+    pos.computeSaleFromOrder({
+      inventorySource: 'SALES_INVENTORY',
+      workshopTicket: { id: 'ticket' },
+      items: [
+        { ...item, workshopTicketLine: { ticketId: 'other', type: 'PART', productId: null } },
+      ],
+    }),
+    /unavailable product/,
+  );
+});
+
+test('OT con solo repuesto exclusivo se cobra sin catálogo ni movimientos de inventario', async () => {
+  const f = await fixture({ count: 0 });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    lines: [
+      { type: 'PART', description: 'Motor suplido para esta OT', quantity: 1, unitPrice: 1000 },
+    ],
+  });
+  await sendQuote(f);
+  await approve(f);
+  const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  const c = await cashierFixture(f);
+  const claimed = await new OrdersService(db).claim(f.tenant.id, c.user, order.id, {
+    cashSessionId: c.cashSession.id,
+  });
+  assert.equal(claimed.items.length, 1);
+  assert.equal(claimed.items[0].product, null);
+  const invoice = await new PosService(db, {}).completeSale(f.tenant.id, c.user, {
+    orderId: order.id,
+    cashSessionId: c.cashSession.id,
+    documentType: 'SALE_NOTE',
+    paymentMethod: 'CASH',
+    amountReceived: 1180,
+  });
+  assert.equal(invoice.total.toString(), '1180');
+  assert.equal(invoice.items[0].productId, null);
+  assert.equal(await db.product.count({ where: { tenantId: f.tenant.id } }), 0);
+  assert.equal(await db.inventoryMovement.count({ where: { tenantId: f.tenant.id } }), 0);
+  assert.equal(await db.warehouseMovement.count({ where: { tenantId: f.tenant.id } }), 0);
+});
+
+test('servicio exclusivo con precio por vehículo se cobra sin catálogo ni movimientos de inventario', async () => {
+  const f = await fixture({ count: 0 });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    lines: [
+      { type: 'LABOR', description: 'Mano de obra específica del vehículo', quantity: 1, unitPrice: 1000 },
+    ],
+  });
+  assert.equal(f.ticket.lines[0].serviceId, null);
+  assert.equal(await db.workshopService.count({ where: { tenantId: f.tenant.id } }), 0);
+  await sendQuote(f);
+  await approve(f);
+  const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  const c = await cashierFixture(f);
+  const claimed = await new OrdersService(db).claim(f.tenant.id, c.user, order.id, {
+    cashSessionId: c.cashSession.id,
+  });
+  assert.equal(claimed.items.length, 1);
+  assert.equal(claimed.items[0].product, null);
+  const invoice = await new PosService(db, {}).completeSale(f.tenant.id, c.user, {
+    orderId: order.id,
+    cashSessionId: c.cashSession.id,
+    documentType: 'SALE_NOTE',
+    paymentMethod: 'CASH',
+    amountReceived: 1180,
+  });
+  assert.equal(invoice.total.toString(), '1180');
+  assert.equal(invoice.items[0].productId, null);
+  assert.equal(await db.product.count({ where: { tenantId: f.tenant.id } }), 0);
+  assert.equal(await db.inventoryMovement.count({ where: { tenantId: f.tenant.id } }), 0);
+  assert.equal(await db.warehouseMovement.count({ where: { tenantId: f.tenant.id } }), 0);
+});
+
+test('cotización conserva componentes mecánicos, partidas y hallazgos anteriores en su versión', async () => {
+  const f = await fixture({ count: 0 });
+  const areaFindings = [
+    {
+      areaId: 'rear_glass',
+      areaLabel: 'Cristal trasero',
+      view: 'back',
+      condition: 'ATTENTION',
+      finding: 'Hallazgo anterior de carrocería',
+    },
+    {
+      areaId: 'ignition_system',
+      areaLabel: 'Bobinas y bujías',
+      view: 'front',
+      condition: 'REPAIR',
+      finding: 'Falla de encendido',
+    },
+    {
+      areaId: 'wheel_bearings',
+      areaLabel: 'Rodamientos y cubos de rueda',
+      view: 'left',
+      condition: 'ATTENTION',
+      finding: 'Ruido en rodamiento',
+    },
+    {
+      areaId: 'dashboard',
+      areaLabel: 'Tablero / mandos',
+      view: 'right',
+      condition: 'ATTENTION',
+      finding: 'Revisión del tablero',
+    },
+  ];
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    areaFindings,
+    lines: [
+      {
+        type: 'PART',
+        description: 'Bobina para esta OT',
+        quantity: 1,
+        unitPrice: 1500,
+        vehicleAreaId: 'ignition_system',
+      },
+    ],
+  });
+  await sendQuote(f);
+  const snapshot = f.ticket.quoteVersions[0].snapshot;
+  assert.equal(snapshot.areaFindings.length, 4);
+  assert.equal(
+    snapshot.areaFindings.find((area) => area.areaId === 'rear_glass').finding,
+    'Hallazgo anterior de carrocería',
+  );
+  assert.equal(snapshot.areaFindings.find((area) => area.areaId === 'dashboard').view, 'right');
+  assert.equal(snapshot.lines[0].vehicleAreaId, 'ignition_system');
+  assert.equal(f.ticket.areaFindings.length, 4);
+  assert.equal(await db.product.count({ where: { tenantId: f.tenant.id } }), 0);
+});
+
+test('retirar una OT de Caja permite corregir y reenviar sin duplicar reservas ni facturas', async () => {
+  const f = await fixture({ count: 1, stock: 5 });
+  await sendQuote(f);
+  await approve(f);
+  const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  const c = await cashierFixture(f);
+  const orders = new OrdersService(db);
+  await orders.claim(f.tenant.id, c.user, order.id, { cashSessionId: c.cashSession.id });
+  await orders.cancel(f.tenant.id, c.user, order.id, { reason: 'Corregir repuesto' });
+  const returned = await db.workshopTicket.findUniqueOrThrow({
+    where: { id: f.ticket.id },
+    include: { lines: true },
+  });
+  assert.equal(returned.salesOrderId, null);
+  assert.equal(returned.status, 'DIAGNOSIS');
+  assert.equal(returned.lines[0].reservedQuantity, 0);
+  assert.equal(
+    (await db.product.findUniqueOrThrow({ where: { id: f.products[0].id } })).reservedStock,
+    0,
+  );
+  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    lines: [
+      {
+        type: 'PART',
+        productId: f.products[0].id,
+        description: 'Repuesto corregido',
+        quantity: 2,
+        unitPrice: 125,
+      },
+    ],
+  });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'AWAITING_APPROVAL',
+  });
+  await approve(f);
+  const resent = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  assert.notEqual(resent.id, order.id);
+  const invoice = await new PosService(db, {}).completeSale(f.tenant.id, c.user, {
+    orderId: resent.id,
+    cashSessionId: c.cashSession.id,
+    paymentMethod: 'CASH',
+    documentType: 'SALE_NOTE',
+    amountReceived: 500,
+  });
+  assert.equal(invoice.total.toString(), '295');
+  assert.equal(await db.invoice.count({ where: { tenantId: f.tenant.id } }), 1);
+  await assert.rejects(orders.cancel(f.tenant.id, c.user, resent.id, {}));
+});
+
+test('transferencia emite nota de venta y conserva banco en el pago', async () => {
+  const f = await fixture({ count: 1 });
+  const c = await cashierFixture(f);
+  const pos = new PosService(db, {});
+  assert.equal(resolvePosDocumentType({ paymentMethod: 'TRANSFER' }), 'SALE_NOTE');
+  await assert.rejects(
+    pos.completeSale(f.tenant.id, c.user, {
+      checkoutKey: randomUUID(),
+      cashSessionId: c.cashSession.id,
+      documentType: 'SALE_NOTE',
+      paymentMethod: 'TRANSFER',
+      amountReceived: 118,
+      items: [{ productId: f.products[0].id, quantity: 1 }],
+    }),
+    /banco/,
+  );
+  const invoice = await pos.completeSale(f.tenant.id, c.user, {
+    checkoutKey: randomUUID(),
+    cashSessionId: c.cashSession.id,
+    documentType: 'SALE_NOTE',
+    payments: [{ method: 'TRANSFER', amount: 118, reference: 'Banco Popular' }],
+    items: [{ productId: f.products[0].id, quantity: 1 }],
+  });
+  assert.equal(invoice.payments[0].reference, 'Banco Popular');
+  assert.equal(invoice.payments[0].method, 'TRANSFER');
+  assert.equal(invoice.total.toString(), '118');
+});
+
+test('cita llegada no completa recepción hasta guardar el formulario con sus fotos', async () => {
+  const f = await fixture({ count: 0 });
+  const appointment = await workshop.createAppointment(f.tenant.id, f.user.id, {
+    customerId: f.customer.id,
+    vehicleId: f.vehicle.id,
+    startsAt: '2026-11-10T13:00:00Z',
+    reason: 'Recepción pendiente',
+  });
+  const ticket = await workshop.convertAppointmentToReception(
+    f.tenant.id,
+    f.user.id,
+    appointment.id,
+  );
+  assert.equal(ticket.reception, null);
+  assert.equal(
+    (await db.workshopAppointment.findUniqueOrThrow({ where: { id: appointment.id } })).status,
+    'ARRIVED',
+  );
+  const reopened = await workshop.convertAppointmentToReception(
+    f.tenant.id,
+    f.user.id,
+    appointment.id,
+  );
+  assert.equal(reopened.id, ticket.id);
+  await workshop.createReception(f.tenant.id, f.user.id, ticket.id, {
+    mileage: 1000,
+    imageUrls: ['https://example.test/foto.png'],
+  });
+  assert.equal(
+    (await db.workshopAppointment.findUniqueOrThrow({ where: { id: appointment.id } })).status,
+    'CONVERTED_TO_RECEPTION',
+  );
+});
+
+test('coordinador puede corregir teléfono sin permiso para modificar crédito', async () => {
+  const f = await fixture({ count: 0 });
+  const actor = {
+    ...f.user,
+    memberships: [{ tenantId: f.tenant.id, status: 'ACTIVE', role: 'SERVICE_ADVISOR' }],
+  };
+  assert.equal(checkRoute(CustomersController, 'updateContact', actor, f.tenant.id), true);
+  assert.throws(
+    () => checkRoute(CustomersController, 'configureCredit', actor, f.tenant.id),
+    /permiso/,
+  );
+  const { CustomersService } = require('../dist/modules/customers/customers.service');
+  const updated = await new CustomersController(
+    new CustomersService(db, new AuditService(db)),
+  ).updateContact(f.tenant.id, actor, f.customer.id, { phone: '8095550101' });
+  assert.equal(updated.phone, '8095550101');
+});
+
+const {
+  WhatsappReadyService,
+  normalizeWhatsappRecipient,
+} = require('../dist/modules/notifications/whatsapp-ready.service');
+async function pickupNoticeFixture() {
+  const f = await fixture({ count: 0 });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    lines: [{ type: 'PART', description: 'Repuesto exclusivo', quantity: 1, unitPrice: 100 }],
+  });
+  await db.customer.update({ where: { id: f.customer.id }, data: { phone: '8299951128' } });
+  await sendQuote(f);
+  await approve(f);
+  const order = await workshop.sendToCashier(f.tenant.id, f.user.id, f.ticket.id, {});
+  const cashier = await cashierFixture(f);
+  const invoice = await new PosService(db, {}).completeSale(f.tenant.id, cashier.user, {
+    orderId: order.id,
+    cashSessionId: cashier.cashSession.id,
+    documentType: 'SALE_NOTE',
+    paymentMethod: 'CASH',
+    amountReceived: 200,
+  });
+  const paidTicket = await db.workshopTicket.findUniqueOrThrow({ where: { id: f.ticket.id } });
+  assert.equal(paidTicket.status, 'APPROVED');
+  assert.equal(paidTicket.deliveredAt, null);
+  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'IN_PROGRESS',
+    promisedAt: '2026-12-01T14:00:00.000Z',
+  });
+  await workshop.saveQualityCheck(f.tenant.id, f.user.id, f.ticket.id, quality);
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'READY_FOR_DELIVERY',
+  });
+  return { ...f, invoice };
+}
+function pickupSender(f, overrides = {}) {
+  const values = {
+    WHATSAPP_AUTOMATIC_READY_ENABLED: 'true',
+    WHATSAPP_ACCESS_TOKEN: 'test-token-not-real',
+    WHATSAPP_PHONE_NUMBER_ID: '123456789',
+    WHATSAPP_READY_TEMPLATE: 'vehiculo_listo_para_recoger',
+    WHATSAPP_TEMPLATE_LANGUAGE: 'es',
+    WHATSAPP_TENANT_SLUG: f.tenant.slug,
+    ...overrides,
+  };
+  const service = new WhatsappReadyService(db, { get: (key) => values[key] });
+  const requests = [];
+  service.request = async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    return new Response(JSON.stringify({ messages: [{ id: 'wamid.test' }] }), { status: 200 });
+  };
+  return { service, requests };
+}
+async function dueNotice(f) {
+  await db.workshopReadyNotification.updateMany({
+    where: { ticketId: f.ticket.id },
+    data: { nextAttemptAt: new Date(0) },
+  });
+}
+
+test('aviso WhatsApp se registra una vez al marcar lista y se envía solo pagada y lista', async () => {
+  const f = await pickupNoticeFixture();
+  const { service, requests } = pickupSender(f);
+  await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    status: 'READY_FOR_DELIVERY',
+  });
+  assert.equal(await db.workshopReadyNotification.count({ where: { ticketId: f.ticket.id } }), 1);
+  await db.invoice.update({
+    where: { id: f.invoice.id },
+    data: { status: 'PARTIALLY_PAID', balance: 50 },
+  });
+  await service.processQueue();
+  assert.equal(requests.length, 0);
+  await db.invoice.update({ where: { id: f.invoice.id }, data: { status: 'PAID', balance: 0 } });
+  await dueNotice(f);
+  await Promise.all([service.processQueue(), service.processQueue()]);
+  await service.processQueue();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].body.to, '18299951128');
+  assert.equal(requests[0].body.type, 'template');
+  assert.equal(requests[0].body.template.components[0].parameters[2].text, f.ticket.ticketNumber);
+  assert.equal(
+    (await db.workshopReadyNotification.findUniqueOrThrow({ where: { ticketId: f.ticket.id } }))
+      .status,
+    'SENT',
+  );
+});
+test('aviso WhatsApp no se envía sin conexión, sin teléfono o después de entregar', async () => {
+  const f = await pickupNoticeFixture();
+  const disabled = pickupSender(f, { WHATSAPP_AUTOMATIC_READY_ENABLED: 'false' });
+  await disabled.service.processQueue();
+  assert.equal(disabled.requests.length, 0);
+  await db.customer.update({ where: { id: f.customer.id }, data: { phone: null } });
+  const active = pickupSender(f);
+  await active.service.processQueue();
+  assert.equal(active.requests.length, 0);
+  assert.equal(
+    (await db.workshopReadyNotification.findUniqueOrThrow({ where: { ticketId: f.ticket.id } }))
+      .lastError,
+    'VALID_CUSTOMER_PHONE_REQUIRED',
+  );
+  await db.customer.update({ where: { id: f.customer.id }, data: { phone: '8299951128' } });
+  await db.workshopTicket.update({ where: { id: f.ticket.id }, data: { status: 'DELIVERED' } });
+  await dueNotice(f);
+  await active.service.processQueue();
+  assert.equal(active.requests.length, 0);
+  assert.equal(
+    (await db.workshopReadyNotification.findUniqueOrThrow({ where: { ticketId: f.ticket.id } }))
+      .status,
+    'CANCELLED',
+  );
+});
+test('dos trabajadores WhatsApp no duplican el aviso y respetan la empresa configurada', async () => {
+  const f = await pickupNoticeFixture();
+  const other = await pickupNoticeFixture();
+  const one = pickupSender(f);
+  const two = pickupSender(f);
+  await Promise.all([one.service.processQueue(), two.service.processQueue()]);
+  assert.equal(one.requests.length + two.requests.length, 1);
+  assert.equal(
+    (await db.workshopReadyNotification.findUniqueOrThrow({ where: { ticketId: other.ticket.id } }))
+      .status,
+    'PENDING',
+  );
+  const status = await one.service.status(other.tenant.id);
+  assert.equal(status.configured, false);
+  assert.equal(status.counts.PENDING, 1);
+});
+test('WhatsApp reintenta rechazos 429 y no repite resultados inciertos', async () => {
+  const f = await pickupNoticeFixture();
+  const sender = pickupSender(f);
+  let calls = 0;
+  sender.service.request = async () => {
+    calls++;
+    return calls === 1
+      ? new Response('{}', { status: 429 })
+      : new Response(JSON.stringify({ messages: [{ id: 'wamid.retry' }] }), { status: 200 });
+  };
+  await sender.service.processQueue();
+  assert.equal(calls, 1);
+  assert.equal(
+    (await db.workshopReadyNotification.findUniqueOrThrow({ where: { ticketId: f.ticket.id } }))
+      .status,
+    'RETRY',
+  );
+  await sender.service.processQueue();
+  assert.equal(calls, 1);
+  await dueNotice(f);
+  await sender.service.processQueue();
+  assert.equal(calls, 2);
+  const unknown = await pickupNoticeFixture();
+  const uncertain = pickupSender(unknown);
+  let uncertainCalls = 0;
+  uncertain.service.request = async () => {
+    uncertainCalls++;
+    throw new Error('test timeout');
+  };
+  await uncertain.service.processQueue();
+  await uncertain.service.processQueue();
+  assert.equal(uncertainCalls, 1);
+  assert.equal(
+    (
+      await db.workshopReadyNotification.findUniqueOrThrow({
+        where: { ticketId: unknown.ticket.id },
+      })
+    ).status,
+    'UNCERTAIN',
+  );
+});
+
+
+test('testigo de tablero conserva hallazgo y mano de obra en la versión de cotización', async () => {
+  const { plainToInstance } = require('class-transformer');
+  const { validate } = require('class-validator');
+  const { UpdateWorkshopTicketDto } = require('../dist/modules/workshop/dto/workshop.dto');
+  const finding = { areaId: 'indicator_abs', areaLabel: 'ABS / antibloqueo de frenos', view: 'dashboard', condition: 'ATTENTION', finding: 'Testigo encendido' };
+  assert.equal((await validate(plainToInstance(UpdateWorkshopTicketDto, { areaFindings: [finding] }))).length, 0);
+  assert.ok((await validate(plainToInstance(UpdateWorkshopTicketDto, { areaFindings: [{ ...finding, view: 'untrusted-view' }] }))).length > 0);
+  const f = await fixture({ count: 0 });
+  f.ticket = await workshop.updateTicket(f.tenant.id, f.user.id, f.ticket.id, {
+    areaFindings: [finding],
+    lines: [{ type: 'LABOR', description: 'Revisión ABS', quantity: 1, unitPrice: 1500, vehicleAreaId: 'indicator_abs' }],
+  });
+  assert.equal(f.ticket.areaFindings[0].view, 'dashboard');
+  await sendQuote(f);
+  const snapshot = f.ticket.quoteVersions[0].snapshot;
+  assert.equal(snapshot.areaFindings[0].areaId, 'indicator_abs');
+  assert.equal(snapshot.areaFindings[0].view, 'dashboard');
+  assert.equal(snapshot.lines[0].vehicleAreaId, 'indicator_abs');
+  assert.equal(Number(snapshot.lines[0].unitPrice), 1500);
 });

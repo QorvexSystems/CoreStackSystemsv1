@@ -71,6 +71,7 @@ export const navigation: NavigationItem[] = [
   { name: 'Panel operativo', href: '/dashboard', icon: LayoutDashboard, section: 'main' },
   { name: 'Agenda', href: '/workshop/agenda', icon: CalendarDays, section: 'main' },
   { name: 'Órdenes de trabajo', href: '/workshop', icon: Wrench, section: 'main' },
+  { name: 'Historial', href: '/workshop/history', icon: ScrollText, section: 'main' },
   { name: 'Cotizaciones', href: '/quotations', icon: FileText, section: 'main' },
   { name: 'Caja', href: '/pos', icon: ShoppingCart, section: 'main' },
   { name: 'Empleados', href: '/employees', icon: Users, section: 'main' },
@@ -121,7 +122,7 @@ export function Sidebar({
   return (
     <aside
       className={cn(
-        'fixed inset-y-0 left-0 z-30 hidden border-r border-slate-800 bg-slate-950 text-slate-100 transition-[width] duration-200 print:hidden lg:block',
+        'fixed inset-y-0 left-0 z-30 hidden border-r border-slate-800 bg-slate-950 text-slate-100 transition-[width] duration-200 print:hidden 2xl:block',
         collapsed ? 'w-[4.5rem]' : 'w-72',
       )}
     >
@@ -474,14 +475,14 @@ export function MobileNavigation() {
       {activePopover ? (
         <button
           type="button"
-          className="fixed inset-0 z-40 cursor-default lg:hidden"
+          className="fixed inset-0 z-40 cursor-default 2xl:hidden"
           aria-label="Cerrar opciones"
           onClick={() => setActivePopover(null)}
         />
       ) : null}
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-2 pb-2 pt-1 shadow-2xl shadow-slate-950/10 backdrop-blur print:hidden lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-2 pb-2 pt-1 shadow-2xl shadow-slate-950/10 backdrop-blur print:hidden 2xl:hidden"
         aria-label="Accesos rápidos"
       >
         {activePopover && popoverItems.length ? (
@@ -621,7 +622,7 @@ export function getVisibleNavigation(session: AuthSession | null) {
   if (session?.role === 'ORDER_TAKER') {
     return navigation.filter(
       (item) =>
-        ['/workshop/agenda', '/workshop', '/pos'].includes(item.href) &&
+        ['/workshop/agenda', '/workshop', '/workshop/history', '/pos'].includes(item.href) &&
         canAccessPath(session, item.href),
     );
   }

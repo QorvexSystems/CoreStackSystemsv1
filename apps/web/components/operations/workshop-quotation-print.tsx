@@ -1,4 +1,5 @@
 'use client';
+import { DocumentPdfDownloadButton } from './document-pdf-download-button';
 
 import { useQuery } from '@tanstack/react-query';
 import { Download, Printer } from 'lucide-react';
@@ -6,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CompanyDocumentDetails } from './company-document-details';
 import { brand } from '@/lib/brand';
 import { getWorkshopTickets, type WorkshopQuoteVersion } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
@@ -93,26 +95,28 @@ export function WorkshopQuotationPrint({
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-6 print:max-w-none print:space-y-0 print:p-0">
+      <style>{`@page { size: Letter portrait; margin: 12.7mm; }`}</style>
       <div className="flex flex-wrap items-start justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-bold">Cotización de {ticket.ticketNumber}</h1>
           <p className="text-sm text-muted-foreground">
-            Lista para imprimir o guardar como archivo PDF.
+            Vista previa. Revisa la cotización antes de imprimirla o guardarla como PDF.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => router.push(`/workshop?ticket=${ticket.id}`)}>
-            Volver a la OT
+            Volver a la OT para editar
           </Button>
+          <DocumentPdfDownloadButton kind="quote" id={ticket.id} number={ticket.ticketNumber} />
           <Button onClick={() => window.print()}>
-            <Download className="h-4 w-4" /> Guardar como PDF
+            <Printer className="h-4 w-4" /> Imprimir / Guardar PDF
           </Button>
         </div>
       </div>
 
       <article className="rounded-xl border border-zinc-200 bg-white p-6 text-zinc-950 shadow-sm sm:p-8 print:rounded-none print:border-0 print:p-0 print:shadow-none">
-        <header className="flex items-start justify-between gap-6 border-b border-zinc-200 pb-5">
-          <div className="flex items-center gap-4">
+        <header className="flex min-w-0 flex-col items-start justify-between gap-6 border-b border-zinc-200 pb-5 sm:flex-row print:flex-row">
+          <div className="flex min-w-0 items-center gap-4">
             <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 bg-black">
               <img
                 src={brand.logoPath}
@@ -124,11 +128,12 @@ export function WorkshopQuotationPrint({
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">
                 {brand.businessType}
               </p>
-              <h2 className="mt-1 text-2xl font-bold">{brand.name}</h2>
+              <h2 className="mt-1 break-words text-2xl font-bold">{brand.name}</h2>
               <p className="mt-1 text-sm text-zinc-600">{brand.descriptor}</p>
+              <CompanyDocumentDetails />
             </div>
           </div>
-          <div className="text-right">
+          <div className="max-w-full break-words sm:text-right print:text-right">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-zinc-500">
               Cotización
             </p>
@@ -165,22 +170,22 @@ export function WorkshopQuotationPrint({
           </div>
         </section>
 
-        <section className="break-inside-avoid border-b border-zinc-200 py-5">
+        <section className="min-w-0 border-b border-zinc-200 py-5">
           <div className="mb-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Mapa de daños del vehículo
+              Mapa de daños y componentes
             </p>
             <p className="mt-1 text-sm text-zinc-600">
-              Condición visual registrada para esta versión de la cotización.
+              Condición y hallazgos registrados para esta versión de la cotización.
             </p>
           </div>
-          <div className="grid items-start gap-4 sm:grid-cols-[1fr_1.25fr]">
-            <div className="space-y-2">
+          <div className="grid min-w-0 items-start gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+            <div className="min-w-0 space-y-2">
               {snapshotFindings.length ? (
                 snapshotFindings.map((finding) => (
                   <div key={finding.areaId} className="rounded-lg border border-zinc-200 px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold">{finding.areaLabel}</p>
+                      <p className="min-w-0 break-words text-sm font-semibold">{finding.areaLabel}</p>
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                           finding.condition === 'REPAIR'

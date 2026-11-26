@@ -14,11 +14,11 @@ export const ELECTRONIC_DOCUMENT_TYPES = [
 ] as const;
 
 export function getAllowedPosDocumentTypes(paymentMethod: string) {
-  return paymentMethod === 'CASH' ? CASH_DOCUMENT_TYPES : ELECTRONIC_DOCUMENT_TYPES;
+  return ['CASH', 'TRANSFER'].includes(paymentMethod) ? CASH_DOCUMENT_TYPES : ELECTRONIC_DOCUMENT_TYPES;
 }
 
 export function getDefaultPosDocumentType(paymentMethod: string): PosDocumentType {
-  return paymentMethod === 'CASH' ? 'SALE_NOTE' : 'CONSUMER_ELECTRONIC_32';
+  return ['CASH', 'TRANSFER'].includes(paymentMethod) ? 'SALE_NOTE' : 'CONSUMER_ELECTRONIC_32';
 }
 
 export function normalizePosDocumentType(

@@ -1,7 +1,12 @@
 'use strict';
 
 const bcrypt = require('../apps/api/node_modules/bcryptjs');
-const { PrismaClient, Role, InvoiceDocumentType, FiscalSequenceStatus } = require('../packages/database/generated/client');
+const {
+  PrismaClient,
+  Role,
+  InvoiceDocumentType,
+  FiscalSequenceStatus,
+} = require('../packages/database/generated/client');
 
 const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
 const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
@@ -25,15 +30,20 @@ async function main() {
     const tenant = await tx.tenant.create({
       data: {
         slug,
-        name: 'Soluciones Automotriz C&R',
-        commercialName: 'Soluciones Automotriz C&R',
-        legalName: 'Soluciones Automotriz C&R',
+        cashRegisters: { create: { name: 'Caja principal' } },
+        name: 'Soluciones Automotriz CyR',
+        commercialName: 'Soluciones Automotriz CyR',
+        legalName: 'Soluciones Automotriz CyR',
+        rnc: '132279816',
+        phone: '829-995-1128',
+        address:
+          'Calle Betania No. 21 Detras de la Innocacion, Los Beibolistas, Sto. Dgo. Oeste, R.D.',
         branding: {
           create: {
             logoUrl: '/brand/logo-taller.png',
             primaryColor: '#111111',
             accentColor: '#ffffff',
-            loginTitle: 'Soluciones Automotriz C&R',
+            loginTitle: 'Soluciones Automotriz CyR',
             loginSubtitle: 'Gestión de taller',
           },
         },
@@ -90,7 +100,9 @@ async function main() {
   console.log(JSON.stringify(result));
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-}).finally(() => prisma.$disconnect());
+main()
+  .catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

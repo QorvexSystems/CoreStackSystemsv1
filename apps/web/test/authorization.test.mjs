@@ -187,3 +187,20 @@ test('revocación explícita se respeta en todos los accesos ERP, incluso admini
   });
   assert.equal(getDefaultPathForSession(onlyPayables), '/payables');
 });
+
+
+test('coordinador abre vista previa e impresión de cotización sin abandonar su espacio', () => {
+  const coordinator = session('ORDER_TAKER');
+  for (const document of ['quote', 'reception']) {
+    assert.equal(canAccessPath(coordinator, `/workshop/ot-test/${document}/print`), true);
+    assert.equal(canAccessPath(session('ORDER_TAKER', { 'workorders.view': false }), `/workshop/ot-test/${document}/print`), false);
+  }
+  assert.equal(canAccessPath(coordinator, '/workshop/services'), false);
+  assert.equal(canAccessPath(coordinator, '/workshop/ot-test/quote/edit'), false);
+});
+
+ test('historial accesible para coordinador con permisos de consulta', () => {
+  assert.equal(canAccessPath(session('ORDER_TAKER'), '/workshop/history'), true);
+  assert.equal(canAccessPath(session('ORDER_TAKER', { 'workorders.view': false }), '/workshop/history'), false);
+  assert.equal(canAccessPath(session('ORDER_TAKER', { 'vehicles.view': false }), '/workshop/history'), false);
+});

@@ -1,6 +1,8 @@
+import { DASHBOARD_INDICATORS } from './dashboard-indicators.js';
 import type { WorkshopVehicleType } from '@/lib/api';
 
-export type VehicleMapView = 'front' | 'back' | 'left' | 'right' | 'top';
+export type LegacyVehicleMapView = 'front' | 'back' | 'left' | 'right' | 'top';
+export type VehicleMapView = LegacyVehicleMapView | 'dashboard';
 
 export type VehicleMapShape =
   | { kind: 'rect'; x: number; y: number; width: number; height: number; rx?: number }
@@ -12,7 +14,7 @@ export type VehicleMapHotspot = {
   shape: VehicleMapShape;
 };
 
-export const VEHICLE_MAP_VIEWS: Array<{ id: VehicleMapView; label: string }> = [
+export const LEGACY_VEHICLE_MAP_VIEWS: Array<{ id: LegacyVehicleMapView; label: string }> = [
   { id: 'front', label: 'Frente' },
   { id: 'back', label: 'Parte trasera' },
   { id: 'left', label: 'Lado izquierdo' },
@@ -20,7 +22,7 @@ export const VEHICLE_MAP_VIEWS: Array<{ id: VehicleMapView; label: string }> = [
   { id: 'top', label: 'Vista superior' },
 ];
 
-export const VEHICLE_AREA_LABELS: Record<string, string> = {
+export const LEGACY_VEHICLE_AREA_LABELS: Record<string, string> = {
   front_bumper: 'Parachoques delantero',
   rear_bumper: 'Parachoques trasero',
   hood: 'Capó',
@@ -54,7 +56,7 @@ export const VEHICLE_AREA_LABELS: Record<string, string> = {
   right_skirt: 'Estribo derecho',
 };
 
-const sedan: Record<VehicleMapView, VehicleMapHotspot[]> = {
+const sedan: Record<LegacyVehicleMapView, VehicleMapHotspot[]> = {
   front: [
     { areaId: 'windshield', shape: { kind: 'polygon', points: '28,12 72,12 78,34 22,34' } },
     { areaId: 'hood', shape: { kind: 'polygon', points: '22,35 78,35 84,56 16,56' } },
@@ -113,7 +115,7 @@ const sedan: Record<VehicleMapView, VehicleMapHotspot[]> = {
   ],
 };
 
-const suv: Record<VehicleMapView, VehicleMapHotspot[]> = {
+const suv: Record<LegacyVehicleMapView, VehicleMapHotspot[]> = {
   front: sedan.front.map((hotspot) => ({
     ...hotspot,
     shape:
@@ -155,15 +157,18 @@ const suv: Record<VehicleMapView, VehicleMapHotspot[]> = {
   })),
 };
 
-export const VEHICLE_HOTSPOTS: Record<
+export const LEGACY_VEHICLE_HOTSPOTS: Record<
   WorkshopVehicleType,
-  Record<VehicleMapView, VehicleMapHotspot[]>
+  Record<LegacyVehicleMapView, VehicleMapHotspot[]>
 > = {
   CAR: sedan,
   SUV: suv,
 };
 
-export const VEHICLE_VIEW_ASSETS: Record<WorkshopVehicleType, Record<VehicleMapView, string>> = {
+export const LEGACY_VEHICLE_VIEW_ASSETS: Record<
+  WorkshopVehicleType,
+  Record<LegacyVehicleMapView, string>
+> = {
   CAR: {
     front: '/assets/vehicles/sedan/front.png',
     back: '/assets/vehicles/sedan/back.png',
@@ -180,7 +185,10 @@ export const VEHICLE_VIEW_ASSETS: Record<WorkshopVehicleType, Record<VehicleMapV
   },
 };
 
-export const VEHICLE_VIEW_ASPECTS: Record<WorkshopVehicleType, Record<VehicleMapView, number>> = {
+export const LEGACY_VEHICLE_VIEW_ASPECTS: Record<
+  WorkshopVehicleType,
+  Record<LegacyVehicleMapView, number>
+> = {
   CAR: {
     front: 1536 / 1024,
     back: 1536 / 1024,
@@ -196,6 +204,195 @@ export const VEHICLE_VIEW_ASPECTS: Record<WorkshopVehicleType, Record<VehicleMap
     top: 941 / 1672,
   },
 };
+
+export function preferredLegacyVehicleViews(
+  vehicleType: WorkshopVehicleType,
+  areaIds: string[],
+  limit = 2,
+) {
+  const remaining = new Set(areaIds);
+  const selected: LegacyVehicleMapView[] = [];
+  while (remaining.size && selected.length < limit) {
+    const candidate = LEGACY_VEHICLE_MAP_VIEWS.map(({ id }) => ({
+      id,
+      hits: LEGACY_VEHICLE_HOTSPOTS[vehicleType][id].filter((spot) => remaining.has(spot.areaId))
+        .length,
+    })).sort((a, b) => b.hits - a.hits)[0];
+    if (!candidate || candidate.hits === 0) break;
+    selected.push(candidate.id);
+    LEGACY_VEHICLE_HOTSPOTS[vehicleType][candidate.id].forEach((spot) =>
+      remaining.delete(spot.areaId),
+    );
+  }
+  return selected.length ? selected : (['front'] as LegacyVehicleMapView[]);
+}
+
+// Keep the original diagrams and IDs for saved bodywork findings and quote snapshots.
+// The persisted view codes stay compatible with existing reception/quotation records.
+export const VEHICLE_MAP_VIEWS: Array<{ id: VehicleMapView; label: string }> = [
+  { id: 'top', label: 'Mecánica general' },
+  { id: 'front', label: 'Motor y refrigeración' },
+  { id: 'back', label: 'Transmisión' },
+  { id: 'left', label: 'Suspensión y frenos' },
+  { id: 'right', label: 'Electricidad' },
+  { id: 'dashboard', label: 'Tablero' },
+];
+
+export const VEHICLE_AREA_LABELS: Record<string, string> = {
+  ...Object.fromEntries(DASHBOARD_INDICATORS.map(item => [item.id, item.label])),
+  ...LEGACY_VEHICLE_AREA_LABELS,
+  engine: 'Motor',
+  transmission: 'Transmisión / caja de cambios',
+  steering_system: 'Dirección / cremallera',
+  front_axle: 'Eje delantero',
+  rear_axle: 'Eje trasero',
+  exhaust_system: 'Sistema de escape',
+  fuel_system: 'Sistema de combustible',
+  differential: 'Diferencial',
+  left_front_bearing: 'Rodamiento delantero izquierdo',
+  right_front_bearing: 'Rodamiento delantero derecho',
+  left_rear_bearing: 'Rodamiento trasero izquierdo',
+  right_rear_bearing: 'Rodamiento trasero derecho',
+  ignition_system: 'Bobinas y bujías',
+  radiator: 'Radiador y ventiladores',
+  cooling_system: 'Bomba de agua y refrigeración',
+  alternator: 'Alternador',
+  starter_motor: 'Motor de arranque',
+  intake_system: 'Admisión / cuerpo de aceleración',
+  timing_system: 'Correa / cadena de distribución',
+  engine_mounts: 'Soportes del motor',
+  clutch: 'Embrague / volante de motor',
+  torque_converter: 'Convertidor de par',
+  driveshaft: 'Eje cardán',
+  cv_joints: 'Semiejes / juntas homocinéticas',
+  shock_absorbers: 'Amortiguadores y resortes',
+  control_arms: 'Brazos de suspensión',
+  ball_joints: 'Rótulas y terminales',
+  wheel_bearings: 'Rodamientos y cubos de rueda',
+  brake_discs: 'Discos de freno',
+  brake_calipers: 'Calipers / pinzas de freno',
+  brake_pads: 'Pastillas de freno',
+  abs_system: 'Sensores ABS',
+  dashboard: 'Tablero / mandos',
+  instrument_cluster: 'Panel de instrumentos / testigos',
+  steering_wheel: 'Volante / columna de dirección',
+  air_conditioning: 'Aire acondicionado / climatización',
+  airbags: 'Airbags / sistema SRS',
+  electrical_system: 'Cableado / fusibles',
+  battery: 'Batería y carga',
+  ecu: 'Computadora / ECU',
+};
+
+const rect = (
+  areaId: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): VehicleMapHotspot => ({
+  areaId,
+  shape: { kind: 'rect', x, y, width, height, rx: 3 },
+});
+const circle = (
+  areaId: string,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry = rx,
+): VehicleMapHotspot => ({
+  areaId,
+  shape: { kind: 'ellipse', cx, cy, rx, ry },
+});
+
+const mechanical: Record<VehicleMapView, VehicleMapHotspot[]> = {
+  dashboard: DASHBOARD_INDICATORS.map((item, index) => rect(item.id, (index % 6) * 16 + 1, Math.floor(index / 6) * 10 + 1, 14, 8)),
+  top: [
+    rect('engine', 32, 9, 36, 15),
+    rect('transmission', 39, 29, 22, 13),
+    rect('steering_system', 23, 46, 54, 8),
+    rect('front_axle', 26, 24, 48, 5),
+    rect('rear_axle', 26, 77, 48, 5),
+    rect('exhaust_system', 64, 55, 13, 19),
+    rect('fuel_system', 30, 63, 28, 11),
+    rect('differential', 40, 83, 20, 9),
+    circle('left_front_bearing', 15, 27, 9, 6),
+    circle('right_front_bearing', 85, 27, 9, 6),
+    circle('left_rear_bearing', 15, 80, 9, 6),
+    circle('right_rear_bearing', 85, 80, 9, 6),
+  ],
+  front: [
+    rect('engine', 30, 36, 41, 26),
+    rect('ignition_system', 32, 17, 40, 15),
+    rect('radiator', 19, 80, 62, 15),
+    rect('cooling_system', 76, 35, 18, 27),
+    rect('alternator', 6, 40, 19, 23),
+    rect('starter_motor', 8, 68, 20, 15),
+    rect('intake_system', 77, 9, 19, 22),
+    rect('timing_system', 36, 66, 36, 11),
+    rect('engine_mounts', 6, 15, 20, 19),
+  ],
+  back: [
+    rect('transmission', 28, 10, 46, 32),
+    circle('clutch', 17, 57, 13, 17),
+    circle('torque_converter', 45, 59, 12, 16),
+    rect('driveshaft', 7, 82, 48, 12),
+    rect('differential', 69, 68, 26, 26),
+    rect('cv_joints', 64, 47, 31, 13),
+  ],
+  left: [
+    rect('shock_absorbers', 5, 5, 22, 45),
+    rect('control_arms', 4, 69, 32, 24),
+    circle('ball_joints', 17, 59, 10, 10),
+    circle('wheel_bearings', 49, 76, 14, 17),
+    circle('brake_discs', 51, 32, 20, 26),
+    rect('brake_calipers', 76, 13, 19, 26),
+    rect('brake_pads', 76, 45, 19, 19),
+    rect('abs_system', 72, 73, 23, 19),
+  ],
+  right: [
+    rect('instrument_cluster', 7, 9, 33, 22),
+    rect('dashboard', 44, 7, 27, 17),
+    circle('steering_wheel', 24, 51, 18, 20),
+    rect('air_conditioning', 45, 30, 26, 30),
+    rect('airbags', 76, 9, 19, 28),
+    rect('electrical_system', 6, 76, 34, 19),
+    rect('battery', 46, 72, 24, 23),
+    rect('ecu', 77, 66, 19, 28),
+  ],
+};
+
+// Generic technical diagrams: components apply to both cars and SUVs, independently of body style.
+export const VEHICLE_HOTSPOTS: Record<
+  WorkshopVehicleType,
+  Record<VehicleMapView, VehicleMapHotspot[]>
+> = {
+  CAR: mechanical,
+  SUV: mechanical,
+};
+const technicalAssets: Record<VehicleMapView, string> = {
+  dashboard: '/assets/vehicles/mechanical/indicators.svg',
+  top: '/assets/vehicles/mechanical/overview.svg',
+  front: '/assets/vehicles/mechanical/engine.svg',
+  back: '/assets/vehicles/mechanical/transmission.svg',
+  left: '/assets/vehicles/mechanical/suspension.svg',
+  right: '/assets/vehicles/mechanical/electrical.svg',
+};
+export const VEHICLE_VIEW_ASSETS = { CAR: technicalAssets, SUV: technicalAssets };
+const technicalAspects: Record<VehicleMapView, number> = {
+  dashboard: 1,
+  top: 480 / 720,
+  front: 640 / 480,
+  back: 640 / 480,
+  left: 640 / 480,
+  right: 640 / 480,
+};
+export const VEHICLE_VIEW_ASPECTS = { CAR: technicalAspects, SUV: technicalAspects };
+
+export function isMechanicalArea(areaId: string) {
+  return Object.values(mechanical).some((hotspots) =>
+    hotspots.some((spot) => spot.areaId === areaId),
+  );
+}
 
 export function preferredVehicleViews(
   vehicleType: WorkshopVehicleType,
@@ -213,5 +410,5 @@ export function preferredVehicleViews(
     selected.push(candidate.id);
     VEHICLE_HOTSPOTS[vehicleType][candidate.id].forEach((spot) => remaining.delete(spot.areaId));
   }
-  return selected.length ? selected : (['front'] as VehicleMapView[]);
+  return selected.length ? selected : (['top'] as VehicleMapView[]);
 }

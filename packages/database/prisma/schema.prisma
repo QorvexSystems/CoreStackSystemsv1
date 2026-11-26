@@ -1129,6 +1129,7 @@ model WorkshopTicket {
   areaFindings        WorkshopVehicleAreaFinding[]
   quoteVersions       WorkshopQuoteVersion[]
   changeOrders        WorkshopChangeOrder[]
+  readyNotification   WorkshopReadyNotification?
   statusEvents        WorkshopTicketStatusEvent[]
   advances            WorkshopAdvance[]
   expenses            WorkshopExpense[]
@@ -1318,6 +1319,8 @@ model WorkshopReception {
   warningLights     String?
   observations      String?
   imageUrls         String[]         @default([])
+  signatureUrl      String?
+  signedAt          DateTime?
   initialMechanicId String?
   createdById       String
   receivedAt        DateTime         @default(now())
@@ -2492,4 +2495,25 @@ model AuditLog {
   @@index([userId])
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+
+model WorkshopReadyNotification {
+  id            String   @id @default(cuid())
+  tenantId      String
+  ticketId      String   @unique
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  lockedAt      DateTime?
+  messageId     String?
+  lastError     String?
+  sentAt        DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  ticket WorkshopTicket @relation(fields: [tenantId, ticketId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, ticketId])
+  @@index([tenantId, status])
+  @@index([status, nextAttemptAt])
 }

@@ -5,6 +5,7 @@ const nextConfig = {
   // chunks que un servidor de desarrollo ya tiene abiertos.
   distDir: process.env.NODE_ENV === 'development' ? '.next-dev' : '.next',
   typedRoutes: false,
+  serverExternalPackages: ['playwright', 'playwright-core'],
   poweredByHeader: false,
   async headers() {
     return [

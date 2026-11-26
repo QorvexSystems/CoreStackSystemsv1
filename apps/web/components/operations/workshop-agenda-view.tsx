@@ -1,5 +1,10 @@
 'use client';
 
+import { KeyboardDialogLayer } from '@/components/ui/keyboard-dialog-layer';
+import { DocumentWhatsappButton } from './document-whatsapp-button';
+import { appointmentWhatsappMessage } from '@/lib/appointment-whatsapp';
+import { AppointmentDateTimePicker } from './appointment-date-time-picker';
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -69,14 +74,15 @@ function getAppointmentRange(date: string, view: CalendarView) {
   if (view === 'WEEK') {
     const mondayOffset = (anchor.getDay() + 6) % 7;
     start.setDate(anchor.getDate() - mondayOffset);
+    end.setTime(start.getTime());
     end.setDate(start.getDate() + 6);
   } else if (view === 'MONTH') {
     start.setDate(1);
     end.setMonth(anchor.getMonth() + 1, 0);
   }
   return {
-    from: `${localDateTime(start).slice(0, 10)}T00:00:00`,
-    to: `${localDateTime(end).slice(0, 10)}T23:59:59.999`,
+    from: new Date(`${localDateTime(start).slice(0, 10)}T00:00:00`).toISOString(),
+    to: new Date(`${localDateTime(end).slice(0, 10)}T23:59:59.999`).toISOString(),
   };
 }
 
@@ -107,30 +113,6 @@ function appointmentTime(value: string) {
   });
 }
 
-function appointmentTimeParts(value: string) {
-  const [date = '', time = '00:00'] = value.split('T');
-  const [hourValue = '0', minute = '00'] = time.split(':');
-  const hour24 = Number(hourValue);
-
-  return {
-    date,
-    hour: String(hour24 % 12 || 12).padStart(2, '0'),
-    minute,
-    period: hour24 >= 12 ? 'PM' : 'AM',
-  } as const;
-}
-
-function updateAppointmentTime(
-  value: string,
-  changes: Partial<{ date: string; hour: string; minute: string; period: 'AM' | 'PM' }>,
-) {
-  const current = appointmentTimeParts(value);
-  const next = { ...current, ...changes };
-  const hour12 = Number(next.hour);
-  const hour24 = (hour12 % 12) + (next.period === 'PM' ? 12 : 0);
-  return `${next.date}T${String(hour24).padStart(2, '0')}:${next.minute}`;
-}
-
 function AppointmentDateTimeInput({
   value,
   onChange,
@@ -138,64 +120,7 @@ function AppointmentDateTimeInput({
   value: string;
   onChange: (value: string) => void;
 }) {
-  const parts = appointmentTimeParts(value);
-
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-3">
-      <Input
-        required
-        type="date"
-        className="h-11 min-w-0 basis-40 flex-1 px-3"
-        aria-label="Fecha de la cita"
-        value={parts.date}
-        onChange={(event) => onChange(updateAppointmentTime(value, { date: event.target.value }))}
-      />
-      <div className="grid min-w-0 flex-1 basis-56 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_minmax(0,1.35fr)] items-center gap-2">
-        <select
-          aria-label="Hora"
-          className="h-11 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm"
-          value={parts.hour}
-          onChange={(event) => onChange(updateAppointmentTime(value, { hour: event.target.value }))}
-        >
-          {Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0')).map(
-            (hour) => (
-              <option key={hour} value={hour}>
-                {hour}
-              </option>
-            ),
-          )}
-        </select>
-        <span className="font-semibold text-slate-500">:</span>
-        <select
-          aria-label="Minutos"
-          className="h-11 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm"
-          value={parts.minute}
-          onChange={(event) =>
-            onChange(updateAppointmentTime(value, { minute: event.target.value }))
-          }
-        >
-          {Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, '0')).map(
-            (minute) => (
-              <option key={minute} value={minute}>
-                {minute}
-              </option>
-            ),
-          )}
-        </select>
-        <select
-          aria-label="Período"
-          className="h-11 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm font-semibold"
-          value={parts.period}
-          onChange={(event) =>
-            onChange(updateAppointmentTime(value, { period: event.target.value as 'AM' | 'PM' }))
-          }
-        >
-          <option value="AM">a. m.</option>
-          <option value="PM">p. m.</option>
-        </select>
-      </div>
-    </div>
-  );
+  return <AppointmentDateTimePicker value={value} onChange={onChange} />;
 }
 
 const emptyForm = () => ({
@@ -207,14 +132,15 @@ const emptyForm = () => ({
   notes: '',
 });
 
-type TabletFilter = 'ALL' | 'PENDING' | 'CONFIRMED' | 'IN_WORKSHOP' | 'READY';
+type TabletFilter = 'ALL' | 'PENDING' | 'CONFIRMED' | 'READY';
 type CalendarView = 'DAY' | 'WEEK' | 'MONTH';
 
 export function WorkshopAgendaView() {
+  const router = useRouter();
   const session = useCurrentSession();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<WorkshopAppointmentStatus | 'ALL'>('ALL');
+  const [status, setStatus] = useState<TabletFilter>('PENDING');
   const [date, setDate] = useState(() => localDateTime().slice(0, 10));
   const [calendarView, setCalendarView] = useState<CalendarView>('DAY');
   const [mechanicFilter, setMechanicFilter] = useState('ALL');
@@ -223,8 +149,9 @@ export function WorkshopAgendaView() {
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [vehicleDialogOpen, setVehicleDialogOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<WorkshopTicket | null>(null);
+  const [appointmentToNotify, setAppointmentToNotify] = useState<WorkshopAppointment | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<WorkshopAppointment | null>(null);
-  const [tabletFilter, setTabletFilter] = useState<TabletFilter>('ALL');
+  const [tabletFilter, setTabletFilter] = useState<TabletFilter>('PENDING');
   const [editing, setEditing] = useState<WorkshopAppointment | null>(null);
   const [form, setForm] = useState(emptyForm);
 
@@ -274,14 +201,16 @@ export function WorkshopAgendaView() {
     await queryClient.invalidateQueries({ queryKey: ['workshop-tickets'] });
   };
   const saveMutation = useMutation({
-    mutationFn: (payload: WorkshopAppointmentPayload) => {
+    mutationFn: ({ payload }: { payload: WorkshopAppointmentPayload; toReception: boolean }) => {
       if (!session) throw new Error('Sesión requerida.');
       return editing
         ? updateWorkshopAppointment(session.tenantId, session.accessToken, editing.id, payload)
         : createWorkshopAppointment(session.tenantId, session.accessToken, payload);
     },
-    onSuccess: async () => {
+    onSuccess: async (appointment, { toReception }) => {
       toast.success(editing ? 'Cita actualizada' : 'Cita programada');
+      if (toReception) receiveMutation.mutate(appointment.id);
+      else setAppointmentToNotify(appointment);
       setFormOpen(false);
       setEditing(null);
       setForm(emptyForm());
@@ -332,10 +261,17 @@ export function WorkshopAgendaView() {
         .filter(Boolean)
         .some((value) => !normalized || value!.toLowerCase().includes(normalized));
       const matchesMechanic = mechanicFilter === 'ALL' || appointment.mechanicId === mechanicFilter;
-      const matchesStatus = status === 'ALL' || appointment.status === status;
+      const matchesStatus =
+        tabletMode ||
+        status === 'ALL' ||
+        (status === 'CONFIRMED'
+          ? appointment.status === 'CONFIRMED'
+          : status === 'READY'
+            ? appointment.status === 'CONVERTED_TO_RECEPTION'
+            : ['SCHEDULED', 'ARRIVED'].includes(appointment.status));
       return matchesSearch && matchesMechanic && matchesStatus;
     });
-  }, [appointmentsQuery.data, mechanicFilter, search, status]);
+  }, [appointmentsQuery.data, mechanicFilter, search, status, tabletMode]);
   const activeTickets = useMemo(
     () =>
       (ticketsQuery.data ?? []).filter(
@@ -343,15 +279,19 @@ export function WorkshopAgendaView() {
       ),
     [ticketsQuery.data],
   );
-  const tabletAppointments = useMemo(() => {
-    if (tabletFilter === 'PENDING')
-      return visibleAppointments.filter((appointment) =>
-        ['SCHEDULED', 'ARRIVED'].includes(appointment.status),
-      );
-    if (tabletFilter === 'CONFIRMED')
-      return visibleAppointments.filter((appointment) => appointment.status === 'CONFIRMED');
-    return visibleAppointments;
-  }, [tabletFilter, visibleAppointments]);
+  const tabletAppointments = useMemo(
+    () =>
+      visibleAppointments.filter(
+        (appointment) =>
+          tabletFilter === 'ALL' ||
+          (tabletFilter === 'CONFIRMED'
+            ? appointment.status === 'CONFIRMED'
+            : tabletFilter === 'READY'
+              ? appointment.status === 'CONVERTED_TO_RECEPTION'
+              : ['SCHEDULED', 'ARRIVED'].includes(appointment.status)),
+      ),
+    [tabletFilter, visibleAppointments],
+  );
   const visibleActiveTickets = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     const matching = activeTickets.filter((ticket) =>
@@ -368,9 +308,10 @@ export function WorkshopAgendaView() {
         .filter(Boolean)
         .some((value) => !normalized || value!.toLowerCase().includes(normalized)),
     );
+    if (tabletFilter === 'CONFIRMED') return [];
     if (tabletFilter === 'READY')
       return matching.filter((ticket) => ticket.status === 'READY_FOR_DELIVERY');
-    if (tabletFilter === 'IN_WORKSHOP')
+    if (tabletFilter === 'PENDING')
       return matching.filter((ticket) => ticket.status !== 'READY_FOR_DELIVERY');
     return matching;
   }, [activeTickets, search, tabletFilter]);
@@ -401,14 +342,14 @@ export function WorkshopAgendaView() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    saveMutation.mutate({
+    const toReception = (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'reception';
+    saveMutation.mutate({ toReception, payload: {
       customerId: form.customerId,
       vehicleId: form.vehicleId,
-      mechanicId: form.mechanicId || undefined,
       startsAt: new Date(form.startsAt).toISOString(),
       reason: form.reason,
       notes: form.notes || undefined,
-    });
+    } });
   }
 
   function changeDate(days: number) {
@@ -450,9 +391,10 @@ export function WorkshopAgendaView() {
           appointments={tabletAppointments}
           allAppointments={appointmentsQuery.data ?? []}
           tickets={visibleActiveTickets}
-          allTickets={activeTickets}
+          allTickets={ticketsQuery.data ?? []}
           loading={appointmentsQuery.isLoading || ticketsQuery.isLoading}
           pending={statusMutation.isPending || receiveMutation.isPending}
+          onDate={setDate}
           onPreviousDay={() => changeDate(-1)}
           onNextDay={() => changeDate(1)}
           onToday={() => setDate(localDateTime().slice(0, 10))}
@@ -460,7 +402,10 @@ export function WorkshopAgendaView() {
           onSearch={setSearch}
           onFilter={setTabletFilter}
           onSelectAppointment={setSelectedAppointment}
-          onSelectTicket={setSelectedTicket}
+          onSelectTicket={(ticket) => {
+            if (ticket.status === 'RECEIVED') setSelectedTicket(ticket);
+            else router.push(`/workshop?ticket=${encodeURIComponent(ticket.id)}`);
+          }}
           onStatus={(appointment, next) => statusMutation.mutate({ id: appointment.id, next })}
           onReceive={(appointment) => receiveMutation.mutate(appointment.id)}
         />
@@ -474,7 +419,7 @@ export function WorkshopAgendaView() {
           advancedFiltersOpen={advancedFiltersOpen}
           appointments={visibleAppointments}
           allAppointments={appointmentsQuery.data ?? []}
-          tickets={activeTickets}
+          tickets={ticketsQuery.data ?? []}
           mechanics={mechanicsQuery.data ?? []}
           loading={appointmentsQuery.isLoading || ticketsQuery.isLoading}
           pending={statusMutation.isPending || receiveMutation.isPending}
@@ -489,7 +434,10 @@ export function WorkshopAgendaView() {
           onMechanicFilter={setMechanicFilter}
           onToggleAdvanced={() => setAdvancedFiltersOpen((current) => !current)}
           onSelectAppointment={setSelectedAppointment}
-          onSelectTicket={setSelectedTicket}
+          onSelectTicket={(ticket) => {
+            if (ticket.status === 'RECEIVED') setSelectedTicket(ticket);
+            else router.push(`/workshop?ticket=${encodeURIComponent(ticket.id)}`);
+          }}
           onEdit={openEdit}
           onStatus={(appointment, next) => statusMutation.mutate({ id: appointment.id, next })}
           onReceive={(appointment) => receiveMutation.mutate(appointment.id)}
@@ -497,16 +445,11 @@ export function WorkshopAgendaView() {
       )}
 
       {formOpen ? (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/65 p-3 backdrop-blur-sm sm:p-6"
-          onMouseDown={(event) =>
-            event.target === event.currentTarget && !saveMutation.isPending && setFormOpen(false)
-          }
-        >
+        <KeyboardDialogLayer onDismiss={() => !saveMutation.isPending && setFormOpen(false)}>
           <Card
             role="dialog"
             aria-modal="true"
-            className="max-h-[92vh] w-full max-w-4xl overflow-y-auto border-primary/30 shadow-2xl"
+            className="max-h-full w-full max-w-4xl overflow-y-auto border-primary/30 shadow-2xl"
           >
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
@@ -603,40 +546,24 @@ export function WorkshopAgendaView() {
                     onChange={(startsAt) => setForm((current) => ({ ...current, startsAt }))}
                   />
                 </Field>
-                <Field label="Mecánico asignado (opcional)">
-                  <select
-                    className="h-11 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm"
-                    value={form.mechanicId}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, mechanicId: event.target.value }))
-                    }
-                  >
-                    <option value="">Sin asignar</option>
-                    {(mechanicsQuery.data ?? []).map((mechanic) => (
-                      <option key={mechanic.id} value={mechanic.id}>
-                        {mechanic.user.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
                 <div className="md:col-span-2">
-                <Field label="Motivo / queja" required>
-                  <Input
-                    required
-                    maxLength={2000}
-                    value={form.reason}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, reason: event.target.value }))
-                    }
-                    placeholder="Ej. Ruido al frenar"
-                  />
-                </Field>
+                  <Field label="Motivo / queja" required>
+                    <Input
+                      required
+                      maxLength={2000}
+                      value={form.reason}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, reason: event.target.value }))
+                      }
+                      placeholder="Ej. Ruido al frenar"
+                    />
+                  </Field>
                 </div>
-                <div className="md:col-span-2 flex gap-2">
+                <div className="md:col-span-2 flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
                     Cancelar
                   </Button>
-                  <Button disabled={saveMutation.isPending}>
+                  <Button type="submit" value="schedule" disabled={saveMutation.isPending || receiveMutation.isPending}>
                     {saveMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
@@ -644,13 +571,32 @@ export function WorkshopAgendaView() {
                     )}
                     {editing ? 'Guardar cambios' : 'Programar cita'}
                   </Button>
+                  {!editing ? (
+                    <Button type="submit" value="reception"
+                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+                      disabled={saveMutation.isPending || receiveMutation.isPending}>
+                      <ClipboardCheck className="h-4 w-4" />
+                      Continuar a Recepción
+                    </Button>
+                  ) : null}
                 </div>
               </form>
             </CardContent>
           </Card>
-        </div>
+        </KeyboardDialogLayer>
       ) : null}
 
+      {appointmentToNotify ? (
+        <DocumentWhatsappButton
+          key={`${appointmentToNotify.id}-${appointmentToNotify.startsAt}`}
+          customer={appointmentToNotify.customer}
+          readyMessage={appointmentWhatsappMessage(appointmentToNotify)}
+          label="Enviar cita por WhatsApp"
+          dialogTitle="Enviar confirmación de cita por WhatsApp"
+          defaultOpen
+          onClose={() => setAppointmentToNotify(null)}
+        />
+      ) : null}
       <QuickCustomerDialog
         open={customerDialogOpen}
         session={session}
@@ -701,11 +647,10 @@ export function WorkshopAgendaView() {
           receiveMutation.mutate(selectedAppointment.id);
         }}
         onOpenTicket={(ticketId) => {
+          setSelectedAppointment(null);
           const ticket = ticketsQuery.data?.find((item) => item.id === ticketId);
-          if (ticket) {
-            setSelectedAppointment(null);
-            setSelectedTicket(ticket);
-          }
+          if (ticket?.status === 'RECEIVED') setSelectedTicket(ticket);
+          else router.push(`/workshop?ticket=${encodeURIComponent(ticketId)}`);
         }}
       />
     </div>
@@ -744,7 +689,7 @@ function AdminOrderDesk({
   date: string;
   view: CalendarView;
   search: string;
-  status: WorkshopAppointmentStatus | 'ALL';
+  status: TabletFilter;
   mechanicFilter: string;
   advancedFiltersOpen: boolean;
   appointments: WorkshopAppointment[];
@@ -760,7 +705,7 @@ function AdminOrderDesk({
   onView: (view: CalendarView) => void;
   onCreate: () => void;
   onSearch: (value: string) => void;
-  onStatusFilter: (status: WorkshopAppointmentStatus | 'ALL') => void;
+  onStatusFilter: (status: TabletFilter) => void;
   onMechanicFilter: (id: string) => void;
   onToggleAdvanced: () => void;
   onSelectAppointment: (appointment: WorkshopAppointment) => void;
@@ -914,28 +859,12 @@ function AdminOrderDesk({
               <select
                 className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm lg:w-48"
                 value={status}
-                onChange={(event) =>
-                  onStatusFilter(event.target.value as WorkshopAppointmentStatus | 'ALL')
-                }
+                onChange={(event) => onStatusFilter(event.target.value as TabletFilter)}
               >
-                <option value="ALL">Todos los estados</option>
-                {Object.entries(statusLabel).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm lg:w-48"
-                value={mechanicFilter}
-                onChange={(event) => onMechanicFilter(event.target.value)}
-              >
-                <option value="ALL">Todos los técnicos</option>
-                {mechanics.map((mechanic) => (
-                  <option key={mechanic.id} value={mechanic.id}>
-                    {mechanic.user.name}
-                  </option>
-                ))}
+                <option value="PENDING">Pendientes</option>
+                <option value="CONFIRMED">Confirmadas</option>
+                <option value="READY">Listas</option>
+                <option value="ALL">Todas</option>
               </select>
               <Button
                 type="button"
@@ -1177,9 +1106,6 @@ function AdminAppointmentRow({
       </div>
       <div className="min-w-0">
         <p className="truncate text-sm text-slate-700">{appointment.reason}</p>
-        <p className="truncate text-xs text-slate-400">
-          {appointment.mechanic?.user.name ?? 'Sin técnico asignado'}
-        </p>
       </div>
       <div>
         <AppointmentStatusBadge status={appointment.status} />
@@ -1197,70 +1123,72 @@ function AdminAppointmentRow({
             <span>{primary.label}</span>
           </Button>
         ) : null}
-        <div className="relative" data-appointment-actions>
-          <button
-            type="button"
-            onClick={onMenuToggle}
-            className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500"
-            aria-label="Más acciones"
-            aria-expanded={menuOpen}
-          >
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
-          {menuOpen ? (
-            <div className="absolute bottom-11 right-0 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-xl">
-              {editable ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onMenuToggle();
-                      onEdit();
-                    }}
-                    className="w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50"
-                  >
-                    Editar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onMenuToggle();
-                      onEdit();
-                    }}
-                    className="w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50"
-                  >
-                    Reprogramar
-                  </button>
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => {
-                      onMenuToggle();
-                      onStatus('CANCELLED');
-                    }}
-                    className="w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50"
-                  >
-                    Cancelar
-                  </button>
-                </>
-              ) : null}
-              <Link
-                href={`/customers?customer=${encodeURIComponent(appointment.customerId)}`}
-                onClick={onMenuToggle}
-                className="block rounded-lg px-3 py-2 hover:bg-slate-50"
-              >
-                Ver cliente
-              </Link>
-              <Link
-                href={`/workshop/vehicles?vehicle=${encodeURIComponent(appointment.vehicleId)}`}
-                onClick={onMenuToggle}
-                className="block rounded-lg px-3 py-2 hover:bg-slate-50"
-              >
-                Ver vehículo
-              </Link>
-            </div>
-          ) : null}
-        </div>
+        {editable ? (
+          <div className="relative" data-appointment-actions>
+            <button
+              type="button"
+              onClick={onMenuToggle}
+              className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500"
+              aria-label="Más acciones"
+              aria-expanded={menuOpen}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {menuOpen ? (
+              <div className="absolute bottom-11 right-0 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-xl">
+                {editable ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onMenuToggle();
+                        onEdit();
+                      }}
+                      className="w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onMenuToggle();
+                        onEdit();
+                      }}
+                      className="w-full rounded-lg px-3 py-2 text-left hover:bg-slate-50"
+                    >
+                      Reprogramar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => {
+                        onMenuToggle();
+                        onStatus('CANCELLED');
+                      }}
+                      className="w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50"
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                ) : null}
+                <Link
+                  href={`/customers?customer=${encodeURIComponent(appointment.customerId)}`}
+                  onClick={onMenuToggle}
+                  className="block rounded-lg px-3 py-2 hover:bg-slate-50"
+                >
+                  Ver cliente
+                </Link>
+                <Link
+                  href={`/workshop/vehicles?vehicle=${encodeURIComponent(appointment.vehicleId)}`}
+                  onClick={onMenuToggle}
+                  className="block rounded-lg px-3 py-2 hover:bg-slate-50"
+                >
+                  Ver vehículo
+                </Link>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -1317,6 +1245,7 @@ function TabletWorkstation({
   allTickets,
   loading,
   pending,
+  onDate,
   onPreviousDay,
   onNextDay,
   onToday,
@@ -1339,6 +1268,7 @@ function TabletWorkstation({
   allTickets: WorkshopTicket[];
   loading: boolean;
   pending: boolean;
+  onDate: (value: string) => void;
   onPreviousDay: () => void;
   onNextDay: () => void;
   onToday: () => void;
@@ -1357,15 +1287,8 @@ function TabletWorkstation({
     ['SCHEDULED', 'ARRIVED'].includes(item.status),
   ).length;
   const confirmed = allAppointments.filter((item) => item.status === 'CONFIRMED').length;
-  const inWorkshop = allTickets.filter((item) => item.status !== 'READY_FOR_DELIVERY').length;
-  const ready = allTickets.filter((item) => item.status === 'READY_FOR_DELIVERY').length;
+  const ready = allAppointments.filter((item) => item.status === 'CONVERTED_TO_RECEPTION').length;
   const filters: Array<{ id: TabletFilter; label: string; count: number; tone: string }> = [
-    {
-      id: 'ALL',
-      label: 'Todos',
-      count: allAppointments.length,
-      tone: 'bg-slate-950 text-white border-slate-950',
-    },
     {
       id: 'PENDING',
       label: 'Pendientes',
@@ -1379,16 +1302,16 @@ function TabletWorkstation({
       tone: 'bg-sky-50 text-sky-800 border-sky-200',
     },
     {
-      id: 'IN_WORKSHOP',
-      label: 'En taller',
-      count: inWorkshop,
-      tone: 'bg-amber-50 text-amber-800 border-amber-200',
-    },
-    {
       id: 'READY',
-      label: 'Listos',
+      label: 'Listas',
       count: ready,
       tone: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    },
+    {
+      id: 'ALL',
+      label: 'Todas',
+      count: allAppointments.length,
+      tone: 'bg-slate-950 text-white border-slate-950',
     },
   ];
 
@@ -1409,14 +1332,19 @@ function TabletWorkstation({
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
-            <button
-              type="button"
-              className="min-w-40 rounded-lg px-3 text-sm font-semibold capitalize text-slate-900 active:bg-white"
-              onClick={onToday}
-            >
+            <label className="relative min-w-40 cursor-pointer rounded-lg px-3 text-sm font-semibold capitalize text-slate-900">
               <CalendarDays className="mr-2 inline h-4 w-4" />
               {dateLabel}
-            </button>
+              <input
+                type="date"
+                aria-label="Fecha de la agenda"
+                value={date}
+                onChange={(event) => {
+                  if (event.target.value) onDate(event.target.value);
+                }}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </label>
             <button
               type="button"
               className="grid h-10 w-10 place-items-center rounded-lg text-slate-600 active:bg-white"
@@ -1650,19 +1578,21 @@ function TabletAppointmentCard({
             {action.label}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-11 w-11 shrink-0 border border-slate-200 bg-white"
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect();
-          }}
-          aria-label="Más acciones"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </Button>
+        {['SCHEDULED', 'CONFIRMED', 'ARRIVED'].includes(appointment.status) ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 shrink-0 border border-slate-200 bg-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect();
+            }}
+            aria-label="Más acciones"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </Button>
+        ) : null}
       </div>
     </article>
   );
@@ -1699,10 +1629,6 @@ function TabletOrderCard({ ticket, onSelect }: { ticket: WorkshopTicket; onSelec
             {ticket.vehicle.year ? ` · ${ticket.vehicle.year}` : ''}
           </p>
           <p className="mt-1 truncate text-sm text-slate-500">{ticket.customer.name}</p>
-          <p className="mt-1 flex items-center gap-1.5 truncate text-sm text-slate-500">
-            <Wrench className="h-3.5 w-3.5 shrink-0" />
-            {ticket.assignments[0]?.employee.user.name ?? 'Sin mecánico'}
-          </p>
         </div>
       </div>
       <p className="mt-2 truncate text-sm text-slate-600">{ticket.complaint}</p>
@@ -1778,10 +1704,6 @@ function WorkshopAppointmentDrawer({
               <DrawerDetail label="Cliente" value={appointment.customer.name} />
               <DrawerDetail label="Teléfono" value={appointment.customer.phone ?? 'Sin teléfono'} />
               <DrawerDetail label="Motivo" value={appointment.reason} />
-              <DrawerDetail
-                label="Mecánico"
-                value={appointment.mechanic?.user.name ?? 'Sin asignar'}
-              />
             </dl>
             {appointment.notes ? (
               <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
@@ -1791,6 +1713,16 @@ function WorkshopAppointmentDrawer({
           </section>
           <section className="rounded-2xl border bg-white p-5 shadow-sm">
             <h3 className="font-bold text-slate-950">Acciones rápidas</h3>
+            {['SCHEDULED', 'CONFIRMED', 'ARRIVED'].includes(appointment.status) ? (
+              <div className="mt-3">
+                <DocumentWhatsappButton
+                  customer={appointment.customer}
+                  readyMessage={appointmentWhatsappMessage(appointment)}
+                  label="Enviar cita por WhatsApp"
+                  dialogTitle="Enviar confirmación de cita por WhatsApp"
+                />
+              </div>
+            ) : null}
             <div className="mt-4 grid gap-3">
               {['SCHEDULED', 'CONFIRMED'].includes(appointment.status) ? (
                 <Button className="h-12" disabled={pending} onClick={() => onStatus('ARRIVED')}>

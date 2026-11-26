@@ -535,6 +535,13 @@ export class OrdersService {
 
   async cancel(tenantId: string, user: AuthenticatedUser, id: string, dto?: CancelSalesOrderDto) {
     return this.prisma.$transaction(async (tx) => {
+      const linkedTicket = await tx.workshopTicket.findFirst({
+        where: { tenantId, salesOrderId: id },
+        select: { id: true },
+      });
+      if (linkedTicket)
+        await tx.$queryRaw`SELECT "id" FROM "WorkshopTicket" WHERE "id" = ${linkedTicket.id} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      await this.lockSalesOrder(tx, tenantId, id);
       const order = await tx.salesOrder.findFirst({
         where: { id, tenantId },
         include: this.orderInclude(),
@@ -577,12 +584,25 @@ export class OrdersService {
           ? [SalesOrderStatus.QUOTATION]
           : openOrderStatuses;
 
-      if (order.workshopTicket) {
-        throw new BadRequestException(
-          'Esta orden corresponde a una reparación terminada. Libera la toma de Caja si otro operador la cobrará; no se puede cancelar como una venta de mostrador.',
-        );
+      if (order.invoiceId || order.status === SalesOrderStatus.COMPLETED) {
+        throw new BadRequestException('Una orden facturada no puede retirarse de Caja.');
       }
-
+      if (order.workshopTicket) {
+        const started = await tx.workshopTicket.findFirst({
+          where: {
+            id: order.workshopTicket.id,
+            tenantId,
+            OR: [
+              { status: { in: ['IN_PROGRESS', 'READY_FOR_DELIVERY', 'DELIVERED'] } },
+              { lines: { some: { consumedQuantity: { gt: 0 } } } },
+            ],
+          },
+        });
+        if (started)
+          throw new BadRequestException(
+            'La reparación ya tiene trabajo ejecutado. Revisa la OT antes de retirar este cobro.',
+          );
+      }
       const cancelledRows = await tx.salesOrder.updateMany({
         where: {
           id,
@@ -603,7 +623,62 @@ export class OrdersService {
         throw new BadRequestException('Only pending sales orders can be cancelled.');
       }
 
-      await this.releaseReservedStock(order.items, tx);
+      if (order.workshopTicket) {
+        // The OT owns its stock reservations and installed parts. Detach only the
+        // unpaid billing handoff; a corrected handoff can be generated later.
+        await this.releaseReservedStock(order.items, tx);
+        const reservedLines = await tx.workshopTicketLine.findMany({
+          where: {
+            ticketId: order.workshopTicket.id,
+            reservedQuantity: { gt: 0 },
+            productId: { not: null },
+          },
+        });
+        for (const line of reservedLines) {
+          const product = await tx.product.findUniqueOrThrow({ where: { id: line.productId! } });
+          await tx.inventoryMovement.create({
+            data: {
+              tenantId,
+              productId: product.id,
+              type: 'WORK_ORDER_RELEASE',
+              quantity: line.reservedQuantity,
+              previousStock: product.stock,
+              newStock: product.stock,
+              reference: order.workshopTicket.ticketNumber,
+              workshopTicketLineId: line.id,
+              reason: 'Reserva liberada al retirar cobro de Caja para corrección.',
+              createdById: user.id,
+            },
+          });
+        }
+        await tx.workshopTicketLine.updateMany({
+          where: { ticketId: order.workshopTicket.id },
+          data: { reservedQuantity: 0, approvalStatus: 'NOT_REQUESTED' },
+        });
+        await tx.workshopTicket.updateMany({
+          where: { tenantId, id: order.workshopTicket.id, salesOrderId: id },
+          data: {
+            salesOrderId: null,
+            status: 'DIAGNOSIS',
+            approvalStatus: 'NOT_REQUESTED',
+            approvalRequestedAt: null,
+          },
+        });
+        await tx.workshopTicketStatusEvent.create({
+          data: {
+            tenantId,
+            ticketId: order.workshopTicket.id,
+            fromStatus: 'APPROVED',
+            toStatus: 'DIAGNOSIS',
+            note: 'Cobro retirado de Caja para corregir la cotización.',
+            createdById: user.id,
+          },
+        });
+        await tx.salesOrderItem.updateMany({
+          where: { salesOrderId: id },
+          data: { reservedQuantity: 0 },
+        });
+      } else await this.releaseReservedStock(order.items, tx);
       if (
         order.creditApproval &&
         (order.creditApproval.status === CreditApprovalStatus.PENDING ||

@@ -1,3 +1,4 @@
+import { IsString, MaxLength, Matches } from 'class-validator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Role } from '@qorvex/database';
@@ -12,6 +13,13 @@ import { CustomersService } from './customers.service';
 import { ConfigureCustomerCreditDto } from './dto/configure-customer-credit.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+
+class UpdateContactDto {
+  @IsString()
+  @MaxLength(40)
+  @Matches(/^[+()\d\s.-]{7,40}$/)
+  phone: string;
+}
 
 @Controller('customers')
 @UseGuards(JwtAuthGuard, TenantMembershipGuard, RolesGuard)
@@ -40,6 +48,17 @@ export class CustomersController {
   @RequirePermissions('customers.view')
   findOne(@TenantId() tenantId: string, @Param('id') id: string) {
     return this.customersService.findOne(tenantId, id);
+  }
+
+  @Patch(':id/contact')
+  @RequirePermissions('appointments.manage')
+  updateContact(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateContactDto,
+  ) {
+    return this.customersService.update(tenantId, user.id, id, { phone: dto.phone.trim() });
   }
 
   @Patch(':id')

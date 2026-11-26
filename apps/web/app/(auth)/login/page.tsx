@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowRight, LockKeyhole, Mail } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -10,13 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { login } from '@/lib/api';
+import { ApiError, login } from '@/lib/api';
 import { getSession, saveSession } from '@/lib/auth-session';
 import { canAccessPath, getDefaultPathForSession } from '@/lib/authorization';
 import { brand, platform } from '@/lib/brand';
 
 const loginSchema = z.object({
-  email: z.string().email('Ingresa un correo valido.'),
+  email: z.string().trim().toLowerCase().email('Ingresa un correo valido.'),
   password: z.string().min(8, 'La contrasena debe tener al menos 8 caracteres.'),
 });
 
@@ -24,6 +24,7 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [nextPath, setNextPath] = useState('/dashboard');
   const {
@@ -60,8 +61,26 @@ export default function LoginPage() {
       const response = await login(values.email, values.password);
       const session = saveSession(response);
       router.push(canAccessPath(session, nextPath) ? nextPath : getDefaultPathForSession(session));
-    } catch {
-      setLoginError('No pudimos iniciar sesion con esas credenciales.');
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setLoginError(
+          error.status === 401
+            ? 'Correo o contraseña incorrectos. Usa el botón del ojo para revisar la contraseña escrita.'
+            : error.status === 429
+              ? 'Hay demasiados intentos de acceso. Espera un momento y vuelve a intentarlo.'
+              : error.status >= 500
+                ? 'El servicio de acceso no está disponible en este momento. Inténtalo de nuevo.'
+                : error.status === 403
+                  ? 'Esta cuenta no tiene acceso activo a la empresa.'
+                  : error.message,
+        );
+      } else if (error instanceof DOMException && ['SecurityError', 'QuotaExceededError'].includes(error.name)) {
+        setLoginError('El navegador no permitió guardar la sesión. Habilita el almacenamiento del sitio e inténtalo de nuevo.');
+      } else if (error instanceof TypeError) {
+        setLoginError('No se pudo conectar con el servidor de acceso. Revisa tu conexión e inténtalo de nuevo.');
+      } else {
+        setLoginError('No se pudo completar el inicio de sesión. Recarga la página e inténtalo de nuevo.');
+      }
     }
   }
 
@@ -149,19 +168,28 @@ export default function LoginPage() {
                   <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="password"
-                    type="password"
-                    className="pl-9"
+                    type={showPassword ? 'text' : 'password'}
+                    className="pl-9 pr-12"
                     autoComplete="off"
                     placeholder="Tu contrasena"
                     {...register('password')}
                   />
+                  <button
+                    type="button"
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    aria-pressed={showPassword}
+                    onClick={() => setShowPassword((current) => !current)}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
                 {errors.password ? (
                   <p className="text-sm text-danger">{errors.password.message}</p>
                 ) : null}
               </div>
 
-              {loginError ? <p className="text-sm text-danger">{loginError}</p> : null}
+              {loginError ? <p role="alert" className="text-sm text-danger">{loginError}</p> : null}
 
               <Button
                 className="w-full"

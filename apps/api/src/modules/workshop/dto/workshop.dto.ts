@@ -28,6 +28,7 @@ import {
   IsUUID,
   Max,
   MaxLength,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -180,7 +181,7 @@ export class CreateWorkshopReceptionDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @ArrayMaxSize(2)
+  @ArrayMaxSize(3)
   @IsString({ each: true })
   @MaxLength(2000, { each: true })
   imageUrls?: string[];
@@ -188,6 +189,12 @@ export class CreateWorkshopReceptionDto {
   @IsOptional()
   @IsString()
   initialMechanicId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(350000)
+  @Matches(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/)
+  signatureDataUrl?: string;
 }
 
 export class UpdateWorkshopReceptionDto extends PartialType(CreateWorkshopReceptionDto) {}
@@ -318,7 +325,7 @@ export class WorkshopVehicleAreaFindingDto {
   @MaxLength(160)
   areaLabel: string;
 
-  @IsIn(['front', 'back', 'left', 'right', 'top'])
+  @IsIn(['front', 'back', 'left', 'right', 'top', 'dashboard'])
   view: string;
 
   @IsEnum(WorkshopVehicleAreaCondition)

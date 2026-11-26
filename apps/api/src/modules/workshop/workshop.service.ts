@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
 import {
   BadRequestException,
   ConflictException,
@@ -56,6 +59,7 @@ import {
 } from './dto/workshop.dto';
 
 const ticketInclude = {
+  readyNotification: { select: { status: true, sentAt: true, lastError: true } },
   externalJobs: true,
   advances: true,
   warranties: { include: { claims: true } },
@@ -191,23 +195,63 @@ export class WorkshopService {
     return { received, inProgress, awaitingApproval, readyForDelivery, today };
   }
 
+  private async saveReceptionSignature(tenantId: string, userId: string, dataUrl: string) {
+    if (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(dataUrl) || dataUrl.length > 350000) {
+      throw new BadRequestException('La firma debe ser una imagen PNG válida.');
+    }
+    const buffer = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
+    if (
+      buffer.length < 24 ||
+      !buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    ) {
+      throw new BadRequestException('La firma debe ser una imagen PNG válida.');
+    }
+    const result = await this.uploadReceptionImages(tenantId, userId, [
+      {
+        buffer,
+        size: buffer.length,
+        mimetype: 'image/png',
+        originalname: 'firma.png',
+      },
+    ]);
+    return { signatureUrl: result.imageUrls[0], signedAt: new Date() };
+  }
+
   async uploadReceptionImages(
     tenantId: string,
     userId: string,
     files: UploadedReceptionImage[] = [],
   ) {
-    if (!files.length || files.length > 2) {
-      throw new BadRequestException('Selecciona entre una y dos imágenes.');
+    if (!files.length || files.length > 3) {
+      throw new BadRequestException('Selecciona entre una y tres imágenes.');
     }
     const supabaseUrl = this.config.get<string>('SUPABASE_URL')?.replace(/\/+$/, '');
     const supabaseKey =
       this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY') ??
       this.config.get<string>('SUPABASE_SECRET_KEY');
     const bucket = this.config.get<string>('SUPABASE_PRODUCT_IMAGE_BUCKET') || 'product-images';
-    if (!supabaseUrl || !supabaseKey) {
-      throw new BadRequestException('El almacenamiento de imágenes no está configurado.');
+    const localStorage = this.config.get<string>('IMAGE_STORAGE_DRIVER', 'local') === 'local';
+    const publicUrl = this.config.get<string>('IMAGE_STORAGE_PUBLIC_URL')?.replace(/\/+$/, '');
+    if (localStorage && !publicUrl) {
+      throw new BadRequestException(
+        'Configura IMAGE_STORAGE_PUBLIC_URL con la URL pública de la API.',
+      );
     }
-    await ensureReceptionImageBucket(supabaseUrl, supabaseKey, bucket);
+    if (!localStorage) {
+      if (!supabaseUrl || !supabaseKey) {
+        throw new BadRequestException('El almacenamiento de imágenes no está configurado.');
+      }
+      await ensureReceptionImageBucket(supabaseUrl, supabaseKey, bucket);
+    }
+    // Validate the complete batch before writing any files.
+    for (const file of files) {
+      if (!file.buffer?.length || !file.mimetype || !receptionImageTypes.has(file.mimetype)) {
+        throw new BadRequestException('Las evidencias deben ser imágenes JPG, PNG o WEBP.');
+      }
+      if (file.size > maxReceptionImageSize || file.buffer.length > maxReceptionImageSize) {
+        throw new BadRequestException('Cada imagen debe pesar 5 MB o menos.');
+      }
+    }
 
     const urls: string[] = [];
     for (const file of files) {
@@ -219,7 +263,17 @@ export class WorkshopService {
       }
       const extension =
         file.mimetype === 'image/png' ? 'png' : file.mimetype === 'image/webp' ? 'webp' : 'jpg';
-      const objectPath = `${tenantId}/workshop-receptions/${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${extension}`;
+      const objectPath = `${Buffer.from(tenantId).toString('hex')}/workshop-receptions/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${extension}`;
+      if (localStorage) {
+        const root = resolve(this.config.get<string>('IMAGE_STORAGE_DIR', './uploads'));
+        const destination = join(root, objectPath);
+        await mkdir(resolve(destination, '..'), { recursive: true });
+        await writeFile(destination, file.buffer, { flag: 'wx', mode: 0o640 });
+        urls.push(`${publicUrl}/uploads/${objectPath}`);
+        continue;
+      }
+      if (!supabaseUrl || !supabaseKey)
+        throw new BadRequestException('El almacenamiento de imágenes no está configurado.');
       const response = await fetch(
         `${supabaseUrl}/storage/v1/object/${encodeURIComponent(bucket)}/${objectPath.split('/').map(encodeURIComponent).join('/')}`,
         {
@@ -519,7 +573,7 @@ export class WorkshopService {
       await tx.workshopAppointment.update({
         where: { id },
         data: {
-          status: WorkshopAppointmentStatus.CONVERTED_TO_RECEPTION,
+          status: WorkshopAppointmentStatus.ARRIVED,
           convertedTicketId: createdTicket.id,
         },
       });
@@ -556,6 +610,9 @@ export class WorkshopService {
     if (dto.initialMechanicId) await this.ensureMechanics(tenantId, [dto.initialMechanicId]);
     this.ensureReceptionMileage(ticket.vehicle.mileage, dto.mileage);
 
+    const signature = dto.signatureDataUrl
+      ? await this.saveReceptionSignature(tenantId, userId, dto.signatureDataUrl)
+      : undefined;
     const reception = await this.prisma.$transaction(async (tx) => {
       const created = await tx.workshopReception.create({
         data: {
@@ -570,6 +627,8 @@ export class WorkshopService {
           warningLights: this.cleanOptional(dto.warningLights),
           observations: this.cleanOptional(dto.observations),
           imageUrls: dto.imageUrls ?? [],
+          signatureUrl: signature?.signatureUrl,
+          signedAt: signature?.signedAt,
           initialMechanicId: dto.initialMechanicId,
           createdById: userId,
         },
@@ -592,6 +651,10 @@ export class WorkshopService {
           data: { ticketId, employeeId: dto.initialMechanicId },
         });
       }
+      await tx.workshopAppointment.updateMany({
+        where: { tenantId, convertedTicketId: ticketId },
+        data: { status: WorkshopAppointmentStatus.CONVERTED_TO_RECEPTION },
+      });
       return created;
     });
     await this.audit.log({
@@ -621,6 +684,9 @@ export class WorkshopService {
     if (dto.initialMechanicId) await this.ensureMechanics(tenantId, [dto.initialMechanicId]);
     if (dto.mileage !== undefined) this.ensureReceptionMileage(ticket.vehicle.mileage, dto.mileage);
 
+    const signature = dto.signatureDataUrl
+      ? await this.saveReceptionSignature(tenantId, userId, dto.signatureDataUrl)
+      : undefined;
     const reception = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.workshopReception.update({
         where: { ticketId },
@@ -643,6 +709,8 @@ export class WorkshopService {
           observations:
             dto.observations === undefined ? undefined : this.cleanOptional(dto.observations),
           imageUrls: dto.imageUrls,
+          signatureUrl: signature?.signatureUrl ?? null,
+          signedAt: signature?.signedAt ?? null,
           initialMechanicId: dto.initialMechanicId,
         },
         include: {
@@ -1202,26 +1270,9 @@ export class WorkshopService {
         dto.status === WorkshopTicketStatus.DIAGNOSIS &&
         !current.reception
       ) {
-        const appointment = await tx.workshopAppointment.findUnique({
-          where: { convertedTicketId: id },
-          select: { id: true },
-        });
-        if (appointment) {
-          throw new BadRequestException(
-            'Completa la recepción del vehículo antes de iniciar el diagnóstico.',
-          );
-        }
-        await tx.workshopReception.create({
-          data: {
-            tenantId,
-            ticketId: id,
-            mileage: current.vehicle.mileage ?? 0,
-            observations: 'Recepción inicial creada al abrir la orden directamente.',
-            imageUrls: [],
-            initialMechanicId: current.assignments[0]?.employeeId,
-            createdById: userId,
-          },
-        });
+        throw new BadRequestException(
+          'Completa la recepción del vehículo antes de continuar a la orden de trabajo.',
+        );
       }
       if (
         current.status === WorkshopTicketStatus.IN_PROGRESS &&
@@ -1374,6 +1425,33 @@ export class WorkshopService {
         await tx.workshopTicketAssignment.deleteMany({ where: { ticketId: id } });
       }
       if (dto.lines) {
+        // Preserve the reservation ledger when replacing a corrected quotation.
+        // Consumption history must remain attached to its original line.
+        const previousLines = await tx.workshopTicketLine.findMany({ where: { ticketId: id } });
+        for (const line of previousLines) {
+          const movements = await tx.inventoryMovement.findMany({
+            where: { tenantId, workshopTicketLineId: line.id },
+          });
+          if (
+            movements.some(
+              (movement) =>
+                !['WORK_ORDER_RESERVATION', 'WORK_ORDER_RELEASE'].includes(movement.type),
+            )
+          ) {
+            throw new BadRequestException(
+              'No puedes sustituir partidas con movimientos de consumo.',
+            );
+          }
+          for (const movement of movements) {
+            await tx.inventoryMovement.update({
+              where: { id: movement.id },
+              data: {
+                workshopTicketLineId: null,
+                reason: `${movement.reason ?? ''} · Partida original ${line.id}: ${line.description}`,
+              },
+            });
+          }
+        }
         await tx.workshopTicketLine.deleteMany({ where: { ticketId: id } });
       }
       if (areaFindings) {
@@ -1448,6 +1526,16 @@ export class WorkshopService {
             toStatus: dto.status,
             createdById: userId,
           },
+        });
+      }
+      if (
+        dto.status === WorkshopTicketStatus.READY_FOR_DELIVERY &&
+        current.status !== WorkshopTicketStatus.READY_FOR_DELIVERY
+      ) {
+        await tx.workshopReadyNotification.upsert({
+          where: { ticketId: id },
+          create: { tenantId, ticketId: id },
+          update: {},
         });
       }
       if (requestingApproval) {
@@ -2464,10 +2552,8 @@ export class WorkshopService {
       const approvedLines = ticket.lines.filter(
         (line) => line.approvalStatus === WorkshopApprovalStatus.APPROVED,
       );
-      if (!approvedLines.length || approvedLines.some((line) => !line.productId)) {
-        throw new BadRequestException(
-          'Para enviar a Caja, cada línea debe vincularse a un repuesto o servicio del catálogo.',
-        );
+      if (!approvedLines.length) {
+        throw new BadRequestException('Para enviar a Caja, agrega al menos una partida aprobada.');
       }
       const recipientEmail = dto.electronicInvoiceRequested
         ? (this.cleanOptional(dto.ecfRecipientEmail) ?? ticket.customer.email)
@@ -2496,13 +2582,14 @@ export class WorkshopService {
       const items = approvedLines
         .map((line) => {
           const product = productsById.get(line.productId!);
-          if (!product) throw new BadRequestException('Producto de orden no encontrado.');
-          const quantity = product.trackInventory
+          if (line.productId && !product)
+            throw new BadRequestException('Producto de orden no encontrado.');
+          const quantity = product?.trackInventory
             ? line.quantity.sub(line.releasedQuantity)
             : line.quantity;
           const pendingQuantity = quantity.sub(line.consumedQuantity);
           if (
-            product.trackInventory &&
+            product?.trackInventory &&
             (pendingQuantity.lt(0) ||
               Math.abs(line.reservedQuantity - pendingQuantity.toNumber()) > 1e-9)
           ) {
@@ -2547,10 +2634,10 @@ export class WorkshopService {
           notes: `Orden de reparación ${ticket.ticketNumber}`,
           items: {
             create: items.map((item) => ({
-              productId: item.product.id,
+              productId: item.product?.id ?? null,
               workshopTicketLineId: item.line.id,
-              sku: item.product.sku,
-              barcode: item.product.barcode,
+              sku: item.product?.sku ?? null,
+              barcode: item.product?.barcode ?? null,
               description: item.line.description,
               quantity: item.quantity,
               reservedQuantity: item.line.reservedQuantity,
@@ -2635,19 +2722,25 @@ export class WorkshopService {
 
     return lines.map((line) => {
       if (line.type === WorkshopTicketLineType.PART) {
-        if (!line.productId || !productsById.has(line.productId)) {
+        if (line.productId && !productsById.has(line.productId)) {
           throw new BadRequestException('Cada repuesto debe pertenecer al inventario activo.');
         }
         if (line.serviceId) {
           throw new BadRequestException('Un repuesto no puede estar vinculado a un servicio.');
         }
-        return { ...line, taxRate: productsById.get(line.productId)!.taxRate };
+        return {
+          ...line,
+          taxRate: line.productId
+            ? productsById.get(line.productId)!.taxRate
+            : new Prisma.Decimal('0.18'),
+        };
       }
 
       if (!line.serviceId) {
-        throw new BadRequestException(
-          'La mano de obra y los servicios externos deben seleccionarse desde el catálogo de servicios.',
-        );
+        if (line.productId) {
+          throw new BadRequestException('Un servicio exclusivo de la OT no puede vincularse a un repuesto.');
+        }
+        return { ...line, taxRate: new Prisma.Decimal('0.18') };
       }
       const service = servicesById.get(line.serviceId);
       if (

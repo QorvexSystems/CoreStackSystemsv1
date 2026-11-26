@@ -63,8 +63,8 @@ export function SupplierInvoicePrint({
       <style jsx global>{`
         @media print {
           @page {
-            size: A4;
-            margin: 12mm;
+            size: Letter portrait;
+            margin: 12.7mm;
           }
 
           body {

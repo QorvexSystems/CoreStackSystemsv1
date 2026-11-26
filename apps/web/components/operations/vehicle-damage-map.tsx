@@ -1,5 +1,7 @@
 'use client';
 
+import { DashboardIndicatorGrid } from './dashboard-indicator-grid';
+
 import {
   AlertTriangle,
   CheckCircle2,
@@ -25,6 +27,12 @@ import type {
 } from '@/lib/api';
 import {
   preferredVehicleViews,
+  preferredLegacyVehicleViews,
+  isMechanicalArea,
+  LEGACY_VEHICLE_HOTSPOTS,
+  LEGACY_VEHICLE_MAP_VIEWS,
+  LEGACY_VEHICLE_VIEW_ASSETS,
+  LEGACY_VEHICLE_VIEW_ASPECTS,
   VEHICLE_AREA_LABELS,
   VEHICLE_HOTSPOTS,
   VEHICLE_MAP_VIEWS,
@@ -103,6 +111,7 @@ function VehicleView({
   selectedAreaId,
   onSelect,
   compact = false,
+  legacy = false,
   className = '',
 }: {
   vehicleType: WorkshopVehicleType;
@@ -111,10 +120,18 @@ function VehicleView({
   selectedAreaId?: string | null;
   onSelect?: (areaId: string, view: VehicleMapView) => void;
   compact?: boolean;
+  legacy?: boolean;
   className?: string;
 }) {
   const byArea = new Map(findings.map((finding) => [finding.areaId, finding]));
-  const viewLabel = VEHICLE_MAP_VIEWS.find((item) => item.id === view)?.label ?? view;
+  const viewLabel =
+    (legacy ? LEGACY_VEHICLE_MAP_VIEWS : VEHICLE_MAP_VIEWS).find((item) => item.id === view)
+      ?.label ?? view;
+  if (!legacy && view === 'dashboard') return <DashboardIndicatorGrid findings={findings} selectedAreaId={selectedAreaId} compact={compact} onSelect={onSelect ? (id) => onSelect(id, 'dashboard') : undefined} />;
+  const legacyView = view === 'dashboard' ? 'right' : view;
+  const hotspots = legacy ? LEGACY_VEHICLE_HOTSPOTS[vehicleType][legacyView] : VEHICLE_HOTSPOTS[vehicleType][view];
+  const asset = legacy ? LEGACY_VEHICLE_VIEW_ASSETS[vehicleType][legacyView] : VEHICLE_VIEW_ASSETS[vehicleType][view];
+  const aspect = legacy ? LEGACY_VEHICLE_VIEW_ASPECTS[vehicleType][legacyView] : VEHICLE_VIEW_ASPECTS[vehicleType][view];
   return (
     <div
       className={`overflow-hidden rounded-xl border bg-white ${compact ? 'p-2' : 'p-3'} ${className}`}
@@ -125,16 +142,24 @@ function VehicleView({
         >
           {viewLabel}
         </p>
-        {!compact ? <span className="text-[10px] text-slate-400">Selecciona una zona</span> : null}
+        {!compact ? (
+          <span className="text-[10px] text-slate-400">
+            {legacy ? 'Selecciona una zona' : 'Selecciona un componente'}
+          </span>
+        ) : null}
       </div>
       <div
-        className={`relative mx-auto overflow-hidden rounded-lg bg-slate-50 ${view === 'top' ? 'max-w-[15rem]' : ''}`}
-        style={{ aspectRatio: VEHICLE_VIEW_ASPECTS[vehicleType][view] }}
+        className={`relative mx-auto overflow-hidden rounded-lg bg-slate-50 ${view === 'top' ? (compact ? 'max-w-[11rem]' : 'max-w-[20rem]') : ''}`}
+        style={{ aspectRatio: aspect }}
       >
         {/* These illustrations are project assets and form the visual base of the interactive map. */}
         <img
-          src={VEHICLE_VIEW_ASSETS[vehicleType][view]}
-          alt={`Vehículo visto desde ${viewLabel.toLowerCase()}`}
+          src={asset}
+          alt={
+            legacy
+              ? `Vehículo visto desde ${viewLabel.toLowerCase()}`
+              : `Diagrama técnico: ${viewLabel.toLowerCase()}`
+          }
           className="absolute inset-0 h-full w-full object-contain"
           draggable={false}
         />
@@ -144,15 +169,23 @@ function VehicleView({
           className="absolute inset-0 h-full w-full"
           aria-label={`Zonas del vehículo: ${viewLabel}`}
         >
-          {VEHICLE_HOTSPOTS[vehicleType][view].map((hotspot) => {
+          {hotspots.map((hotspot, index) => {
             const finding = byArea.get(hotspot.areaId);
             const selected = selectedAreaId === hotspot.areaId;
+            const shape = hotspot.shape;
+            const marker =
+              shape.kind === 'ellipse'
+                ? { x: shape.cx, y: shape.cy }
+                : shape.kind === 'rect'
+                  ? { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 }
+                  : null;
             return (
               <g
                 key={`${view}-${hotspot.areaId}`}
                 role={onSelect ? 'button' : undefined}
                 tabIndex={onSelect ? 0 : undefined}
                 aria-label={VEHICLE_AREA_LABELS[hotspot.areaId]}
+                aria-pressed={onSelect ? selected : undefined}
                 onClick={() => onSelect?.(hotspot.areaId, view)}
                 onKeyDown={(event) => {
                   if (onSelect && (event.key === 'Enter' || event.key === ' ')) {
@@ -160,7 +193,11 @@ function VehicleView({
                     onSelect(hotspot.areaId, view);
                   }
                 }}
-                className={onSelect ? 'cursor-pointer outline-none' : undefined}
+                className={
+                  onSelect
+                    ? 'cursor-pointer outline-none hover:stroke-blue-700 focus:stroke-blue-700'
+                    : undefined
+                }
                 fill={finding ? conditionFill[finding.condition] : '#2563eb'}
                 fillOpacity={finding ? 0.34 : selected ? 0.2 : 0.04}
                 stroke={
@@ -172,6 +209,43 @@ function VehicleView({
               >
                 <title>{VEHICLE_AREA_LABELS[hotspot.areaId]}</title>
                 <HotspotShape hotspot={hotspot} />
+                {!legacy && !compact && marker ? (
+                  <svg
+                    x={marker.x - 3}
+                    y={marker.y - 3 * aspect}
+                    width="6"
+                    height={6 * aspect}
+                    viewBox="0 0 24 24"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                    pointerEvents="none"
+                    fillOpacity="1"
+                    stroke="none"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      fill={
+                        selected
+                          ? '#0f172a'
+                          : finding
+                            ? conditionFill[finding.condition]
+                            : '#2563eb'
+                      }
+                    />
+                    <text
+                      x="12"
+                      y="15.5"
+                      textAnchor="middle"
+                      fill="white"
+                      fontSize="10"
+                      fontWeight="700"
+                    >
+                      {index + 1}
+                    </text>
+                  </svg>
+                ) : null}
               </g>
             );
           })}
@@ -195,6 +269,7 @@ export function VehicleDamageMap({
   onCreatePart,
   onCreateService,
   onResetArea,
+  onRemoveLine,
 }: {
   vehicleType?: WorkshopVehicleType | null;
   findings: WorkshopVehicleAreaFinding[];
@@ -208,9 +283,12 @@ export function VehicleDamageMap({
   onAddService?: (areaId: string, serviceId: string) => void;
   onCreatePart?: (areaId: string) => void;
   onCreateService?: (areaId: string) => void;
+  onRemoveLine?: (index: number) => void;
   onResetArea: (areaId: string) => void;
 }) {
   const normalizedType: WorkshopVehicleType = vehicleType === 'SUV' ? 'SUV' : 'CAR';
+  const [activeView, setActiveView] = useState<VehicleMapView>('top');
+  const legacyFindings = findings.filter((finding) => !isMechanicalArea(finding.areaId));
   const [selected, setSelected] = useState<{ areaId: string; view: VehicleMapView } | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
@@ -224,14 +302,6 @@ export function VehicleDamageMap({
     (sum, line) => sum + Number(line.quantity ?? 1) * Number(line.unitPrice ?? 0),
     0,
   );
-  const viewLayout: Array<{ view: VehicleMapView; className: string }> = [
-    { view: 'top', className: 'xl:col-start-1 xl:row-start-1 xl:row-span-2' },
-    { view: 'back', className: 'xl:col-start-2 xl:row-start-1' },
-    { view: 'front', className: 'xl:col-start-3 xl:row-start-1' },
-    { view: 'left', className: 'xl:col-start-2 xl:row-start-2' },
-    { view: 'right', className: 'xl:col-start-3 xl:row-start-2' },
-  ];
-
   const updateSelected = (
     patch: Partial<Pick<WorkshopVehicleAreaFinding, 'condition' | 'finding' | 'notes'>>,
   ) => {
@@ -239,7 +309,7 @@ export function VehicleDamageMap({
     const existing = findings.find((item) => item.areaId === selected.areaId);
     const next: WorkshopVehicleAreaFinding = {
       areaId: selected.areaId,
-      areaLabel: VEHICLE_AREA_LABELS[selected.areaId],
+      areaLabel: VEHICLE_AREA_LABELS[selected.areaId] ?? existing?.areaLabel ?? selected.areaId,
       view: selected.view,
       condition: existing?.condition ?? 'ATTENTION',
       finding: existing?.finding ?? null,
@@ -256,6 +326,7 @@ export function VehicleDamageMap({
 
   const selectArea = (areaId: string, view: VehicleMapView) => {
     const existing = findings.find((item) => item.areaId === areaId);
+    setActiveView(view);
     setSelected({ areaId, view });
     if (readOnly) return;
     setDraftCondition(existing?.condition ?? 'ATTENTION');
@@ -313,9 +384,9 @@ export function VehicleDamageMap({
     <section className="rounded-xl border bg-slate-50/70 p-3 sm:p-4">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h4 className="text-sm font-semibold text-slate-950">Mapa de daños del vehículo</h4>
+          <h4 className="text-sm font-semibold text-slate-950">Mapa de daños y componentes</h4>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Selecciona una zona para registrar su condición y relacionar servicios o repuestos.
+            Selecciona un sistema y el componente que necesitas revisar.
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
@@ -330,22 +401,79 @@ export function VehicleDamageMap({
         </div>
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_19rem]">
-        <div className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(11rem,0.72fr)_repeat(2,minmax(0,1fr))] xl:grid-rows-2">
-          {viewLayout.map(({ view, className }) => (
-            <VehicleView
-              key={view}
-              vehicleType={normalizedType}
-              view={view}
-              findings={findings}
-              selectedAreaId={selected?.areaId}
-              onSelect={selectArea}
-              className={`h-full ${className}`}
-            />
-          ))}
+      <div role="tablist" aria-label="Sistemas del vehículo" className="mb-4 flex flex-wrap gap-2">
+        {VEHICLE_MAP_VIEWS.map(({ id, label }) => {
+          const count = findings.filter((finding) =>
+            VEHICLE_HOTSPOTS[normalizedType][id].some((spot) => spot.areaId === finding.areaId),
+          ).length;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`mechanical-tab-${id}`}
+              aria-controls={`mechanical-panel-${id}`}
+              aria-selected={activeView === id}
+              className={`min-h-11 rounded-lg border px-3 py-2 text-left text-xs font-semibold transition ${activeView === id ? 'border-slate-950 bg-slate-950 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-400'}`}
+              onClick={() => {
+                setActiveView(id);
+                setSelected(null);
+              }}
+            >
+              {label}
+              {count ? (
+                <span className="ml-2 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-800">
+                  {count}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+        <div
+          id={`mechanical-panel-${activeView}`}
+          role="tabpanel"
+          aria-labelledby={`mechanical-tab-${activeView}`}
+        >
+          <VehicleView
+            vehicleType={normalizedType}
+            view={activeView}
+            findings={findings}
+            selectedAreaId={selected?.areaId}
+            onSelect={selectArea}
+          />
+          {activeView !== 'dashboard' ? <>
+          <p className="mb-2 mt-3 text-[11px] text-slate-500">
+            También puedes seleccionar el componente por su nombre.
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {VEHICLE_HOTSPOTS[normalizedType][activeView].map((spot, index) => {
+              const finding = findings.find((item) => item.areaId === spot.areaId);
+              return (
+                <button
+                  key={spot.areaId}
+                  type="button"
+                  aria-pressed={selected?.areaId === spot.areaId}
+                  onClick={() => selectArea(spot.areaId, activeView)}
+                  className={`flex min-h-12 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs font-medium transition ${selected?.areaId === spot.areaId ? 'border-slate-950 ring-1 ring-slate-950' : finding ? conditionClass[finding.condition] : 'border-slate-200 bg-white text-slate-700 hover:border-blue-400 hover:bg-blue-50'}`}
+                >
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[10px] font-semibold text-white">
+                    {index + 1}
+                  </span>
+                  {VEHICLE_AREA_LABELS[spot.areaId]}
+                </button>
+              );
+            })}
+          </div>
+          </> : null}
+          <p className="mt-3 text-[10px] text-slate-400">
+            Esquema de referencia general. La ubicación y configuración pueden variar según el
+            vehículo.
+          </p>
         </div>
 
-        <aside className="rounded-xl border bg-white p-3">
+        <aside className="self-start rounded-xl border bg-white p-3">
           {selected ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3 border-b pb-3">
@@ -354,7 +482,9 @@ export function VehicleDamageMap({
                     Resumen de la zona
                   </p>
                   <h5 className="mt-1 font-semibold text-slate-950">
-                    {VEHICLE_AREA_LABELS[selected.areaId]}
+                    {VEHICLE_AREA_LABELS[selected.areaId] ??
+                      selectedFinding?.areaLabel ??
+                      selected.areaId}
                   </h5>
                 </div>
                 {selectedFinding ? (
@@ -371,12 +501,12 @@ export function VehicleDamageMap({
                     {selectedFinding?.finding || 'Sin hallazgo registrado.'}
                   </p>
                 </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <p className="font-medium text-slate-500">Nota técnica</p>
-                  <p className="mt-1 leading-5 text-slate-800">
-                    {selectedFinding?.notes || 'Sin nota técnica.'}
-                  </p>
-                </div>
+                {selectedFinding?.notes ? (
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="font-medium text-slate-500">Nota técnica</p>
+                    <p className="mt-1 leading-5 text-slate-800">{selectedFinding.notes}</p>
+                  </div>
+                ) : null}
               </div>
 
               <div>
@@ -398,6 +528,16 @@ export function VehicleDamageMap({
                           <span className="flex min-w-0 gap-2 font-medium text-slate-900">
                             <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
                             <span>{line.description}</span>
+                            {!readOnly && onRemoveLine ? (
+                              <button
+                                type="button"
+                                aria-label={`Quitar ${line.description}`}
+                                onClick={() => onRemoveLine(lines.indexOf(line))}
+                                className="rounded p-1 text-red-600"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            ) : null}
                           </span>
                           <Badge variant="outline" className="shrink-0 text-[9px]">
                             {line.type === 'PART'
@@ -442,7 +582,7 @@ export function VehicleDamageMap({
                       setDraftCondition(existing?.condition ?? 'ATTENTION');
                       setDraftFinding(existing?.finding ?? '');
                       setDraftNotes(existing?.notes ?? '');
-                      setWizardStep(existing ? 3 : 0);
+                      setWizardStep(existing ? 2 : 0);
                       setWizardOpen(true);
                     }}
                   >
@@ -460,7 +600,7 @@ export function VehicleDamageMap({
           ) : (
             <div className="flex min-h-56 flex-col items-center justify-center px-3 text-center">
               <Wrench className="h-8 w-8 text-slate-300" />
-              <p className="mt-3 text-sm font-medium text-slate-700">Selecciona una zona</p>
+              <p className="mt-3 text-sm font-medium text-slate-700">Selecciona un componente</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 El detalle técnico aparecerá aquí.
               </p>
@@ -469,13 +609,51 @@ export function VehicleDamageMap({
         </aside>
       </div>
 
+      {legacyFindings.length ? (
+        <details className="mt-4 rounded-xl border bg-white p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-600">
+            Zonas de carrocería registradas anteriormente ({legacyFindings.length})
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            {preferredLegacyVehicleViews(
+              normalizedType,
+              legacyFindings.map((finding) => finding.areaId),
+            ).map((view) => (
+              <VehicleView
+                key={view}
+                vehicleType={normalizedType}
+                view={view}
+                findings={legacyFindings}
+                compact
+                legacy
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
       {findings.length ? (
         <div className="mt-3 flex flex-wrap gap-2 border-t pt-3">
           {findings.map((finding) => (
             <button
               key={finding.areaId}
               type="button"
-              onClick={() => setSelected({ areaId: finding.areaId, view: finding.view })}
+              onClick={() => {
+                const view =
+                  VEHICLE_MAP_VIEWS.find(
+                    ({ id }) =>
+                      id === finding.view &&
+                      VEHICLE_HOTSPOTS[normalizedType][id].some(
+                        (spot) => spot.areaId === finding.areaId,
+                      ),
+                  )?.id ??
+                  VEHICLE_MAP_VIEWS.find(({ id }) =>
+                    VEHICLE_HOTSPOTS[normalizedType][id].some(
+                      (spot) => spot.areaId === finding.areaId,
+                    ),
+                  )?.id;
+                if (view) setActiveView(view);
+                setSelected({ areaId: finding.areaId, view: view ?? finding.view });
+              }}
               className={`rounded-full border px-2.5 py-1 text-xs font-medium ${conditionClass[finding.condition]}`}
             >
               {finding.areaLabel} · {conditionLabel[finding.condition]}
@@ -489,21 +667,20 @@ export function VehicleDamageMap({
               <section
                 role="dialog"
                 aria-modal="true"
-                aria-label={`Inspeccionar ${VEHICLE_AREA_LABELS[selected.areaId]}`}
+                aria-label={`Inspeccionar ${VEHICLE_AREA_LABELS[selected.areaId] ?? selectedFinding?.areaLabel ?? selected.areaId}`}
                 className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border bg-white shadow-2xl"
               >
                 <header className="shrink-0 border-b bg-slate-50 px-5 py-4 sm:px-6">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700">
-                        Mapa de daños · {VEHICLE_AREA_LABELS[selected.areaId]}
+                        Mapa de daños ·{' '}
+                        {VEHICLE_AREA_LABELS[selected.areaId] ??
+                          selectedFinding?.areaLabel ??
+                          selected.areaId}
                       </p>
                       <h3 className="mt-1 text-xl font-semibold text-slate-950">
-                        {
-                          ['Condición', 'Hallazgo', 'Nota técnica', 'Agregar repuesto o servicio'][
-                            wizardStep
-                          ]
-                        }
+                        {['Condición', 'Hallazgo', 'Agregar repuesto o servicio'][wizardStep]}
                       </h3>
                     </div>
                     <Button
@@ -516,13 +693,13 @@ export function VehicleDamageMap({
                       <X className="h-5 w-5" />
                     </Button>
                   </div>
-                  <div className="mt-4 grid grid-cols-4 gap-2">
-                    {['Condición', 'Hallazgo', 'Nota técnica', 'Partidas'].map((label, index) => (
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {['Condición', 'Hallazgo', 'Partidas'].map((label, index) => (
                       <button
                         key={label}
                         type="button"
                         onClick={() => {
-                          if (index === 3) saveWizardFinding();
+                          if (index === 2) saveWizardFinding();
                           setWizardStep(index);
                         }}
                         className="text-left"
@@ -578,22 +755,6 @@ export function VehicleDamageMap({
                   ) : null}
 
                   {wizardStep === 2 ? (
-                    <label className="block space-y-2 text-sm font-semibold text-slate-800">
-                      Nota técnica
-                      <textarea
-                        autoFocus
-                        className="input-textarea min-h-40 bg-white text-sm font-normal"
-                        value={draftNotes}
-                        onChange={(event) => setDraftNotes(event.target.value)}
-                        placeholder="Ej.: Recomendación, procedimiento sugerido o detalle para el mecánico"
-                      />
-                      <span className="block text-xs font-normal text-muted-foreground">
-                        Esta nota complementa el diagnóstico de la zona seleccionada.
-                      </span>
-                    </label>
-                  ) : null}
-
-                  {wizardStep === 3 ? (
                     <div className="space-y-4">
                       <div className="relative">
                         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -615,7 +776,7 @@ export function VehicleDamageMap({
                             <div>
                               <h4 className="text-sm font-semibold">Repuestos</h4>
                               <p className="text-[11px] text-muted-foreground">
-                                Descuentan inventario
+                                Del catálogo o exclusivos de esta OT
                               </p>
                             </div>
                             {onCreatePart ? (
@@ -623,7 +784,10 @@ export function VehicleDamageMap({
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                onClick={() => onCreatePart(selected.areaId)}
+                                onClick={() => {
+                                  saveWizardFinding();
+                                  onCreatePart(selected.areaId);
+                                }}
                               >
                                 <Plus className="h-3.5 w-3.5" /> Crear
                               </Button>
@@ -735,7 +899,10 @@ export function VehicleDamageMap({
                             <div className="flex items-center gap-2">
                               <Package className="h-4 w-4 text-blue-700" />
                               <p className="text-sm font-semibold text-blue-950">
-                                Agregado a {VEHICLE_AREA_LABELS[selected.areaId]}
+                                Agregado a{' '}
+                                {VEHICLE_AREA_LABELS[selected.areaId] ??
+                                  selectedFinding?.areaLabel ??
+                                  selected.areaId}
                               </p>
                             </div>
                             <Badge variant="outline" className="bg-white">
@@ -749,6 +916,16 @@ export function VehicleDamageMap({
                                 className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-xs text-blue-900"
                               >
                                 {line.description}
+                                {!readOnly && onRemoveLine ? (
+                                  <button
+                                    type="button"
+                                    aria-label={`Quitar ${line.description}`}
+                                    onClick={() => onRemoveLine(lines.indexOf(line))}
+                                    className="ml-2 rounded p-1 text-red-600"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                ) : null}
                               </span>
                             ))}
                           </div>
@@ -767,12 +944,12 @@ export function VehicleDamageMap({
                   >
                     <ChevronLeft className="h-4 w-4" /> Atrás
                   </Button>
-                  {wizardStep < 3 ? (
+                  {wizardStep < 2 ? (
                     <Button
                       type="button"
                       onClick={() => {
-                        if (wizardStep === 2) saveWizardFinding();
-                        setWizardStep((current) => Math.min(3, current + 1));
+                        if (wizardStep === 1) saveWizardFinding();
+                        setWizardStep((current) => Math.min(2, current + 1));
                       }}
                     >
                       Continuar <ChevronRight className="h-4 w-4" />
@@ -806,24 +983,38 @@ export function VehicleDamagePrintMap({
   findings: WorkshopVehicleAreaFinding[];
 }) {
   const normalizedType: WorkshopVehicleType = vehicleType === 'SUV' ? 'SUV' : 'CAR';
-  const views = useMemo(
-    () =>
-      preferredVehicleViews(
-        normalizedType,
-        findings.map((finding) => finding.areaId),
-        2,
-      ),
-    [findings, normalizedType],
-  );
+  const views = useMemo(() => {
+    const mechanicalIds = findings
+      .filter((finding) => isMechanicalArea(finding.areaId))
+      .map((finding) => finding.areaId);
+    const legacyIds = findings
+      .filter((finding) => !isMechanicalArea(finding.areaId))
+      .map((finding) => finding.areaId);
+    return [
+      ...(mechanicalIds.length || !legacyIds.length
+        ? preferredVehicleViews(normalizedType, mechanicalIds, 2).map((view) => ({
+            view,
+            legacy: false,
+          }))
+        : []),
+      ...(legacyIds.length
+        ? preferredLegacyVehicleViews(normalizedType, legacyIds, 2).map((view) => ({
+            view,
+            legacy: true,
+          }))
+        : []),
+    ];
+  }, [findings, normalizedType]);
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {views.map((view) => (
+    <div className="grid min-w-0 gap-3">
+      {views.map(({ view, legacy }) => (
         <VehicleView
-          key={view}
+          key={`${legacy ? 'legacy' : 'mechanical'}-${view}`}
           vehicleType={normalizedType}
           view={view}
           findings={findings}
           compact
+          legacy={legacy}
         />
       ))}
     </div>

@@ -2,7 +2,8 @@ import 'reflect-metadata';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { json, urlencoded } from 'express';
+import { json, urlencoded, static as serveStatic } from 'express';
+import { resolve } from 'node:path';
 import { rateLimit } from 'express-rate-limit';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
@@ -57,6 +58,13 @@ export async function createQorvexApiApp() {
     next();
   });
 
+  app.enableCors({
+    origin: getAllowedOrigins(config),
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'x-tenant-id', 'x-mobile-ocr-token', 'Content-Type'],
+  });
+
   app.use(createInternalAccessMiddleware(config));
 
   // A phone can be outside the office IP allowlist while its paired desktop is
@@ -87,7 +95,7 @@ export async function createQorvexApiApp() {
       limit: getNumberConfig(config, 'API_RATE_LIMIT_MAX', 600),
       standardHeaders: 'draft-8',
       legacyHeaders: false,
-      skip: (request) => request.path === '/' || request.path === '/health',
+      skip: (request) => request.method === 'OPTIONS' || request.path === '/' || request.path === '/health',
       message: {
         statusCode: 429,
         message: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.',
@@ -100,6 +108,8 @@ export async function createQorvexApiApp() {
     rateLimit({
       windowMs: getNumberConfig(config, 'AUTH_RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000),
       limit: getNumberConfig(config, 'AUTH_RATE_LIMIT_MAX', 10),
+      skip: (request) => request.method === 'OPTIONS',
+      skipSuccessfulRequests: true,
       standardHeaders: 'draft-8',
       legacyHeaders: false,
       message: {
@@ -115,12 +125,16 @@ export async function createQorvexApiApp() {
     urlencoded({ extended: false, limit: getStringConfig(config, 'API_FORM_BODY_LIMIT', '1mb') }),
   );
 
-  app.enableCors({
-    origin: getAllowedOrigins(config),
-    credentials: true,
-    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'x-tenant-id', 'x-mobile-ocr-token', 'Content-Type'],
-  });
+
+
+  app.use('/uploads', serveStatic(resolve(config.get<string>('IMAGE_STORAGE_DIR', './uploads')), {
+    dotfiles: 'deny',
+    index: false,
+    setHeaders: (response) => {
+      response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      response.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  }));
 
   app.useGlobalPipes(
     new ValidationPipe({

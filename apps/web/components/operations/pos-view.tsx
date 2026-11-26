@@ -27,6 +27,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  cancelSalesOrder,
   closeCashSession,
   completePosSale,
   claimSalesOrder,
@@ -94,6 +95,7 @@ export function PosView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedOrderId = searchParams.get('order');
+  const checkoutPanelRef = useRef<HTMLDivElement>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -106,6 +108,7 @@ export function PosView() {
   const [fiscalDocumentType, setFiscalDocumentType] = useState<'RNC' | 'CEDULA'>('RNC');
   const [fiscalDocumentNumber, setFiscalDocumentNumber] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
+  const [transferBank, setTransferBank] = useState('');
   const [splitPayments, setSplitPayments] = useState<SplitPaymentRow[]>([]);
   const [amountReceived, setAmountReceived] = useState(clearCurrencyInput());
   const [barcode, setBarcode] = useState('');
@@ -122,6 +125,7 @@ export function PosView() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loadedOrder, setLoadedOrder] = useState<SalesOrder | null>(null);
+  const [removeOrderOpen, setRemoveOrderOpen] = useState(false);
   const [closingDialogOpen, setClosingDialogOpen] = useState(false);
   const [counterSaleOpen, setCounterSaleOpen] = useState(false);
 
@@ -328,7 +332,9 @@ export function PosView() {
     (Boolean(loadedOrder) || canCreateDirectSale) &&
     (paymentMethod !== 'MIXED' ||
       splitPaymentSummary(splitPayments, totals.requiredPayment).valid) &&
-    (paymentMethod !== 'TRANSFER' || Math.abs(totals.received - totals.requiredPayment) < 0.005) &&
+    (paymentMethod !== 'TRANSFER' ||
+      (transferBank.trim().length > 0 &&
+        Math.abs(totals.received - totals.requiredPayment) < 0.005)) &&
     canCompleteFiscalDocument;
   const selectedOpenSession = (cashSessionsQuery.data ?? []).find(
     (cashSession) =>
@@ -456,20 +462,30 @@ export function PosView() {
         documentType,
         fiscalDocumentType: requiresRecipientDocument ? fiscalDocumentType : undefined,
         fiscalDocumentNumber: requiresRecipientDocument ? fiscalDocumentNumber : undefined,
-        ...(paymentMethod === 'MIXED'
+        ...(paymentMethod === 'TRANSFER'
           ? {
-              payments: splitPayments.map((row) => ({
-                method: row.method,
-                amount: parseCurrencyInput(row.amount),
-                amountReceived:
-                  row.method === 'CASH' ? parseCurrencyInput(row.amountReceived) : undefined,
-                reference: row.reference.trim() || undefined,
-              })),
+              payments: [
+                {
+                  method: 'TRANSFER',
+                  amount: totals.requiredPayment,
+                  reference: transferBank.trim(),
+                },
+              ],
             }
-          : {
-              paymentMethod,
-              amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
-            }),
+          : paymentMethod === 'MIXED'
+            ? {
+                payments: splitPayments.map((row) => ({
+                  method: row.method,
+                  amount: parseCurrencyInput(row.amount),
+                  amountReceived:
+                    row.method === 'CASH' ? parseCurrencyInput(row.amountReceived) : undefined,
+                  reference: row.reference.trim() || undefined,
+                })),
+              }
+            : {
+                paymentMethod,
+                amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
+              }),
         cashSessionId: currentCashSession?.id,
         orderId: loadedOrder?.id,
         electronicInvoiceRequested,
@@ -493,6 +509,29 @@ export function PosView() {
     },
   });
 
+  const removeOrderMutation = useMutation({
+    mutationFn: () =>
+      cancelSalesOrder(
+        session!.tenantId,
+        session!.accessToken,
+        loadedOrder!.id,
+        'Retirada de Caja para corregir la orden antes de facturar.',
+      ),
+    onSuccess: async () => {
+      setLoadedOrder(null);
+      setCart([]);
+      setRemoveOrderOpen(false);
+      checkoutKeyRef.current = null;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['sales-orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['workshop-tickets'] }),
+      ]);
+      toast.success('Orden retirada de Caja. Puedes corregir la OT y volver a enviarla.');
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudo retirar la orden.'),
+  });
+
   const claimOrderMutation = useMutation({
     mutationFn: (order: SalesOrder) => {
       if (!session || !currentCashSession) {
@@ -507,6 +546,10 @@ export function PosView() {
       loadClaimedSalesOrder(order);
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
       toast.success('Orden tomada en caja', { description: order.orderNumber });
+      if (window.innerWidth < 1280)
+        requestAnimationFrame(() =>
+          checkoutPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+        );
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'No se pudo tomar la orden.');
@@ -637,6 +680,10 @@ export function PosView() {
   }
 
   function requestCloseCashSession() {
+    if (cart.length)
+      toast.info(
+        'Hay una orden cargada. Usa Limpiar para liberarla o Quitar de Caja para corregirla antes de cerrar.',
+      );
     setClosingDialogOpen(true);
   }
 
@@ -705,12 +752,34 @@ export function PosView() {
   function loadClaimedSalesOrder(order: SalesOrder) {
     const items: CartItem[] = [];
     for (const item of order.items) {
-      if (!item.product) {
-        continue;
-      }
-
+      if (!item.product && (item.productId || !order.workshopTicket)) continue;
+      // Local OT parts have no catalog record. This display object stays in the
+      // locked order cart; checkout sends only orderId and resolves its saved lines.
+      const product: Product = item.product ?? {
+        id: `ot-part:${item.id}`,
+        name: item.description,
+        sku: null,
+        barcode: null,
+        barcodeType: null,
+        generatedBarcode: false,
+        barcodeLabelPrintCount: 0,
+        description: null,
+        imageUrl: null,
+        brand: null,
+        unit: 'UNIT',
+        price: item.unitPrice,
+        salePrice: item.unitPrice,
+        cost: null,
+        taxRate: item.taxRate,
+        trackInventory: false,
+        inventoryDestination: 'SALES_INVENTORY',
+        stock: 0,
+        reservedStock: 0,
+        minStock: 0,
+        status: 'ACTIVE',
+      };
       items.push({
-        product: item.product,
+        product,
         quantity: Number(item.quantity),
         unitPrice: Number(item.unitPrice),
         discountTotal: Number(item.discountTotal ?? 0),
@@ -829,7 +898,7 @@ export function PosView() {
   }
 
   return (
-    <div className="flex flex-col gap-2 md:h-full md:min-h-0 md:overflow-hidden">
+    <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 shadow-sm">
@@ -972,9 +1041,9 @@ export function PosView() {
       ) : (
         <fieldset
           disabled={completeSaleMutation.isPending}
-          className="grid min-h-0 min-w-0 flex-1 gap-2 md:grid-cols-2"
+          className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.15fr)]"
         >
-          <div className="surface-scrollbar min-h-0 min-w-0 space-y-2 md:overflow-y-auto">
+          <div className="min-w-0 space-y-3">
             <SalesOrdersQueuePanel
               orders={readyOrders}
               loading={pendingOrdersQuery.isLoading}
@@ -1036,26 +1105,40 @@ export function PosView() {
             ) : null}
           </div>
 
-          <div className="flex min-h-0 min-w-0 flex-col gap-2">
-            <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-zinc-200 shadow-sm">
-              <CardHeader className="shrink-0 flex-row items-center justify-between border-b border-zinc-100 px-3 py-2">
+          <div ref={checkoutPanelRef} className="flex min-w-0 scroll-mt-16 flex-col gap-3">
+            <Card className="flex min-w-0 flex-col border-zinc-200 shadow-sm">
+              <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3">
                 <div>
                   <CardTitle>Cobro actual</CardTitle>
                   <CardDescription>Revisa los conceptos y completa el pago.</CardDescription>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={clearCart}
-                  disabled={
-                    !cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending
-                  }
-                >
-                  Limpiar
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  {loadedOrder ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={completeSaleMutation.isPending || removeOrderMutation.isPending}
+                      onClick={() => setRemoveOrderOpen(true)}
+                    >
+                      Quitar de Caja
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={clearCart}
+                    disabled={
+                      !cart.length ||
+                      releaseOrderMutation.isPending ||
+                      completeSaleMutation.isPending
+                    }
+                  >
+                    Limpiar
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="surface-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-2.5 pr-2">
+              <CardContent className="space-y-4 p-4">
                 {loadedOrder ? (
                   <CheckoutOrderSummary order={loadedOrder} />
                 ) : cart.length ? (
@@ -1088,6 +1171,8 @@ export function PosView() {
                     fiscalDocumentNumber={fiscalDocumentNumber}
                     fiscalDocumentValid={fiscalDocumentValid}
                     fiscalCustomerName={fiscalCustomer?.name}
+                    transferBank={transferBank}
+                    onTransferBankChange={setTransferBank}
                     paymentMethod={paymentMethod}
                     splitPayments={splitPayments}
                     onSplitPaymentsChange={setSplitPayments}
@@ -1121,6 +1206,16 @@ export function PosView() {
         </fieldset>
       )}
 
+      <ActionDialog
+        open={removeOrderOpen}
+        title="Quitar orden de Caja"
+        description="Se retirará el cobro pendiente. La OT volverá a cotización para corregirla, aprobarla y enviarla nuevamente. Su historial se conservará."
+        confirmLabel="Quitar de Caja"
+        cancelLabel="Conservar"
+        isPending={removeOrderMutation.isPending}
+        onClose={() => setRemoveOrderOpen(false)}
+        onConfirm={() => removeOrderMutation.mutate()}
+      />
       <CashCloseDialog
         open={closingDialogOpen}
         cashSession={currentCashSession}
@@ -1172,7 +1267,7 @@ function CheckoutOrderSummary({ order }: { order: SalesOrder }) {
         <Badge variant="success">Lista para cobrar</Badge>
       </div>
 
-      <div className="surface-scrollbar max-h-[7.25rem] overflow-x-hidden overflow-y-auto overscroll-contain border-t border-zinc-200">
+      <div className="overflow-x-auto border-t border-zinc-200">
         <table className="w-full table-fixed text-xs">
           <thead className="sticky top-0 bg-white text-left text-[11px] uppercase tracking-wide text-muted-foreground">
             <tr className="border-b border-zinc-200">
@@ -1354,7 +1449,7 @@ function SalesOrdersQueuePanel({
             Cargando ordenes...
           </p>
         ) : visibleOrders.length ? (
-          <div className="surface-scrollbar grid min-h-0 flex-1 auto-rows-max content-start items-start gap-2 overflow-y-auto pr-1">
+          <div className="surface-scrollbar grid max-h-[24rem] auto-rows-max content-start items-start gap-3 overflow-y-auto pr-1">
             {visibleOrders.map((order) => (
               <article
                 key={order.id}
@@ -1697,7 +1792,7 @@ function CloseCashLauncher({
         type="button"
         variant="outline"
         className="shrink-0"
-        disabled={!canCloseCashSession || isClosing || cartHasItems}
+        disabled={!canCloseCashSession || isClosing}
         onClick={onOpen}
       >
         <DoorClosed className="h-4 w-4" /> Cerrar

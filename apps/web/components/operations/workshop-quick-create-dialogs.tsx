@@ -1,5 +1,7 @@
 'use client';
 
+import { KeyboardDialogLayer } from '@/components/ui/keyboard-dialog-layer';
+import { VehicleCatalogSearch } from './vehicle-catalog-search';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Car, Loader2, UserPlus, X } from 'lucide-react';
 import { FormEvent, useEffect, useId, useState, type ReactNode } from 'react';
@@ -44,14 +46,11 @@ function DialogFrame({
 
   useEffect(() => {
     if (!open) return;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !pending) onClose();
     };
     document.addEventListener('keydown', close);
     return () => {
-      document.body.style.overflow = overflow;
       document.removeEventListener('keydown', close);
     };
   }, [onClose, open, pending]);
@@ -59,18 +58,15 @@ function DialogFrame({
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/65 p-3 backdrop-blur-sm sm:p-6"
-      onMouseDown={(event) => event.target === event.currentTarget && !pending && onClose()}
-    >
+    <KeyboardDialogLayer onDismiss={() => !pending && onClose()}>
       <form
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         onSubmit={onSubmit}
-        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/20 bg-card shadow-2xl"
+        className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-card shadow-2xl"
       >
-        <header className="flex items-start gap-4 border-b bg-gradient-to-br from-primary/10 via-card to-accent/10 p-5 sm:p-6">
+        <header className="flex shrink-0 items-start gap-4 border-b bg-gradient-to-br from-primary/10 via-card to-accent/10 p-5 sm:p-6">
           <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             {icon}
           </span>
@@ -91,10 +87,10 @@ function DialogFrame({
             <X className="h-5 w-5" />
           </Button>
         </header>
-        <div className="grid max-h-[65vh] gap-4 overflow-y-auto p-5 sm:grid-cols-2 sm:p-6">
+        <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-5 sm:grid-cols-2 sm:p-6">
           {children}
         </div>
-        <footer className="flex flex-col-reverse gap-3 border-t bg-muted/30 p-4 sm:flex-row sm:justify-end sm:px-6">
+        <footer className="flex shrink-0 flex-col-reverse gap-3 border-t bg-muted/30 p-4 sm:flex-row sm:justify-end sm:px-6">
           <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
             Cancelar
           </Button>
@@ -104,7 +100,7 @@ function DialogFrame({
           </Button>
         </footer>
       </form>
-    </div>
+    </KeyboardDialogLayer>
   );
 }
 
@@ -344,6 +340,7 @@ export function QuickVehicleDialog({
           placeholder="A123456"
         />
       </Field>
+      <VehicleCatalogSearch onSelect={(make, model) => setForm(current => ({ ...current, make, model }))} />
       <Field label="Marca" required>
         <Input
           required

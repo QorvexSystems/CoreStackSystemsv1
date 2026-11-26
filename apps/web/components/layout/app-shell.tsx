@@ -187,9 +187,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <div
         className={cn(
-          'min-h-screen pb-24 transition-[padding] duration-200 print:min-h-0 lg:pb-0',
+          'min-h-screen pb-24 transition-[padding] duration-200 print:min-h-0 2xl:pb-0',
           focusedWorkspace && 'pb-0',
-          focusedWorkspace ? 'lg:pl-0' : sidebarCollapsed ? 'lg:pl-[4.5rem]' : 'lg:pl-72',
+          focusedWorkspace ? '2xl:pl-0' : sidebarCollapsed ? '2xl:pl-[4.5rem]' : '2xl:pl-72',
           'print:pb-0 print:pl-0',
         )}
       >
@@ -224,7 +224,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
 
-            {!orderTakingTablet ? <GlobalSearch session={session} /> : <div className="flex-1" />}
+            {!orderTakingTablet ? (
+              <div className={cn('min-w-0 flex-1', posWorkspace && 'hidden xl:flex')}>
+                <GlobalSearch session={session} />
+              </div>
+            ) : (
+              <div className="flex-1" />
+            )}
 
             <div className="relative flex shrink-0 items-center gap-2">
               {!orderTakingTablet ? (
@@ -283,8 +289,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           className={cn(
             'animate-page-enter mx-auto w-full max-w-[92rem] px-3 py-4 print:max-w-none print:p-0 sm:px-6 sm:py-6',
             focusedWorkspace && 'max-w-none sm:px-4 sm:py-4 lg:px-5 lg:py-4',
-            posWorkspace &&
-              'px-3 py-2 sm:px-4 sm:py-2 md:h-[calc(100dvh-3rem)] md:overflow-hidden lg:px-4 lg:py-2',
+            posWorkspace && 'px-3 py-3 sm:px-4 sm:py-4 lg:px-4 lg:py-4',
           )}
         >
           {children}

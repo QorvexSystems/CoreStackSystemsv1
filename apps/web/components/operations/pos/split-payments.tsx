@@ -50,7 +50,7 @@ export function splitPaymentSummary(rows: SplitPaymentRow[], required: number) {
         parseCurrencyInput(row.amount) > 0 &&
         (row.method !== 'CASH' ||
           parseCurrencyInput(row.amountReceived) >= parseCurrencyInput(row.amount)) &&
-        (!['CHECK', 'OTHER'].includes(row.method) || Boolean(row.reference.trim())),
+        (!['TRANSFER', 'CHECK', 'OTHER'].includes(row.method) || Boolean(row.reference.trim())),
     );
   return {
     applied: appliedCents / 100,
@@ -151,8 +151,9 @@ export function SplitPayments({
             ) : null}
             <div className="space-y-1">
               <Label htmlFor={`reference-${row.id}`}>
-                Referencia{' '}
-                {['CHECK', 'OTHER'].includes(row.method) ? '(obligatoria)' : '(opcional)'}
+                {row.method === 'TRANSFER'
+                  ? 'Banco de la transferencia (obligatorio)'
+                  : `Referencia ${['CHECK', 'OTHER'].includes(row.method) ? '(obligatoria)' : '(opcional)'}`}
               </Label>
               <Input
                 id={`reference-${row.id}`}

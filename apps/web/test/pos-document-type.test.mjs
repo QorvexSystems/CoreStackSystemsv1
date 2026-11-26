@@ -10,7 +10,7 @@ test('efectivo solo ofrece Nota de venta y Fiscal E31', () => {
 });
 
 test('tarjeta y medios no efectivos solo ofrecen Consumo E32 y Fiscal E31', () => {
-  for (const method of ['CARD', 'TRANSFER', 'MIXED']) {
+  for (const method of ['CARD', 'MIXED']) {
     assert.deepEqual(
       getAllowedPosDocumentTypes(method).map((option) => option.value),
       ['CONSUMER_ELECTRONIC_32', 'FISCAL_CREDIT_ELECTRONIC_31'],
@@ -26,3 +26,5 @@ test('al cambiar el método se reemplaza un comprobante incompatible', () => {
     'FISCAL_CREDIT_ELECTRONIC_31',
   );
 });
+
+test('transferencia permite Nota de venta y E31', () => { assert.deepEqual(getAllowedPosDocumentTypes('TRANSFER').map(option => option.value), ['SALE_NOTE', 'FISCAL_CREDIT_ELECTRONIC_31']); });

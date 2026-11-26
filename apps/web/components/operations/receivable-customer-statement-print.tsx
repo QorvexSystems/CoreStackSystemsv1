@@ -7,6 +7,7 @@ import { useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { getCustomerStatement, type ReceivableInvoice } from '@/lib/api';
+import { CompanyDocumentDetails } from './company-document-details';
 import { brand } from '@/lib/brand';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -88,8 +89,8 @@ export function ReceivableCustomerStatementPrint({
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
               Estado de cuenta por cobrar
             </p>
-            <h2 className="mt-2 text-2xl font-bold">{session.tenantName}</h2>
-            <p className="mt-1 text-sm text-zinc-600">{brand.name}</p>
+            <h2 className="mt-2 text-2xl font-bold">{brand.name}</h2>
+            <CompanyDocumentDetails />
           </div>
           <div className="text-sm sm:text-right">
             <p>

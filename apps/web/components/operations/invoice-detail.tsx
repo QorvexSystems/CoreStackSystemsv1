@@ -1,4 +1,6 @@
 'use client';
+import { DocumentPdfDownloadButton } from './document-pdf-download-button';
+import { DocumentWhatsappButton } from './document-whatsapp-button';
 
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Mail, Printer } from 'lucide-react';
@@ -8,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getInvoice } from '@/lib/api';
+import { CompanyDocumentDetails } from './company-document-details';
 import { brand, platform } from '@/lib/brand';
 import { translatePaymentMethod, translateStatus } from '@/lib/display-labels';
 import { formatCurrency } from '@/lib/utils';
@@ -82,7 +85,30 @@ export function InvoiceDetail({
 
   if (printMode) {
     return (
-      <main className="mx-auto w-[80mm] max-w-full bg-white p-3 text-zinc-950 print:w-[80mm] print:p-0">
+      <main className="invoice-letter-page mx-auto w-full max-w-[8.5in] bg-white p-5 text-zinc-950 sm:p-8 print:max-w-none print:p-0">
+        <style>{`@page { size: Letter portrait; margin: 12.7mm; }
+          @media print {
+            html, body { background: white !important; }
+            .invoice-letter-page { width: 100%; margin: 0; }
+            .invoice-document { font-size: 10pt; line-height: 1.4; }
+            .invoice-document thead { display: table-header-group; }
+            .invoice-document tr, .invoice-summary, .invoice-document header, .invoice-document footer { break-inside: avoid; }
+            .invoice-table-wrap { overflow: visible !important; }
+            .invoice-document table { width: 100%; table-layout: fixed; }
+            .invoice-company-header { flex-direction: row !important; align-items: flex-start !important; }
+            .invoice-company-header > div:last-child { text-align: right; }
+            .invoice-meta { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
+          }
+        `}</style>
+        <div className="mb-3 print:hidden">
+          <DocumentPdfDownloadButton kind="invoice" id={invoice.id} number={invoice.invoiceNumber} />
+          <DocumentWhatsappButton
+            kind="invoice"
+            documentId={invoice.id}
+            documentNumber={invoice.invoiceNumber}
+            customer={invoice.customer ?? { name: 'Consumidor final' }}
+          />
+        </div>
         <Receipt invoice={invoice} copyLabel="ORIGINAL: CLIENTE" />
         <div className="mt-4 grid gap-2 print:hidden sm:grid-cols-2">
           <Button asChild variant="outline">
@@ -125,6 +151,12 @@ export function InvoiceDetail({
           <Receipt invoice={invoice} copyLabel="VISTA PREVIA" />
         </CardContent>
       </Card>
+      <DocumentWhatsappButton
+        kind="invoice"
+        documentId={invoice.id}
+        documentNumber={invoice.invoiceNumber}
+        customer={invoice.customer ?? { name: 'Consumidor final' }}
+      />
       <DocumentEmailDialog
         open={emailOpen}
         session={session}
@@ -157,12 +189,7 @@ function Receipt({
   const subtotalBase = Number(invoice.subtotal);
   const fiscalNumber = invoice.ncf ?? invoice.eNcf ?? '-';
   const issuePoint = invoice.cashSession?.cashRegister;
-  const companyName = brand.name;
-  const legalName = invoice.tenant?.legalName ?? invoice.tenant?.name ?? companyName;
   const documentTitle = getInvoiceDocumentTitle(invoice.documentType);
-  const businessContact = [invoice.tenant?.phone, invoice.tenant?.email]
-    .filter((value): value is string => Boolean(value))
-    .join(' · ');
   const taxBuckets = invoice.items.reduce((buckets, item) => {
     const rate = Number(item.taxRate);
     const bucket = buckets.get(rate) ?? { base: 0, tax: 0 };
@@ -179,31 +206,30 @@ function Receipt({
     .reduce((sum, [, bucket]) => sum + bucket.base, 0);
 
   return (
-    <section className="space-y-3 text-[12px] leading-[1.28]">
-      <header className="flex flex-col items-center text-center">
-        <div className="relative h-16 w-24">
-          <Image src={brand.logoPath} alt={brand.name} fill className="object-contain" />
+    <section className="invoice-document space-y-5 text-[12px] leading-relaxed">
+      <header className="invoice-company-header flex flex-col justify-between gap-5 border-b border-zinc-300 pb-5 sm:flex-row">
+        <div className="flex items-start gap-4">
+          <div className="relative h-20 w-20 shrink-0">
+            <Image src={brand.logoPath} alt={brand.name} fill className="object-contain" />
+          </div>
+          <div>
+            <p className="text-lg font-bold">{brand.name}</p>
+            <CompanyDocumentDetails />
+          </div>
         </div>
-        <p className="mt-1 font-semibold uppercase">{legalName}</p>
-        <p>{companyName}</p>
-        <p>RNC/Cédula {invoice.tenant?.rnc ?? 'No configurado'}</p>
-        {invoice.tenant?.address ? <p>{invoice.tenant.address}</p> : null}
-        {businessContact ? <p>{businessContact}</p> : null}
-        <p className="mt-2 font-semibold">
-          Punto de emisión: {issuePoint?.name ?? 'Caja no asignada'}
-          {issuePoint?.location ? ` · ${issuePoint.location}` : ''}
-        </p>
+        <div className="shrink-0 sm:text-right">
+          <h2 className="text-sm font-bold uppercase">{documentTitle}</h2>
+          <p className="mt-1 text-lg font-semibold">{invoice.invoiceNumber}</p>
+          <p className="text-xs text-zinc-500">
+            {formatInvoiceDateTime(invoice.issuedAt ?? invoice.createdAt)}
+          </p>
+        </div>
       </header>
 
-      <div className="border-y border-dashed border-zinc-400 py-2">
-        <h2 className="mb-1 text-center text-sm font-bold uppercase">{documentTitle}</h2>
+      <div className="invoice-meta grid gap-x-8 gap-y-2 rounded-md border border-zinc-200 p-4 sm:grid-cols-2">
         <ReceiptRow
           label={
-            invoice.documentType === 'SALE_NOTE'
-              ? 'Secuencia'
-              : invoice.eNcf
-                ? 'e-NCF'
-                : 'NCF'
+            invoice.documentType === 'SALE_NOTE' ? 'Secuencia' : invoice.eNcf ? 'e-NCF' : 'NCF'
           }
           value={fiscalNumber}
           valueClassName="font-semibold"
@@ -218,80 +244,113 @@ function Receipt({
         />
         <ReceiptRow label="Cajero" value={invoice.issuedBy?.name ?? '-'} />
         <ReceiptRow label="Cliente" value={invoice.customer?.name ?? 'Consumidor final'} />
+        <ReceiptRow label="RNC/Cédula cliente" value={invoice.customer?.documentNumber ?? '—'} />
+        <ReceiptRow label="Teléfono" value={invoice.customer?.phone ?? '—'} />
+        <ReceiptRow label="Punto de emisión" value={issuePoint?.name ?? 'Caja no asignada'} />
       </div>
 
-      <div className="space-y-2">
-        {invoice.items.map((item) => (
-          <div
-            key={item.id}
-            className="border-b border-dashed border-zinc-300 pb-2 last:border-b-0"
-          >
-            <div className="flex justify-between gap-3">
-              <span className="font-medium">{item.description}</span>
-              <span className="shrink-0 font-medium">{formatCurrency(Number(item.total))}</span>
-            </div>
-            {item.sku || item.barcode ? (
-              <p className="text-[11px] text-zinc-600">
-                {[item.sku, item.barcode].filter(Boolean).join(' · ')}
-              </p>
-            ) : null}
-            <p className="text-[11px] text-zinc-600">
-              {formatQuantity(item.quantity)} {Number(item.quantity) === 1 ? 'Unidad' : 'Unidades'}{' '}
-              × {formatCurrency(Number(item.unitPrice))} · Base{' '}
-              {formatCurrency(Number(item.subtotal))} · ITBIS{' '}
-              {formatCurrency(Number(item.taxTotal))}
-            </p>
-          </div>
-        ))}
+      <div className="invoice-table-wrap overflow-x-auto">
+        <table className="w-full table-fixed border-collapse text-left text-[11px]">
+          <colgroup>
+            <col style={{ width: '43%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '18%' }} />
+          </colgroup>
+          <thead>
+            <tr className="border-y border-zinc-300 bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-600">
+              <th className="py-3 pr-2">Descripción</th>
+              <th className="px-1 py-3 text-right">Cant.</th>
+              <th className="px-1 py-3 text-right">Precio</th>
+              <th className="px-1 py-3 text-right">ITBIS</th>
+              <th className="py-3 pl-1 text-right">Importe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoice.items.map((item) => (
+              <tr key={item.id} className="border-b border-zinc-200 align-top">
+                <td className="break-words py-3 pr-2">
+                  <p className="font-medium">{item.description}</p>
+                  {item.sku || item.barcode ? (
+                    <p className="mt-1 break-all text-[10px] text-zinc-500">
+                      {[item.sku, item.barcode].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null}
+                </td>
+                <td className="px-1 py-3 text-right tabular-nums">
+                  {formatQuantity(item.quantity)}
+                </td>
+                <td className="px-1 py-3 text-right tabular-nums">
+                  {formatCurrency(Number(item.unitPrice))}
+                </td>
+                <td className="px-1 py-3 text-right tabular-nums">
+                  {formatCurrency(Number(item.taxTotal))}
+                </td>
+                <td className="py-3 pl-1 text-right font-medium tabular-nums">
+                  {formatCurrency(Number(item.total))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-
-      <div className="space-y-0.5 border-y border-dashed border-zinc-400 py-2">
-        <ReceiptRow label="Subtotal bruto" value={formatCurrency(subtotalBase)} />
-        <ReceiptRow label="Subtotal sin ITBIS" value={formatCurrency(subtotalBase)} />
-        {taxableBase > 0 ? (
-          <ReceiptRow label="Base gravada" value={formatCurrency(taxableBase)} />
-        ) : null}
-        {exemptBase > 0 ? (
-          <ReceiptRow label="Monto exento" value={formatCurrency(exemptBase)} />
-        ) : null}
-        {[...taxBuckets.entries()]
-          .filter(([, bucket]) => bucket.tax > 0)
-          .sort(([left], [right]) => right - left)
-          .map(([rate, bucket]) => (
-            <ReceiptRow
-              key={rate}
-              label={`ITBIS ${formatTaxRate(rate)}`}
-              value={formatCurrency(bucket.tax)}
-            />
-          ))}
-        <ReceiptRow label="Total factura" value={formatCurrency(Number(invoice.total))} strong />
-      </div>
-
-      <div className="space-y-0.5">
-        <ReceiptRow label="Pagado" value={formatCurrency(Number(invoice.paidAmount))} />
-        <ReceiptRow
-          label="Método"
-          value={
-            paymentMethods.size > 1
-              ? 'Pago combinado'
-              : translatePaymentMethod(invoice.paymentMethod ?? completedPayments[0]?.method)
-          }
-        />
-        {completedPayments.length > 1
-          ? completedPayments.map((payment) => (
+      <div className="invoice-summary ml-auto w-full max-w-sm space-y-4">
+        <div className="space-y-1.5 border-y border-zinc-300 py-3">
+          <ReceiptRow label="Subtotal sin ITBIS" value={formatCurrency(subtotalBase)} />
+          {taxableBase > 0 ? (
+            <ReceiptRow label="Base gravada" value={formatCurrency(taxableBase)} />
+          ) : null}
+          {exemptBase > 0 ? (
+            <ReceiptRow label="Monto exento" value={formatCurrency(exemptBase)} />
+          ) : null}
+          {[...taxBuckets.entries()]
+            .filter(([, bucket]) => bucket.tax > 0)
+            .sort(([left], [right]) => right - left)
+            .map(([rate, bucket]) => (
               <ReceiptRow
-                key={payment.id}
-                label={translatePaymentMethod(payment.method)}
-                value={formatCurrency(Number(payment.amount))}
+                key={rate}
+                label={`ITBIS ${formatTaxRate(rate)}`}
+                value={formatCurrency(bucket.tax)}
               />
-            ))
-          : null}
-        <ReceiptRow label="Recibido" value={formatCurrency(amountReceived)} />
-        <ReceiptRow label="Devuelta" value={formatCurrency(changeAmount)} strong />
-        <ReceiptRow label="Balance" value={formatCurrency(Number(invoice.balance))} />
-      </div>
+            ))}
+          <ReceiptRow label="Total factura" value={formatCurrency(Number(invoice.total))} strong />
+        </div>
 
-      <footer className="pt-2 text-center">
+        <div className="space-y-0.5">
+          <ReceiptRow label="Pagado" value={formatCurrency(Number(invoice.paidAmount))} />
+          <ReceiptRow
+            label="Método"
+            value={
+              paymentMethods.size > 1
+                ? 'Pago combinado'
+                : translatePaymentMethod(invoice.paymentMethod ?? completedPayments[0]?.method)
+            }
+          />
+          {completedPayments.length > 1
+            ? completedPayments.map((payment) => (
+                <ReceiptRow
+                  key={payment.id}
+                  label={translatePaymentMethod(payment.method)}
+                  value={formatCurrency(Number(payment.amount))}
+                />
+              ))
+            : null}
+          {completedPayments
+            .filter((payment) => payment.method === 'TRANSFER' && payment.reference)
+            .map((payment) => (
+              <ReceiptRow
+                key={`bank-${payment.id}`}
+                label="Banco de transferencia"
+                value={payment.reference!}
+              />
+            ))}
+          <ReceiptRow label="Recibido" value={formatCurrency(amountReceived)} />
+          <ReceiptRow label="Devuelta" value={formatCurrency(changeAmount)} strong />
+          <ReceiptRow label="Balance" value={formatCurrency(Number(invoice.balance))} />
+        </div>
+      </div>
+      <footer className="border-t border-zinc-200 pt-4 text-center">
         <p className="font-bold">{copyLabel}</p>
         <p className="text-[11px] text-zinc-500">Powered by {platform.name}</p>
       </footer>
@@ -337,6 +396,7 @@ function formatInvoiceDateTime(value: string) {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
+    timeZone: 'America/Santo_Domingo',
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value));

@@ -19,6 +19,12 @@ services:
     mem_reservation: 192m
     pids_limit: 128
     env_file: /opt/corestack/apps/solucionesautomotrizcyr/secrets/api.env
+    environment:
+      IMAGE_STORAGE_DRIVER: local
+      IMAGE_STORAGE_DIR: /app/uploads
+      IMAGE_STORAGE_PUBLIC_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+    volumes:
+      - /opt/corestack/apps/solucionesautomotrizcyr/uploads:/app/uploads
     ports:
       - "10.0.0.3:4003:4000"
     networks:
@@ -53,12 +59,14 @@ services:
     init: true
     restart: unless-stopped
     cpus: 0.35
-    mem_limit: 512m
-    memswap_limit: 512m
+    mem_limit: 1024m
+    memswap_limit: 1024m
     mem_reservation: 128m
-    pids_limit: 128
+    pids_limit: 256
     environment:
       NODE_ENV: production
+      XDG_CONFIG_HOME: /tmp/chromium-config
+      XDG_CACHE_HOME: /tmp/chromium-cache
     ports:
       - "10.0.0.3:3003:3000"
     networks:
@@ -71,7 +79,7 @@ services:
       start_period: 45s
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
     logging:

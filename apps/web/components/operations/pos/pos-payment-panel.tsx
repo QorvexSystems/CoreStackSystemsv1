@@ -25,6 +25,8 @@ type PosPaymentPanelProps = {
   fiscalDocumentNumber: string;
   fiscalDocumentValid: boolean;
   fiscalCustomerName?: string | null;
+  transferBank?: string;
+  onTransferBankChange?: (value: string) => void;
   paymentMethod: string;
   splitPayments: SplitPaymentRow[];
   onSplitPaymentsChange: (rows: SplitPaymentRow[]) => void;
@@ -54,6 +56,8 @@ export function PosPaymentPanel({
   fiscalDocumentNumber,
   fiscalDocumentValid,
   fiscalCustomerName,
+  transferBank = '',
+  onTransferBankChange,
   paymentMethod,
   splitPayments,
   onSplitPaymentsChange,
@@ -88,7 +92,7 @@ export function PosPaymentPanel({
   return (
     <div className="space-y-2">
       <div>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-1">
             <Label htmlFor="customer">Cliente</Label>
             <select
@@ -96,7 +100,7 @@ export function PosPaymentPanel({
               value={customerId}
               disabled={customerLocked}
               onChange={(event) => onCustomerChange(event.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-card px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
+              className="h-11 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
             >
               <option value="">Consumidor final</option>
               {customers.map((customer) => (
@@ -120,7 +124,7 @@ export function PosPaymentPanel({
               id="documentType"
               value={documentType}
               onChange={(event) => onDocumentTypeChange(event.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-card px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-11 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {documentTypes.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -129,8 +133,8 @@ export function PosPaymentPanel({
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              {paymentMethod === 'CASH'
-                ? 'Efectivo permite Nota de venta o Fiscal E31.'
+              {['CASH', 'TRANSFER'].includes(paymentMethod)
+                ? 'Efectivo y transferencia permiten Nota de venta o Fiscal E31.'
                 : 'Este método permite Consumo E32 o Fiscal E31.'}
             </p>
           </div>
@@ -141,7 +145,7 @@ export function PosPaymentPanel({
               id="paymentMethod"
               value={paymentMethod}
               onChange={(event) => onPaymentMethodChange(event.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-card px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-11 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="CASH">Efectivo</option>
               <option value="CARD">Tarjeta</option>
@@ -285,6 +289,18 @@ export function PosPaymentPanel({
         </div>
       )}
 
+      {paymentMethod === 'TRANSFER' ? (
+        <label className="block space-y-2 text-sm font-medium">
+          Banco de la transferencia *
+          <Input
+            maxLength={120}
+            value={transferBank}
+            onChange={(event) => onTransferBankChange?.(event.target.value)}
+            placeholder="Ej.: Banco Popular, Banreservas…"
+            className="h-12"
+          />
+        </label>
+      ) : null}
       {!cashPayment ? (
         <PaymentTotalsSummary totals={totals} creditSale={creditSale} message={message} />
       ) : null}

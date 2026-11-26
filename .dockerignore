@@ -10,3 +10,5 @@
 **/.turbo
 *.log
 .tmp
+
+uploads/

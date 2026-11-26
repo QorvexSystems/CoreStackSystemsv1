@@ -35,6 +35,8 @@ import {
   SalesOrderStatus,
   WarehouseMovementType,
   WorkshopTicketStatus,
+  WorkshopTicketLineType,
+  TaxCategory,
 } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
@@ -65,8 +67,8 @@ const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMI
 const claimTtlMs = 30 * 60 * 1000;
 
 type ComputedSaleLine = {
-  product: Product;
-  productId: string;
+  product: Product | null;
+  productId: string | null;
   sku: string | null;
   barcode: string | null;
   description: string;
@@ -156,10 +158,10 @@ export class PosService {
       taxTotal: computed.taxTotal.toNumber(),
       total: computed.total.toNumber(),
       items: computed.items.map((item) => ({
-        productId: item.product.id,
-        name: item.product.name,
-        sku: item.product.sku,
-        barcode: item.product.barcode,
+        productId: item.product!.id,
+        name: item.product!.name,
+        sku: item.product!.sku,
+        barcode: item.product!.barcode,
         quantity: item.quantity.toNumber(),
         unitPrice: item.unitPrice.toNumber(),
         discountTotal: item.discountTotal.toNumber(),
@@ -390,6 +392,12 @@ export class PosService {
       const sequence = await this.reserveFiscalSequence(tx, tenantId, documentType);
       const requiredPayment = isCreditSale ? order.initialPaymentAmount : computed.total;
       const payment = buildPaymentPlan(requiredPayment, dto);
+      if (
+        payment.payments.some(
+          (part) => part.method === PaymentMethod.TRANSFER && !part.reference?.trim(),
+        )
+      )
+        throw new BadRequestException('Indica el banco de la transferencia.');
       const paidAmount = payment.paidAmount;
       const balance = computed.total.sub(paidAmount).toDecimalPlaces(2);
       const status = this.getInvoiceStatus(paidAmount, computed.total);
@@ -450,7 +458,7 @@ export class PosService {
       });
 
       for (const item of [...computed.items].sort((a, b) =>
-        a.productId.localeCompare(b.productId),
+        (a.productId ?? '').localeCompare(b.productId ?? ''),
       )) {
         await this.applyInventoryForSale(tx, {
           tenantId,
@@ -461,7 +469,7 @@ export class PosService {
           fromOrder: Boolean(order),
           inventorySource: order?.inventorySource ?? ProductInventoryDestination.SALES_INVENTORY,
         });
-        if (order?.workshopTicket && item.workshopTicketLineId && item.product.trackInventory) {
+        if (order?.workshopTicket && item.workshopTicketLineId && item.product?.trackInventory) {
           const synchronized = await tx.workshopTicketLine.updateMany({
             where: {
               id: item.workshopTicketLineId,
@@ -608,27 +616,12 @@ export class PosService {
             },
             data: { invoiceId: invoice.id },
           });
-          const delivered = await tx.workshopTicket.updateMany({
-            where: {
-              id: order.workshopTicket.id,
-              tenantId,
-              status: { notIn: [WorkshopTicketStatus.DELIVERED, WorkshopTicketStatus.CANCELLED] },
-            },
-            data: {
-              status: WorkshopTicketStatus.DELIVERED,
-              deliveredAt: issuedAt,
-            },
-          });
-          if (delivered.count === 1) {
-            await tx.workshopTicketStatusEvent.create({
-              data: {
-                tenantId,
-                ticketId: order.workshopTicket.id,
-                fromStatus: order.workshopTicket.status,
-                toStatus: WorkshopTicketStatus.DELIVERED,
-                note: `Factura ${invoice.invoiceNumber} emitida en Caja.`,
-                createdById: user.id,
-              },
+          // Payment records settlement; the physical handover is recorded by WorkshopDelivery.
+          if (order.workshopTicket.status === WorkshopTicketStatus.READY_FOR_DELIVERY) {
+            await tx.workshopReadyNotification.upsert({
+              where: { ticketId: order.workshopTicket.id },
+              create: { tenantId, ticketId: order.workshopTicket.id },
+              update: {},
             });
           }
         }
@@ -686,8 +679,8 @@ export class PosService {
               total: computed.total,
               items: computed.items.map((item) => ({
                 ...item,
-                isService: item.product.unit === ProductUnit.SERVICE,
-                taxCategory: item.product.taxCategory,
+                isService: item.product?.unit === ProductUnit.SERVICE,
+                taxCategory: item.product?.taxCategory ?? TaxCategory.ITBIS_18,
               })),
             })
           : null;
@@ -872,6 +865,7 @@ export class PosService {
         items: {
           include: {
             product: true,
+            workshopTicketLine: { select: { ticketId: true, type: true, productId: true } },
           },
         },
       },
@@ -940,6 +934,7 @@ export class PosService {
 
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
+      if (!item.product) throw new BadRequestException('Product unavailable.');
       const availableStock = item.product.stock - item.product.reservedStock;
 
       if (
@@ -993,10 +988,26 @@ export class PosService {
       subtotal: Prisma.Decimal;
       total: Prisma.Decimal;
       product: Product | null;
+      workshopTicketLine?: {
+        ticketId: string;
+        type: WorkshopTicketLineType;
+        productId: string | null;
+      } | null;
     }>;
   }) {
     const computedItems: ComputedSaleLine[] = order.items.map((item) => {
-      if (!item.productId || !item.product) {
+      const localWorkshopLine =
+        !item.productId &&
+        !item.product &&
+        order.inventorySource === ProductInventoryDestination.SALES_INVENTORY &&
+        Boolean(
+          order.workshopTicket &&
+          item.workshopTicketLineId &&
+          item.workshopTicketLine?.ticketId === order.workshopTicket.id &&
+          Object.values(WorkshopTicketLineType).includes(item.workshopTicketLine.type) &&
+          item.workshopTicketLine.productId === null,
+        );
+      if ((!item.productId || !item.product) && !localWorkshopLine) {
         throw new BadRequestException('Sales order contains an unavailable product.');
       }
 
@@ -1020,6 +1031,14 @@ export class PosService {
     });
 
     for (const item of computedItems) {
+      if (!item.product) {
+        if (item.reservedQuantity !== 0 || !item.inventoryConsumedQuantity.isZero()) {
+          throw new BadRequestException(
+            'Un repuesto exclusivo de la OT no puede tener movimientos de inventario.',
+          );
+        }
+        continue;
+      }
       const quantity = item.quantity.toNumber();
       if (
         item.inventoryConsumedQuantity.lt(0) ||
@@ -1084,6 +1103,7 @@ export class PosService {
     },
   ) {
     const { tenantId, item, invoiceId, invoiceNumber, userId, fromOrder, inventorySource } = args;
+    if (!item.product || !item.productId) return;
 
     const quantity = item.quantity.sub(fromOrder ? item.inventoryConsumedQuantity : 0).toNumber();
     // Workshop parts were deducted on issue, not on payment. Keep the original

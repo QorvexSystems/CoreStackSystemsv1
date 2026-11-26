@@ -3,6 +3,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+import { brand } from '@/lib/brand';
+import { CompanyDocumentDetails } from './company-document-details';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { getSalesOrder } from '@/lib/api';
@@ -72,6 +74,14 @@ export function QuotationPrint({
 
       <article className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm print:border-0 print:shadow-none">
         <header className="border-b border-zinc-200 pb-4">
+          <div className="mb-4 flex items-start gap-4">
+            <img src={brand.logoPath} alt={brand.name} className="h-16 w-16 object-contain" />
+            <div>
+              <p className="text-lg font-bold">{brand.name}</p>
+              <p className="text-xs">{brand.descriptor}</p>
+              <CompanyDocumentDetails />
+            </div>
+          </div>
           <p className="text-sm font-semibold uppercase tracking-wide text-primary">Cotizacion</p>
           <h2 className="mt-2 text-2xl font-bold">{order.orderNumber}</h2>
           <div className="mt-3 flex flex-wrap gap-2">

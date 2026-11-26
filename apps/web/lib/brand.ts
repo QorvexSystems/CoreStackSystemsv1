@@ -1,9 +1,12 @@
 // Punto único de personalización para cada instalación de la plantilla de taller.
 export const brand = {
-  name: 'Soluciones Automotriz C&R',
-  shortName: 'Automotriz C&R',
+  name: 'Soluciones Automotriz CyR',
+  shortName: 'Automotriz CyR',
   tagline: 'Gestión de taller',
-  descriptor: 'Servicio, diagnóstico y control operativo',
+  descriptor: 'Sistema Electrico, Mecanica Automotriz y Programaciones.',
+  address: 'Calle Betania No. 21 Detras de la Innocacion, Los Beibolistas, Sto. Dgo. Oeste, R.D.',
+  rnc: '132279816',
+  phone: '829-995-1128',
   logoPath: '/brand/logo-taller.png',
   faviconPath: '/brand/logo-taller-32.png',
   appleTouchIconPath: '/brand/logo-taller-180.png',

@@ -66,6 +66,10 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
       typeof session.permissions['appointments.manage'] !== 'boolean';
     if (legacyOrderSession && isPath('/orders')) return true;
     if (pathname === '/workshop' || isPath('/workshop/agenda')) return true;
+    if (isPath('/workshop/history'))
+      return hasPermission(session, 'workorders.view') && hasPermission(session, 'vehicles.view');
+    if (/^\/workshop\/[^/]+\/(?:reception|quote)\/print$/.test(pathname))
+      return hasPermission(session, 'workorders.view');
     if (isPath('/pos')) return hasPermission(session, 'pos.sell');
     if (/^\/invoices\/[^/]+\/print$/.test(pathname))
       return hasPermission(session, 'invoices.reprint');

@@ -11,7 +11,9 @@ export function resolvePosDocumentType(input: PaymentSelection) {
   const methods = input.payments?.length
     ? input.payments.map((payment) => payment.method)
     : [input.paymentMethod ?? PaymentMethod.CASH];
-  const cashOnly = methods.every((method) => method === PaymentMethod.CASH);
+  const cashOnly =
+    methods.every((method) => method === PaymentMethod.CASH) ||
+    methods.every((method) => method === PaymentMethod.TRANSFER);
   const allowed: InvoiceDocumentType[] = cashOnly
     ? [InvoiceDocumentType.SALE_NOTE, InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31]
     : [InvoiceDocumentType.CONSUMER_ELECTRONIC_32, InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31];
@@ -22,8 +24,8 @@ export function resolvePosDocumentType(input: PaymentSelection) {
   if (!allowed.includes(documentType)) {
     throw new BadRequestException(
       cashOnly
-        ? 'Con pago en efectivo solo puedes emitir Nota de venta o Fiscal E31.'
-        : 'Con tarjeta, transferencia o pago mixto solo puedes emitir Consumo E32 o Fiscal E31.',
+        ? 'Con efectivo o transferencia solo puedes emitir Nota de venta o Fiscal E31.'
+        : 'Con tarjeta u otros medios solo puedes emitir Consumo E32 o Fiscal E31.',
     );
   }
 

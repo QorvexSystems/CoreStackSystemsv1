@@ -143,6 +143,7 @@ export class EmployeesService {
     const employee = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
       await this.requireFreshEmployeeManagement(tx, tenantId, actor.id);
+      const employeeCode = await this.normalizeEmployeeCode(tx, tenantId, dto.employeeCode);
       const profileStatus = dto.status ?? EmployeeStatus.ACTIVE;
       if (profileStatus === EmployeeStatus.ACTIVE && dto.role !== Role.MECHANIC)
         await this.ensureUserSlot(tx, tenantId);
@@ -188,7 +189,7 @@ export class EmployeesService {
         data: {
           tenantId,
           userId: user.id,
-          employeeCode: dto.employeeCode,
+          employeeCode,
           jobTitle: dto.jobTitle,
           hireDate: dto.hireDate ? new Date(dto.hireDate) : undefined,
           documentType: dto.documentType,
@@ -276,6 +277,7 @@ export class EmployeesService {
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
       await this.requireFreshEmployeeManagement(tx, tenantId, actor.id);
+      const employeeCode = await this.normalizeEmployeeCode(tx, tenantId, dto.employeeCode, id);
       const employee = await tx.employeeProfile.findFirst({
         where: { id, tenantId },
         include: { user: { include: { memberships: true } } },
@@ -351,7 +353,7 @@ export class EmployeesService {
       const updated = await tx.employeeProfile.update({
         where: { id },
         data: {
-          employeeCode: dto.employeeCode,
+          employeeCode,
           jobTitle: dto.jobTitle,
           hireDate: dto.hireDate ? new Date(dto.hireDate) : undefined,
           documentType: dto.documentType,
@@ -642,6 +644,24 @@ export class EmployeesService {
     const overrides = value as Record<string, boolean>;
     if (overrides['employees.manage'] && role !== Role.ADMIN)
       throw new BadRequestException('Solo un administrador puede administrar usuarios y accesos.');
+  }
+
+  private async normalizeEmployeeCode(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    value: string | null | undefined,
+    employeeId?: string,
+  ) {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    const code = value.trim();
+    if (!code) return null;
+    const duplicate = await tx.employeeProfile.findFirst({
+      where: { tenantId, employeeCode: code, ...(employeeId ? { id: { not: employeeId } } : {}) },
+      select: { id: true },
+    });
+    if (duplicate) throw new ConflictException('Ya existe un empleado con ese código.');
+    return code;
   }
 
   private async requireFreshEmployeeManagement(

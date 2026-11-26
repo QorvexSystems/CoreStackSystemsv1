@@ -201,6 +201,12 @@ async function populateWorkshopDemo(db, tenantId) {
           observations: marker,
         });
         if (statuses[index] === 'RECEIVED') continue;
+        // Fictitious demonstration only; this image does not represent real customer consent.
+        const demoSignature = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="120"><text x="20" y="70" font-size="36">FIRMA DEMO</text></svg>').toString('base64');
+        await tx.workshopReception.update({
+          where: { ticketId: ticket.id },
+          data: { signatureUrl: `data:image/svg+xml;base64,${demoSignature}`, signedAt: new Date() },
+        });
         await workshop.updateTicket(tenantId, admin.userId, ticket.id, {
           status: 'DIAGNOSIS',
           diagnosis: `${marker} Revisión de componentes y mantenimiento recomendado.`,

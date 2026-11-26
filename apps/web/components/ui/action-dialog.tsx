@@ -1,15 +1,8 @@
 'use client';
 
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-  LoaderCircle,
-  ShieldAlert,
-  X,
-} from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, LoaderCircle, ShieldAlert, X } from 'lucide-react';
 import { useEffect, useId, useRef, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { KeyboardDialogLayer } from './keyboard-dialog-layer';
 import { cn } from '@/lib/utils';
 import { Button } from './button';
 
@@ -24,6 +17,7 @@ type ActionDialogProps = {
   tone?: ActionDialogTone;
   icon?: ReactNode;
   confirmLabel: string;
+  confirmHref?: string;
   cancelLabel?: string;
   isPending?: boolean;
   confirmDisabled?: boolean;
@@ -78,6 +72,7 @@ export function ActionDialog({
   tone = 'default',
   icon,
   confirmLabel,
+  confirmHref,
   cancelLabel = 'Volver',
   isPending = false,
   confirmDisabled = false,
@@ -150,13 +145,8 @@ export function ActionDialog({
 
   if (!open || typeof document === 'undefined') return null;
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-primary/65 p-4 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !isPending) onClose();
-      }}
-    >
+  return (
+    <KeyboardDialogLayer lockBody={false} className="!z-[120]" onDismiss={() => !isPending && onClose()}>
       <div
         ref={dialogRef}
         role="dialog"
@@ -164,14 +154,14 @@ export function ActionDialog({
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          'w-full overflow-hidden rounded-xl border bg-card shadow-[0_24px_70px_-24px_rgb(15_23_42/0.55)]',
+          'flex max-h-full w-full flex-col overflow-hidden rounded-xl border bg-card shadow-[0_24px_70px_-24px_rgb(15_23_42/0.55)]',
           styles.border,
           size === 'sm' && 'max-w-md',
           size === 'md' && 'max-w-lg',
           size === 'lg' && 'max-w-2xl',
         )}
       >
-        <div className={cn('border-b bg-gradient-to-br px-5 py-4 sm:px-6', styles.accent)}>
+        <div className={cn('shrink-0 border-b bg-gradient-to-br px-5 py-4 sm:px-6', styles.accent)}>
           <div className="flex items-start gap-4">
             <div
               className={cn(
@@ -185,7 +175,10 @@ export function ActionDialog({
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 Confirmación requerida
               </p>
-              <h2 id={titleId} className="mt-1 text-lg font-semibold tracking-tight text-foreground">
+              <h2
+                id={titleId}
+                className="mt-1 text-lg font-semibold tracking-tight text-foreground"
+              >
                 {title}
               </h2>
               {description ? (
@@ -208,28 +201,41 @@ export function ActionDialog({
         </div>
 
         {summary || children ? (
-          <div className="max-h-[min(56vh,34rem)] space-y-4 overflow-y-auto px-5 py-5 sm:px-6">
-            {summary ? <div className="rounded-lg border border-border bg-muted/35 p-3 text-sm">{summary}</div> : null}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 sm:px-6">
+            {summary ? (
+              <div className="rounded-lg border border-border bg-muted/35 p-3 text-sm">
+                {summary}
+              </div>
+            ) : null}
             {children}
           </div>
         ) : null}
 
-        <div className="flex flex-col-reverse gap-2 border-t bg-muted/30 px-5 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t bg-muted/30 px-5 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
           <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>
             {cancelLabel}
           </Button>
-          <Button
-            type="button"
-            className={styles.button}
-            onClick={onConfirm}
-            disabled={isPending || confirmDisabled}
-          >
-            {isPending ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
-            {isPending ? 'Procesando...' : confirmLabel}
-          </Button>
+          {confirmHref && !isPending && !confirmDisabled ? (
+            <Button className={styles.button} asChild>
+              <a href={confirmHref} target="_blank" rel="noopener noreferrer" onClick={onConfirm}>
+                {confirmLabel}
+              </a>
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              className={styles.button}
+              onClick={onConfirm}
+              disabled={isPending || confirmDisabled}
+            >
+              {isPending ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : null}
+              {isPending ? 'Procesando...' : confirmLabel}
+            </Button>
+          )}
         </div>
       </div>
-    </div>,
-    document.body,
+    </KeyboardDialogLayer>
   );
 }

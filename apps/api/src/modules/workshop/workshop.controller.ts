@@ -199,7 +199,7 @@ export class WorkshopController {
 
   @Post('reception-images')
   @RequirePermissions('reception.manage')
-  @UseInterceptors(FilesInterceptor('files', 2))
+  @UseInterceptors(FilesInterceptor('files', 3, { limits: { fileSize: 5 * 1024 * 1024 } }))
   uploadReceptionImages(
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,

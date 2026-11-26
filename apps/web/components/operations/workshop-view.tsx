@@ -1,5 +1,9 @@
 'use client';
 
+import { ReceptionWhatsappButton } from './reception-whatsapp-button';
+
+import { DocumentWhatsappButton } from './document-whatsapp-button';
+import { brand as workshopBrand } from '@/lib/brand';
 import { WorkshopTasksPanel } from './workshop-tasks-panel';
 import { WorkshopBillingPanel } from './workshop-billing-panel';
 import { workshopPaymentState } from '@/lib/workshop-payment';
@@ -7,6 +11,8 @@ import { workshopQuoteApprovalBlocker } from '@/lib/workshop-quote';
 import { hasPermission } from '@/lib/authorization';
 import type { WorkshopTaskInput, WorkshopTaskUpdate } from '@/lib/api';
 
+import { WorkshopOrderDrawer } from './workshop-order-drawer';
+import { WorkshopReceptionDocument } from './workshop-reception-document';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -42,6 +48,8 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { VehicleCatalogSearch } from './vehicle-catalog-search';
+import { WorkshopLocalPartDialog } from './workshop-local-part-dialog';
 import { ActionDialog } from '@/components/ui/action-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -353,7 +361,8 @@ export function WorkshopView() {
         const source = ticket.promisedAt ?? ticket.openedAt;
         if (source.slice(0, 10) !== dateFilter) return false;
       }
-      if (kpiFilter === 'ALL') return true;
+      if (kpiFilter === 'ALL')
+        return statusFilter !== 'ALL' || !['DELIVERED', 'CANCELLED'].includes(ticket.status);
       if (kpiFilter === 'DIAGNOSIS')
         return ticket.status === 'RECEIVED' || (ticket.status === 'DIAGNOSIS' && !ticket.diagnosis);
       if (kpiFilter === 'TO_QUOTE')
@@ -434,7 +443,6 @@ export function WorkshopView() {
         diagnosis: ticketForm.diagnosis || undefined,
         customerNotes: ticketForm.customerNotes || undefined,
         promisedAt: ticketForm.promisedAt || undefined,
-        mechanicIds: ticketForm.mechanicIds,
         lines: ticketForm.lines
           .filter((line) => line.description.trim())
           .map((line) => ({
@@ -891,7 +899,7 @@ export function WorkshopView() {
   const pagedTickets = visibleTickets.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-medium text-muted-foreground">{brand.name} · Taller</p>
@@ -900,40 +908,26 @@ export function WorkshopView() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">{workspaceCopy.description}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={!hasPermission(session, 'vehicles.manage')}
-            onClick={openVehicleRegistration}
-          >
-            <Car className="h-4 w-4" />
-            Registrar vehículo
-          </Button>
-          <Button disabled={!hasPermission(session, 'workorders.create')} onClick={openTicketForm}>
-            <ClipboardPlus className="h-4 w-4" />
-            Nueva orden de trabajo
-          </Button>
-        </div>
+        {workspaceMode === 'vehicles' ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={!hasPermission(session, 'vehicles.manage')}
+              onClick={openVehicleRegistration}
+            >
+              <Car className="h-4 w-4" />
+              Registrar vehículo
+            </Button>
+            <Button
+              disabled={!hasPermission(session, 'workorders.create')}
+              onClick={openTicketForm}
+            >
+              <ClipboardPlus className="h-4 w-4" />
+              Nueva orden de trabajo
+            </Button>
+          </div>
+        ) : null}
       </section>
-
-      {workspaceMode !== 'vehicles' ? (
-        <div className="flex gap-1 overflow-x-auto rounded-xl border bg-card px-2 py-1.5 text-xs text-muted-foreground shadow-sm">
-          {[
-            'Cita',
-            'Vehículo recibido',
-            'Diagnóstico',
-            'Cotización',
-            'Aprobación',
-            'Facturación',
-            'Entregado',
-          ].map((step, index) => (
-            <div key={step} className="flex shrink-0 items-center">
-              <span className="rounded-lg px-2.5 py-1.5 font-medium text-foreground">{step}</span>
-              {index < 6 ? <ChevronRight className="h-4 w-4 text-border" /> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
 
       {workspaceMode === 'orders' ? (
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
@@ -945,8 +939,11 @@ export function WorkshopView() {
             }
             icon={Wrench}
             tone="blue"
-            selected={kpiFilter === 'ALL'}
-            onClick={() => setKpiFilter('ALL')}
+            selected={kpiFilter === 'ALL' && statusFilter === 'ALL'}
+            onClick={() => {
+              setKpiFilter('ALL');
+              setStatusFilter('ALL');
+            }}
           />
           <OperationalMetric
             label="En diagnóstico"
@@ -960,7 +957,10 @@ export function WorkshopView() {
             icon={Car}
             tone="slate"
             selected={kpiFilter === 'DIAGNOSIS'}
-            onClick={() => setKpiFilter('DIAGNOSIS')}
+            onClick={() => {
+              setKpiFilter('DIAGNOSIS');
+              setStatusFilter('ALL');
+            }}
           />
           <OperationalMetric
             label="Por cotizar"
@@ -972,7 +972,10 @@ export function WorkshopView() {
             icon={FileText}
             tone="amber"
             selected={kpiFilter === 'TO_QUOTE'}
-            onClick={() => setKpiFilter('TO_QUOTE')}
+            onClick={() => {
+              setKpiFilter('TO_QUOTE');
+              setStatusFilter('ALL');
+            }}
           />
           <OperationalMetric
             label="Esperando aprobación"
@@ -980,7 +983,10 @@ export function WorkshopView() {
             icon={Clock3}
             tone="amber"
             selected={kpiFilter === 'AWAITING'}
-            onClick={() => setKpiFilter('AWAITING')}
+            onClick={() => {
+              setKpiFilter('AWAITING');
+              setStatusFilter('ALL');
+            }}
           />
           <OperationalMetric
             label="Por facturar"
@@ -992,7 +998,10 @@ export function WorkshopView() {
             icon={Receipt}
             tone="slate"
             selected={kpiFilter === 'BILLING'}
-            onClick={() => setKpiFilter('BILLING')}
+            onClick={() => {
+              setKpiFilter('BILLING');
+              setStatusFilter('ALL');
+            }}
           />
           <OperationalMetric
             label="Entregadas"
@@ -1000,12 +1009,15 @@ export function WorkshopView() {
             icon={CheckCircle2}
             tone="green"
             selected={kpiFilter === 'DELIVERED'}
-            onClick={() => setKpiFilter('DELIVERED')}
+            onClick={() => {
+              setKpiFilter('DELIVERED');
+              setStatusFilter('ALL');
+            }}
           />
         </div>
       ) : null}
 
-      <div className="grid gap-2 rounded-xl border bg-card p-2 shadow-sm lg:grid-cols-[minmax(15rem,1fr)_12rem_12rem_12rem_auto]">
+      <div className="grid gap-2 rounded-xl border bg-card p-2 shadow-sm xl:grid-cols-[minmax(15rem,1fr)_12rem_12rem_auto]">
         <div className="relative w-full">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -1019,27 +1031,16 @@ export function WorkshopView() {
           <>
             <select
               value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(event.target.value as WorkshopTicketStatus | 'ALL')
-              }
+              onChange={(event) => {
+                setStatusFilter(event.target.value as WorkshopTicketStatus | 'ALL');
+                setKpiFilter('ALL');
+              }}
               className="h-10 rounded-md border border-input bg-card px-3 text-sm"
             >
-              <option value="ALL">Todos los estados</option>
+              <option value="ALL">Estados activos</option>
               {Object.entries(statusLabels).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={mechanicFilter}
-              onChange={(event) => setMechanicFilter(event.target.value)}
-              className="h-10 rounded-md border border-input bg-card px-3 text-sm"
-            >
-              <option value="ALL">Todos los mecánicos</option>
-              {(mechanics.data ?? []).map((mechanic) => (
-                <option key={mechanic.id} value={mechanic.id}>
-                  {mechanic.user.name}
                 </option>
               ))}
             </select>
@@ -1148,7 +1149,7 @@ export function WorkshopView() {
                 </header>
 
                 <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-3 sm:p-4">
-                  <div className="grid min-w-0 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_16rem] xl:grid-cols-[minmax(0,1fr)_18rem]">
+                  <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_18rem]">
                     <main className="min-w-0 space-y-4">
                       {activeTicketStage === 'DIAGNOSIS' || activeTicketStage === 'QUOTE' ? (
                         <TicketEditor
@@ -1229,12 +1230,21 @@ export function WorkshopView() {
                   <div className="flex flex-wrap justify-end gap-2">
                     {activeTicketStage === 'QUOTE' && editingTicket.quoteVersions.length ? (
                       <>
+                        <Button type="button" variant="outline" asChild>
+                          <a
+                            href={`/workshop/${editingTicket.id}/quote/print`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Download className="h-4 w-4" /> Descargar PDF
+                          </a>
+                        </Button>
                         <Button
                           type="button"
                           variant="outline"
                           onClick={() => setQuoteShareTicket(editingTicket)}
                         >
-                          <Download className="h-4 w-4" /> Descargar PDF
+                          <MessageCircle className="h-4 w-4" /> Compartir
                         </Button>
                       </>
                     ) : null}
@@ -1284,7 +1294,7 @@ export function WorkshopView() {
                         }}
                       >
                         {editingTicket.status === 'RECEIVED'
-                          ? 'Iniciar diagnóstico'
+                          ? 'Continuar a cotización'
                           : 'Continuar a cotización'}{' '}
                         <ChevronRight className="h-4 w-4" />
                       </Button>
@@ -1342,78 +1352,23 @@ export function WorkshopView() {
           }}
         />
       ) : null}
-      <ActionDialog
-        open={Boolean(quoteShareTicket)}
-        size="sm"
-        title="Compartir cotización"
-        description="Elige si deseas descargar el PDF o preparar su envío por WhatsApp."
-        icon={<MessageCircle className="h-5 w-5" />}
-        confirmLabel="Abrir WhatsApp"
-        cancelLabel="Cancelar"
-        onClose={() => setQuoteShareTicket(null)}
-        onConfirm={() => {
-          if (!quoteShareTicket) return;
+      {quoteShareTicket ? (
+        <ActionDialog
+          open
+          title="Compartir cotización"
+          confirmLabel="Cerrar"
+          onConfirm={() => setQuoteShareTicket(null)}
+          onClose={() => setQuoteShareTicket(null)}
+        >
+          <DocumentWhatsappButton
+            kind="quote"
+            documentId={quoteShareTicket.id}
+            documentNumber={`${quoteShareTicket.ticketNumber}-V${quoteShareTicket.quoteVersions[0]?.version ?? 1}`}
+            customer={quoteShareTicket.customer}
+          />
+        </ActionDialog>
+      ) : null}
 
-          const version = quoteShareTicket.quoteVersions[0]?.version ?? 1;
-          const documentNumber = `${quoteShareTicket.ticketNumber}-V${version}`;
-          const vehicle = [
-            quoteShareTicket.vehicle.make,
-            quoteShareTicket.vehicle.model,
-            quoteShareTicket.vehicle.year,
-          ]
-            .filter(Boolean)
-            .join(' ');
-          const digits = (quoteShareTicket.customer.phone ?? '').replace(/\D/g, '');
-          const whatsappPhone = digits.length === 10 ? `1${digits}` : digits;
-          const message = encodeURIComponent(
-            `Hola ${quoteShareTicket.customer.name}, aquí está su cotización ${documentNumber} de ${brand.name} para su ${vehicle}. El total es ${formatWorkshopCurrency(quoteShareTicket.total)}. Quedamos atentos a su confirmación.`,
-          );
-          const whatsappUrl = whatsappPhone
-            ? `https://wa.me/${whatsappPhone}?text=${message}`
-            : `https://wa.me/?text=${message}`;
-
-          const whatsappWindow = window.open(whatsappUrl, '_blank');
-          if (whatsappWindow) {
-            whatsappWindow.opener = null;
-          } else {
-            window.location.assign(whatsappUrl);
-          }
-          setQuoteShareTicket(null);
-        }}
-      >
-        {quoteShareTicket ? (
-          <div className="space-y-3">
-            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-              <p className="font-semibold text-foreground">
-                {quoteShareTicket.ticketNumber}-V
-                {quoteShareTicket.quoteVersions[0]?.version ?? 1}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {quoteShareTicket.customer.name} · {formatWorkshopCurrency(quoteShareTicket.total)}
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-12 w-full justify-center"
-              onClick={() => {
-                window.open(
-                  `/workshop/${quoteShareTicket.id}/quote/print?autoPrint=1`,
-                  '_blank',
-                  'noopener,noreferrer',
-                );
-                setQuoteShareTicket(null);
-              }}
-            >
-              <Download className="h-4 w-4" /> Descargar PDF
-            </Button>
-            <p className="text-xs leading-5 text-muted-foreground">
-              Primero descarga el PDF. Después pulsa Abrir WhatsApp y adjunta el archivo descargado
-              en el chat; el mensaje se cargará automáticamente.
-            </p>
-          </div>
-        ) : null}
-      </ActionDialog>
       {invoiceEmailTicket?.salesOrder?.invoice ? (
         <DocumentEmailDialog
           open
@@ -1503,7 +1458,7 @@ export function WorkshopView() {
       />
       {workspaceMode === 'orders' ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             {tickets.isLoading ? (
               <div className="flex items-center gap-2 py-12 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1590,8 +1545,8 @@ const stageMeta: Array<{
 }> = [
   {
     id: 'DIAGNOSIS',
-    label: 'Diagnóstico',
-    description: 'Recepción y evaluación',
+    label: 'Recepción',
+    description: 'Formulario de ingreso',
     icon: ClipboardCheck,
   },
   { id: 'QUOTE', label: 'Cotización', description: 'Servicios y repuestos', icon: FileText },
@@ -1664,11 +1619,51 @@ function WorkOrderSummary({
   ticket: WorkshopTicket;
   activeStage: WorkOrderStage;
 }) {
+  const session = useCurrentSession();
+  const whatsappStatus = useQuery({
+    queryKey: ['whatsapp-ready-status', session?.tenantId],
+    queryFn: async () => {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/notifications/whatsapp/status`,
+        {
+          headers: {
+            Authorization: `Bearer ${session!.accessToken}`,
+            'x-tenant-id': session!.tenantId,
+          },
+        },
+      );
+      if (!response.ok) throw new Error('No se pudo consultar WhatsApp.');
+      return response.json() as Promise<{ configured: boolean }>;
+    },
+    enabled: Boolean(session && ticket.status === 'READY_FOR_DELIVERY'),
+    refetchInterval: 30000,
+  });
   const mechanic = mechanicName(ticket);
   const activeIndex = stageMeta.findIndex((stage) => stage.id === activeStage);
   const progress = Math.round(((activeIndex + 1) / stageMeta.length) * 100);
   return (
     <aside className="min-w-0 space-y-3 lg:sticky lg:top-0">
+      {ticket.status === 'READY_FOR_DELIVERY' ? (
+        <p className="rounded-lg border bg-white p-3 text-xs text-muted-foreground">
+          {ticket.readyNotification?.status === 'SENT'
+            ? 'Aviso automático enviado a WhatsApp.'
+            : whatsappStatus.data?.configured === false
+              ? 'Aviso automático pendiente de conectar WhatsApp Business.'
+              : ticket.readyNotification?.lastError === 'WAITING_FOR_READY_AND_PAID'
+                ? 'El aviso automático se enviará cuando la orden esté pagada.'
+                : ['FAILED', 'UNCERTAIN'].includes(ticket.readyNotification?.status ?? '')
+                  ? 'No se pudo confirmar el envío automático. Revisa el aviso antes de reenviarlo.'
+                  : 'Aviso automático pendiente de envío.'}
+        </p>
+      ) : null}
+      {ticket.status === 'READY_FOR_DELIVERY' ? (
+        <DocumentWhatsappButton
+          customer={ticket.customer}
+          label="Avisar vehículo listo"
+          readyMessage={`Hola ${ticket.customer.name}, su vehículo ${ticket.vehicle.make} ${ticket.vehicle.model} (${ticket.vehicle.licensePlate ?? 'sin placa'}) ya está listo para retirar en ${workshopBrand.name}. Orden ${ticket.ticketNumber}.`}
+        />
+      ) : null}
+
       <section className="rounded-xl border bg-white p-4 shadow-sm">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
           <ClipboardCheck className="h-4 w-4" /> Resumen de la orden
@@ -1690,15 +1685,7 @@ function WorkOrderSummary({
               <TicketSoftBadge status={ticket.status} />
             </dd>
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt className="text-muted-foreground">Mecánico</dt>
-            <dd className="flex items-center gap-2 font-medium">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold">
-                {initials(mechanic)}
-              </span>
-              {mechanic}
-            </dd>
-          </div>
+
           <div className="flex items-center justify-between gap-3">
             <dt className="text-muted-foreground">Total actual</dt>
             <dd className="text-sm font-semibold">{formatWorkshopCurrency(ticket.total)}</dd>
@@ -1809,7 +1796,6 @@ function WorkshopLane({
                   <th className="px-4 py-2.5">Orden</th>
                   <th className="px-3 py-2.5">Vehículo</th>
                   <th className="px-3 py-2.5">Cliente</th>
-                  <th className="px-3 py-2.5">Mecánico</th>
                   <th className="px-3 py-2.5">Promesa</th>
                   <th className="px-3 py-2.5">Estado</th>
                   <th className="px-3 py-2.5 text-right">Estimado</th>
@@ -1877,7 +1863,7 @@ function WorkOrderList({
   onDelete: (ticket: WorkshopTicket) => void;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+    <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <div className="border-b border-border px-4 py-3">
         <h2 className="font-semibold">Expedientes de órdenes</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -1888,13 +1874,12 @@ function WorkOrderList({
       {tickets.length ? (
         <>
           <div className="hidden overflow-x-auto md:block">
-            <table className="w-full min-w-[60rem] text-left text-sm">
+            <table className="w-full min-w-[48rem] text-left text-sm">
               <thead className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Orden</th>
                   <th className="px-3 py-3">Vehículo</th>
                   <th className="px-3 py-3">Cliente</th>
-                  <th className="px-3 py-3">Mecánico</th>
                   <th className="px-3 py-3">Promesa</th>
                   <th className="px-3 py-3">Estado</th>
                   <th className="px-3 py-3 text-right">Total</th>
@@ -1996,14 +1981,6 @@ function WorkOrderTableRow({
         <p className="mt-0.5 text-xs text-muted-foreground">
           {ticket.customer.phone ?? 'Sin teléfono'}
         </p>
-      </td>
-      <td className="px-3 py-3 align-top text-sm">
-        <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700">
-            {initials(mechanic)}
-          </span>
-          <span className="max-w-24 truncate">{mechanic}</span>
-        </div>
       </td>
       <td className="px-3 py-3 align-top text-sm">{formatWorkshopTime(ticket.promisedAt)}</td>
       <td className="px-3 py-3 align-top">
@@ -2301,7 +2278,6 @@ function ReceptionWorkspace({
                     <th className="px-3 py-2.5">Cliente</th>
                     <th className="px-3 py-2.5">Motivo / queja</th>
                     <th className="px-3 py-2.5">Kilometraje</th>
-                    <th className="px-3 py-2.5">Mecánico</th>
                     <th className="px-3 py-2.5">Promesa</th>
                     <th className="px-3 py-2.5">Estado</th>
                   </tr>
@@ -2347,9 +2323,6 @@ function ReceptionWorkspace({
                           {ticket.vehicle.mileage !== null
                             ? `${Number(ticket.vehicle.mileage).toLocaleString('es-DO')} km`
                             : '—'}
-                        </td>
-                        <td className="px-3 py-3 align-top text-xs">
-                          {ticket.assignments[0]?.employee.user.name ?? 'Sin asignar'}
                         </td>
                         <td className="px-3 py-3 align-top text-xs">
                           {formatWorkshopTime(ticket.promisedAt)}
@@ -2426,7 +2399,6 @@ function ReceptionInspector({
           value={ticket.customer.name}
           detail={ticket.customer.phone ?? undefined}
         />
-        <ReceptionDetail label="Mecánico asignado" value={mechanic} />
         <ReceptionDetail label="Promesa de entrega" value={formatWorkshopTime(ticket.promisedAt)} />
       </dl>
       <div className="mt-5 border-t border-border pt-5">
@@ -2450,7 +2422,7 @@ function ReceptionInspector({
         </p>
         <Button className="mt-3 w-full" size="sm" onClick={() => onEdit(ticket)}>
           <ClipboardCheck className="h-4 w-4" />
-          {ticket.status === 'RECEIVED' ? 'Iniciar diagnóstico' : 'Abrir orden'}
+          {ticket.status === 'RECEIVED' ? 'Continuar a cotización' : 'Abrir orden'}
         </Button>
       </div>
     </aside>
@@ -2518,6 +2490,21 @@ function ReceptionEditor({ ticket }: { ticket: WorkshopTicket }) {
       toast.error(error instanceof Error ? error.message : 'No se pudo guardar la recepción.'),
   });
 
+  if (editable && session)
+    return (
+      <div className="mt-4">
+        <Button type="button" onClick={() => setOpen(true)}>
+          {reception ? 'Editar recepción y fotos' : 'Completar recepción y fotos'}
+        </Button>
+        <WorkshopOrderDrawer
+          session={session}
+          ticket={open ? ticket : null}
+          mechanics={mechanics.data ?? []}
+          onClose={() => setOpen(false)}
+        />
+      </div>
+    );
+
   if (!reception && !editable) return null;
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -2531,7 +2518,6 @@ function ReceptionEditor({ ticket }: { ticket: WorkshopTicket }) {
       interiorCondition: form.interiorCondition || undefined,
       warningLights: form.warningLights || undefined,
       observations: form.observations || undefined,
-      initialMechanicId: form.initialMechanicId || undefined,
     });
   }
 
@@ -2543,7 +2529,11 @@ function ReceptionEditor({ ticket }: { ticket: WorkshopTicket }) {
             Recepción e inspección de entrada
           </p>
           <p className="mt-1 text-sm font-medium">
-            {reception ? 'Recepción registrada' : 'Pendiente: requerida antes del diagnóstico'}
+            {reception?.signatureUrl
+              ? 'Recepción firmada'
+              : reception
+                ? 'Recepción registrada · Firma opcional'
+                : 'Pendiente: completar recepción'}
           </p>
         </div>
         {editable ? (
@@ -2570,6 +2560,21 @@ function ReceptionEditor({ ticket }: { ticket: WorkshopTicket }) {
           <p className="text-muted-foreground">
             Testigos: {reception.warningLights ?? 'No registrados'}
           </p>
+        </div>
+      ) : null}
+      {reception?.signatureUrl ? (
+        <div className="mt-3 rounded-lg border bg-white p-3">
+          <p className="text-xs font-semibold">Firma de recepción del cliente</p>
+          <img
+            src={reception.signatureUrl}
+            alt="Firma de recepción del cliente"
+            className="h-28 w-full object-contain"
+          />
+          {reception.signedAt ? (
+            <p className="text-xs text-muted-foreground">
+              Confirmada el {new Date(reception.signedAt).toLocaleString('es-DO')}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {open ? (
@@ -2603,22 +2608,6 @@ function ReceptionEditor({ ticket }: { ticket: WorkshopTicket }) {
               </select>
             </Field>
           </div>
-          <Field label="Técnico inicial">
-            <select
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-              value={form.initialMechanicId}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, initialMechanicId: event.target.value }))
-              }
-            >
-              <option value="">Sin asignar</option>
-              {(mechanics.data ?? []).map((mechanic) => (
-                <option key={mechanic.id} value={mechanic.id}>
-                  {mechanic.user.name}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label="Accesorios entregados">
             <Input
               value={form.accessories}
@@ -3310,7 +3299,7 @@ function WorkshopBoard({
   ];
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+    <div className="min-w-0 space-y-3">
       <div className="space-y-3">
         {lanes.map((lane) => (
           <BoardLane
@@ -3322,7 +3311,7 @@ function WorkshopBoard({
           />
         ))}
       </div>
-      <MechanicCapacity mechanics={mechanics} tickets={tickets} />
+
     </div>
   );
 }
@@ -3369,9 +3358,6 @@ function BoardLane({
               <div className="mt-4 flex items-end justify-between gap-3 text-xs">
                 <div>
                   <p className="font-medium">{ticket.customer.name}</p>
-                  <p className="mt-0.5 text-muted-foreground">
-                    {ticket.assignments[0]?.employee.user.name ?? 'Sin mecánico'}
-                  </p>
                 </div>
                 <p className="text-right text-primary">{formatWorkshopTime(ticket.promisedAt)}</p>
               </div>
@@ -3665,7 +3651,7 @@ function EmptyWorkshopState({ onCreate }: { onCreate: () => void }) {
       <Wrench className="mx-auto h-7 w-7 text-muted-foreground" />
       <p className="mt-3 text-sm font-semibold">El taller está listo para recibir vehículos.</p>
       <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-        Abre una orden de trabajo para iniciar la recepción, diagnóstico y asignación de mecánicos.
+        Abre una orden de trabajo para iniciar la recepción y seguimiento del trabajo.
       </p>
       <Button className="mt-4" onClick={onCreate}>
         <ClipboardPlus className="h-4 w-4" />
@@ -3798,6 +3784,7 @@ function VehicleForm({
               <option value="SUV">SUV</option>
             </select>
           </Field>
+          <VehicleCatalogSearch onSelect={(make, model) => { onChange('make', make); onChange('model', model); }} />
           <Field label="Marca" required>
             <Input
               required
@@ -3998,35 +3985,7 @@ function TicketForm({
               </Field>
             </div>
           </details>
-          <fieldset
-            className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"
-            disabled={!hasPermission(session, 'workorders.assign')}
-          >
-            <p className="text-sm font-bold text-slate-950">2. Asignación inicial</p>
-            <p className="mb-3 mt-1 text-sm text-slate-500">
-              Puedes asignar un mecánico ahora o hacerlo después desde la orden.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {mechanics.map((mechanic) => (
-                <label
-                  key={mechanic.id}
-                  className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.mechanicIds.includes(mechanic.id)}
-                    onChange={() => onToggleMechanic(mechanic.id)}
-                  />
-                  {mechanic.user.name}
-                </label>
-              ))}
-              {!mechanics.length ? (
-                <p className="text-sm text-muted-foreground">
-                  Crea empleados con rol Mecánico para asignarlos.
-                </p>
-              ) : null}
-            </div>
-          </fieldset>
+
           <details className="group rounded-xl border border-slate-200 bg-white">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-4 font-semibold text-slate-800 sm:px-5">
               Agregar servicios o repuestos ahora
@@ -4175,7 +4134,18 @@ function TicketRow({
   const session = useCurrentSession();
   const payment = workshopPaymentState(ticket);
   return (
-    <div className="rounded-lg border border-border p-4 transition-colors hover:bg-zinc-50">
+    <article
+      className="cursor-pointer rounded-lg border border-border p-4 transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      tabIndex={0}
+      aria-label={`Abrir orden ${ticket.ticketNumber}`}
+      onClick={onEdit}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onEdit();
+        }
+      }}
+    >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -4190,11 +4160,7 @@ function TicketRow({
           </p>
           <p className="mt-1 text-sm text-muted-foreground">{ticket.complaint}</p>
           <p className="mt-2 text-xs text-muted-foreground">
-            Mecánicos:{' '}
-            {ticket.assignments.length
-              ? ticket.assignments.map((assignment) => assignment.employee.user.name).join(', ')
-              : 'Sin asignar'}{' '}
-            · Total RD$ {Number(ticket.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+            Total RD$ {Number(ticket.total).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Aprobación:{' '}
@@ -4213,7 +4179,7 @@ function TicketRow({
             <Badge variant={payment.variant}>{payment.label}</Badge>
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
           <Button size="sm" variant="outline" onClick={onEdit}>
             Actualizar
           </Button>
@@ -4280,7 +4246,7 @@ function TicketRow({
           ) : null}
         </div>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -4731,7 +4697,7 @@ function TicketEditor({
       areaFindings?: Array<{
         areaId: string;
         areaLabel: string;
-        view: 'front' | 'back' | 'left' | 'right' | 'top';
+        view: 'front' | 'back' | 'left' | 'right' | 'top' | 'dashboard';
         condition: 'OK' | 'ATTENTION' | 'REPAIR';
         finding?: string;
         notes?: string;
@@ -4753,9 +4719,9 @@ function TicketEditor({
     !canQuote ||
     Boolean(ticket.salesOrder) ||
     ['PENDING', 'APPROVED', 'PARTIALLY_APPROVED'].includes(ticket.approvalStatus);
-  const showDiagnosis = !stage || stage === 'DIAGNOSIS';
+  const showDiagnosis = !stage;
   const showQuote = !stage || stage === 'QUOTE';
-  const showTasks = !stage || stage === 'DIAGNOSIS';
+  const showTasks = !stage;
   const [form, setForm] = useState({
     diagnosis: ticket.diagnosis ?? '',
     customerNotes: ticket.customerNotes ?? '',
@@ -4779,6 +4745,9 @@ function TicketEditor({
   );
   const [activeCatalogAreaId, setActiveCatalogAreaId] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
+  const [localServiceName, setLocalServiceName] = useState('');
+  const [localServiceAreaId, setLocalServiceAreaId] = useState<string | null>(null);
+  const [localPartAreaId, setLocalPartAreaId] = useState<string | null>(null);
   const [catalogDialog, setCatalogDialog] = useState<'PART' | 'SERVICE' | null>(null);
   const addPart = (product: (typeof products)[number], vehicleAreaId?: string | null) => {
     setLines((current) => [
@@ -4797,6 +4766,12 @@ function TicketEditor({
     setActiveCatalogAreaId(null);
   };
   const addService = (service: WorkshopService, vehicleAreaId?: string | null) => {
+    if (Number(service.defaultPrice) === 0) {
+      setLocalServiceName(service.name);
+      setLocalServiceAreaId(vehicleAreaId ?? activeCatalogAreaId ?? '');
+      setActiveCatalogAreaId(null);
+      return;
+    }
     setLines((current) => [
       ...current,
       {
@@ -4855,13 +4830,31 @@ function TicketEditor({
               )}
             </span>
             <div>
-              <h3 className="font-semibold">{stage === 'QUOTE' ? 'Cotización' : 'Diagnóstico'}</h3>
+              <h3 className="font-semibold">{stage === 'QUOTE' ? 'Cotización' : 'Recepción'}</h3>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {stage === 'QUOTE'
                   ? 'Organiza los servicios y repuestos antes de solicitar aprobación.'
-                  : 'Registra los hallazgos iniciales y prepara la cotización.'}
+                  : 'Consulta el formulario de ingreso y entrega una copia al cliente.'}
               </p>
             </div>
+          </div>
+        ) : null}
+        {stage === 'DIAGNOSIS' ? (
+          <div className="min-w-0 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" asChild>
+                <a
+                  href={`/workshop/${ticket.id}/reception/print?autoPrint=1`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Imprimir recepción / PDF
+                </a>
+              </Button>
+              <ReceptionWhatsappButton ticket={ticket} />
+            </div>
+            <WorkshopReceptionDocument ticket={ticket} />
+            {ticket.status === 'RECEIVED' ? <ReceptionEditor ticket={ticket} /> : null}
           </div>
         ) : null}
         <form
@@ -4883,7 +4876,6 @@ function TicketEditor({
                 diagnosis: canDiagnose ? form.diagnosis || undefined : undefined,
                 customerNotes: canEdit ? form.customerNotes || undefined : undefined,
                 promisedAt: canEdit ? form.promisedAt || undefined : undefined,
-                mechanicIds: canAssign ? form.mechanicIds : undefined,
                 lines: budgetLocked
                   ? undefined
                   : validLines.map((line) => ({
@@ -4936,43 +4928,11 @@ function TicketEditor({
                     placeholder="Hallazgos y trabajo recomendado"
                   />
                 </Field>
-                <div className="grid items-end gap-4 md:grid-cols-2">
-                  <Field label="Mecánico asignado">
-                    <select
-                      className="input-select"
-                      disabled={!canAssign}
-                      value={form.mechanicIds[0] ?? ''}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          mechanicIds: event.target.value ? [event.target.value] : [],
-                        }))
-                      }
-                    >
-                      <option value="">Sin asignar</option>
-                      {mechanics.map((mechanic) => (
-                        <option key={mechanic.id} value={mechanic.id}>
-                          {mechanic.user.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <div className="flex min-h-10 items-center gap-3 rounded-md px-1">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">
-                      {selectedMechanic ? initials(selectedMechanic.user.name) : '—'}
-                    </span>
-                    <div>
-                      <p className="text-sm font-medium">
-                        {selectedMechanic?.user.name ?? 'Sin mecánico'}
-                      </p>
-                      <p className="text-xs text-muted-foreground">Mecánico</p>
-                    </div>
-                  </div>
-                </div>
+
               </>
             ) : null}
             {showQuote ? (
-              <div className="space-y-4">
+              <div className="min-w-0 space-y-4">
                 <section className="rounded-lg border bg-slate-50/70 p-3">
                   <Field label="Notas del cliente">
                     <textarea
@@ -5156,7 +5116,21 @@ function TicketEditor({
                                   <option value="OTHER">Otro</option>
                                 </select>
                                 <div className="space-y-1.5">
-                                  {line.type === 'PART' ? (
+                                  {line.type === 'PART' && !line.productId && line.description ? (
+                                    <Input
+                                      aria-label="Nombre del repuesto"
+                                      value={line.description}
+                                      onChange={(event) =>
+                                        setLines((current) =>
+                                          current.map((entry, entryIndex) =>
+                                            entryIndex === index
+                                              ? { ...entry, description: event.target.value }
+                                              : entry,
+                                          ),
+                                        )
+                                      }
+                                    />
+                                  ) : line.type === 'PART' ? (
                                     <select
                                       value={line.productId}
                                       onChange={(event) => {
@@ -5392,21 +5366,10 @@ function TicketEditor({
                     const service = services.find((item) => item.id === serviceId);
                     if (service) addService(service, areaId);
                   }}
-                  onCreatePart={
-                    hasPermission(session, 'products.manage')
-                      ? (areaId) => {
-                          setActiveCatalogAreaId(areaId);
-                          setCatalogDialog('PART');
-                        }
-                      : undefined
-                  }
-                  onCreateService={
-                    hasPermission(session, 'services.manage')
-                      ? (areaId) => {
-                          setActiveCatalogAreaId(areaId);
-                          setCatalogDialog('SERVICE');
-                        }
-                      : undefined
+                  onCreatePart={canQuote ? (areaId) => setLocalPartAreaId(areaId) : undefined}
+                  onCreateService={canQuote ? (areaId) => { setLocalServiceName(''); setLocalServiceAreaId(areaId); } : undefined}
+                  onRemoveLine={(index) =>
+                    setLines((current) => current.filter((_, itemIndex) => itemIndex !== index))
                   }
                   onResetArea={(areaId) =>
                     setLines((current) =>
@@ -5428,17 +5391,44 @@ function TicketEditor({
             </Button>
           ) : null}
         </form>
-        {showTasks ? (
-          <WorkshopTasksPanel
-            ticket={ticket}
-            mechanics={mechanics}
-            mode={stage === 'DIAGNOSIS' ? 'diagnosis' : 'standard'}
-            pending={pending}
-            onCreate={onCreateTask}
-            onUpdate={onUpdateTask}
-          />
-        ) : null}
+
       </CardContent>
+      {localServiceAreaId !== null ? (
+        <WorkshopLocalPartDialog
+          kind="SERVICE"
+          initialName={localServiceName}
+          onClose={() => setLocalServiceAreaId(null)}
+          onAdd={(name, price) => {
+            setLines((current) => [...current, {
+              productId: '', serviceId: '', type: 'LABOR', description: name,
+              quantity: '1', unitPrice: price, taxRate: '0.18',
+              vehicleAreaId: localServiceAreaId || undefined,
+            }]);
+            setLocalServiceAreaId(null);
+          }}
+        />
+      ) : null}
+      {localPartAreaId !== null ? (
+        <WorkshopLocalPartDialog
+          onClose={() => setLocalPartAreaId(null)}
+          onAdd={(name, price) => {
+            setLines((current) => [
+              ...current,
+              {
+                productId: '',
+                serviceId: '',
+                type: 'PART',
+                description: name,
+                quantity: '1',
+                unitPrice: price,
+                taxRate: '0.18',
+                vehicleAreaId: localPartAreaId,
+              },
+            ]);
+            setLocalPartAreaId(null);
+          }}
+        />
+      ) : null}
       {catalogDialog ? (
         <CatalogItemDialog
           kind={catalogDialog}

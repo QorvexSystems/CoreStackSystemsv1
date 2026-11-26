@@ -448,6 +448,7 @@ export type WorkshopTicketStatusEvent = {
 };
 
 export type WorkshopTicket = {
+  readyNotification?: { status: string; sentAt: string | null; lastError: string | null } | null;
   id: string;
   ticketNumber: string;
   status: WorkshopTicketStatus;
@@ -502,7 +503,7 @@ export type WorkshopVehicleAreaFinding = {
   id?: string;
   areaId: string;
   areaLabel: string;
-  view: 'front' | 'back' | 'left' | 'right' | 'top';
+  view: 'front' | 'back' | 'left' | 'right' | 'top' | 'dashboard';
   condition: WorkshopVehicleAreaCondition;
   finding: string | null;
   notes: string | null;
@@ -522,6 +523,8 @@ export type WorkshopReception = {
   warningLights: string | null;
   observations: string | null;
   imageUrls: string[];
+  signatureUrl: string | null;
+  signedAt: string | null;
   initialMechanicId: string | null;
   receivedAt: string;
   createdAt: string;
@@ -3755,7 +3758,7 @@ export type WorkshopTicketPayload = {
   areaFindings?: Array<{
     areaId: string;
     areaLabel: string;
-    view: 'front' | 'back' | 'left' | 'right' | 'top';
+    view: 'front' | 'back' | 'left' | 'right' | 'top' | 'dashboard';
     condition: WorkshopVehicleAreaCondition;
     finding?: string;
     notes?: string;
@@ -3813,6 +3816,7 @@ export type WorkshopReceptionPayload = {
   warningLights?: string;
   observations?: string;
   imageUrls?: string[];
+  signatureDataUrl?: string;
   initialMechanicId?: string;
 };
 
