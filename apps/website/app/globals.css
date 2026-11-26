@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5.5rem;
+  }
+  body {
+    @apply bg-sand font-sans text-ink antialiased;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-sea/40 ring-offset-2 ring-offset-sand;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-card;
+  }
+  .field-label {
+    @apply mb-1.5 block text-[13px] font-semibold text-ink;
+  }
+  .field {
+    @apply flex h-11 w-full items-center gap-2.5 rounded-lg border border-line bg-white px-3 text-sm text-ink transition placeholder:text-muted/70 focus-within:border-sea focus-within:ring-2 focus-within:ring-sea/15;
+  }
+  .field input,
+  .field select,
+  .field textarea {
+    @apply h-full w-full min-w-0 bg-transparent outline-none;
+  }
+  /* El foco ya se marca en el contenedor `.field`. */
+  .field input:focus-visible,
+  .field select:focus-visible,
+  .field textarea:focus-visible {
+    @apply ring-0 ring-offset-0;
+  }
+  .btn-primary {
+    @apply inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-sea px-5 text-[15px] font-semibold text-white transition hover:bg-sea-dark disabled:cursor-not-allowed disabled:bg-sea/40;
+  }
+  .btn-outline {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-sea/40 bg-white px-4 text-sm font-semibold text-sea-dark transition hover:border-sea hover:bg-sea-light disabled:cursor-not-allowed disabled:border-line disabled:text-muted disabled:hover:bg-white;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

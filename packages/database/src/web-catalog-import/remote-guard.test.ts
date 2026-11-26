@@ -14,17 +14,17 @@ const good = {
 };
 
 test('acepta proyecto, tenant, confirmación y respaldo correctos', () => {
-  const t = assertAuthorizedRemoteTarget(good, 'unique-personalizado', backup);
+  const t = assertAuthorizedRemoteTarget(good, 'hotel-ancla', backup);
   assert.equal(t.backupBytes, 4096);
   assert.match(t.backupSha256, /^[0-9a-f]{64}$/);
 });
 
 test('rechaza otro proyecto, otro tenant, puerto 6543, sin confirmación y sin respaldo', () => {
   const other = { ...good, DIRECT_URL: good.DIRECT_URL.replace(AUTHORIZED_PROJECT_REF, 'otroproyecto') };
-  assert.throws(() => assertAuthorizedRemoteTarget(other, 'unique-personalizado', backup), /proyecto autorizado/);
+  assert.throws(() => assertAuthorizedRemoteTarget(other, 'hotel-ancla', backup), /proyecto autorizado/);
   assert.throws(() => assertAuthorizedRemoteTarget(good, 'corestack', backup), /tenant no autorizado/);
-  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, DIRECT_URL: good.DIRECT_URL.replace(':5432', ':6543') }, 'unique-personalizado', backup), /6543/);
-  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, WEB_CATALOG_IMPORT_REMOTE: 'yes' }, 'unique-personalizado', backup), /WEB_CATALOG_IMPORT_REMOTE/);
-  assert.throws(() => assertAuthorizedRemoteTarget(good, 'unique-personalizado', undefined), /respaldo/);
-  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, DATABASE_URL: good.DIRECT_URL, DIRECT_URL: undefined }, 'unique-personalizado', backup), /DIRECT_URL/);
+  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, DIRECT_URL: good.DIRECT_URL.replace(':5432', ':6543') }, 'hotel-ancla', backup), /6543/);
+  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, WEB_CATALOG_IMPORT_REMOTE: 'yes' }, 'hotel-ancla', backup), /WEB_CATALOG_IMPORT_REMOTE/);
+  assert.throws(() => assertAuthorizedRemoteTarget(good, 'hotel-ancla', undefined), /respaldo/);
+  assert.throws(() => assertAuthorizedRemoteTarget({ ...good, DATABASE_URL: good.DIRECT_URL, DIRECT_URL: undefined }, 'hotel-ancla', backup), /DIRECT_URL/);
 });

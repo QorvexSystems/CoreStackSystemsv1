@@ -16,8 +16,8 @@ import { canAccessPath, getDefaultPathForSession } from '@/lib/authorization';
 import { brand, platform } from '@/lib/brand';
 
 const loginSchema = z.object({
-  email: z.string().email('Ingresa un correo valido.'),
-  password: z.string().min(8, 'La contrasena debe tener al menos 8 caracteres.'),
+  email: z.string().email('Ingresa un correo válido.'),
+  password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres.'),
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
@@ -25,17 +25,14 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export default function LoginPage() {
   const router = useRouter();
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [nextPath, setNextPath] = useState('/dashboard');
+  const [nextPath, setNextPath] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: { email: '', password: '' },
   });
 
   useEffect(() => {
@@ -46,7 +43,7 @@ export default function LoginPage() {
     const currentSession = getSession();
     if (currentSession) {
       router.replace(
-        canAccessPath(currentSession, safeNextPath)
+        safeNextPath && canAccessPath(currentSession, safeNextPath)
           ? safeNextPath
           : getDefaultPathForSession(currentSession),
       );
@@ -55,13 +52,16 @@ export default function LoginPage() {
 
   async function onSubmit(values: LoginFormValues) {
     setLoginError(null);
-
     try {
       const response = await login(values.email, values.password);
       const session = saveSession(response);
-      router.push(canAccessPath(session, nextPath) ? nextPath : getDefaultPathForSession(session));
-    } catch {
-      setLoginError('No pudimos iniciar sesion con esas credenciales.');
+      router.push(
+        nextPath && canAccessPath(session, nextPath) ? nextPath : getDefaultPathForSession(session),
+      );
+    } catch (error) {
+      setLoginError(
+        error instanceof Error ? error.message : 'No pudimos iniciar sesión con esas credenciales.',
+      );
     }
   }
 
@@ -77,20 +77,16 @@ export default function LoginPage() {
 
         <div className="relative z-10 flex w-full flex-col justify-between">
           <div className="animate-enter inline-flex w-fit items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-2 text-xs font-medium text-zinc-200">
-            <img
-              src={platform.logoPath}
-              alt=""
-              className="h-6 w-6 rounded-md object-cover"
-            />
+            <img src={platform.logoPath} alt="" className="h-6 w-6 rounded-md object-cover" />
             <span>{platform.name} · Portal operativo</span>
           </div>
 
           <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center py-8 text-center lg:py-12">
-            <div className="animate-enter animate-enter-delay-1 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-amber-200/15 bg-black/40 p-4 shadow-2xl shadow-amber-950/30 sm:max-w-[20rem] sm:p-6 lg:max-w-[24rem]">
+            <div className="animate-enter animate-enter-delay-1 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-teal/20 bg-black/40 p-4 shadow-2xl shadow-teal-950/30 sm:max-w-[20rem] sm:p-6 lg:max-w-[24rem]">
               <img
                 src={brand.stackedLogoPath}
                 alt={`Logo ${brand.name}`}
-                className="max-h-full max-w-full object-contain"
+                className="max-h-full max-w-full object-contain brightness-0 invert"
                 width={384}
                 height={384}
                 style={{ maxWidth: '100%', height: 'auto' }}
@@ -100,7 +96,7 @@ export default function LoginPage() {
               {brand.name}
             </p>
             <h1 className="animate-enter animate-enter-delay-3 mt-3 max-w-xl text-2xl font-semibold leading-tight sm:text-4xl">
-              Tus pedidos, personalizaciones e inventario en un solo lugar.
+              Reservaciones, habitaciones y huéspedes en un solo lugar.
             </h1>
             <p className="animate-enter animate-enter-delay-4 mt-4 max-w-xl text-sm leading-6 text-zinc-300">
               {brand.descriptor}. {brand.tagline}.
@@ -118,7 +114,11 @@ export default function LoginPage() {
         <Card className="animate-enter animate-enter-delay-2 w-full max-w-md border-zinc-200 bg-white shadow-xl shadow-zinc-950/5">
           <CardHeader className="text-center">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center overflow-hidden rounded-lg shadow-sm">
-              <img src={platform.logoPath} alt={`Logo ${platform.name}`} className="h-full w-full object-cover" />
+              <img
+                src={platform.logoPath}
+                alt={`Logo ${platform.name}`}
+                className="h-full w-full object-cover"
+              />
             </div>
             <CardTitle>{platform.name}</CardTitle>
             <CardDescription>Acceso de personal autorizado</CardDescription>
@@ -144,7 +144,7 @@ export default function LoginPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password">Contrasena</Label>
+                <Label htmlFor="password">Contraseña</Label>
                 <div className="relative">
                   <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -152,7 +152,7 @@ export default function LoginPage() {
                     type="password"
                     className="pl-9"
                     autoComplete="off"
-                    placeholder="Tu contrasena"
+                    placeholder="Tu contraseña"
                     {...register('password')}
                   />
                 </div>
@@ -162,14 +162,8 @@ export default function LoginPage() {
               </div>
 
               {loginError ? <p className="text-sm text-danger">{loginError}</p> : null}
-
-              <Button
-                className="w-full"
-                type="submit"
-                disabled={isSubmitting}
-              >
-                Iniciar sesion
-                <ArrowRight className="h-4 w-4" />
+              <Button className="w-full" type="submit" disabled={isSubmitting}>
+                Iniciar sesión <ArrowRight className="h-4 w-4" />
               </Button>
             </form>
 
@@ -184,9 +178,7 @@ export default function LoginPage() {
 }
 
 function getSafeNextPath(next: string | null) {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/login')) {
-    return '/dashboard';
-  }
-
+  // Sin destino explícito, cada rol entra a su pantalla inicial (getDefaultPathForSession).
+  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/login')) return null;
   return next;
 }

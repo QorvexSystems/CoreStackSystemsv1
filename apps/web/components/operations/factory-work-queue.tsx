@@ -175,7 +175,7 @@ export function FactoryWorkQueue() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-gold-deep">
-            Unique Personalizado
+            Hotel Ancla
           </p>
           <h1 className="text-3xl font-semibold text-foreground">Fábrica</h1>
           <p className="mt-1 text-sm text-muted-foreground">

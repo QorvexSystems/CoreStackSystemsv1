@@ -34,13 +34,14 @@ const permissionKeys = [
   'canReprintReceipt',
   'canTakeOrders',
 ] as const;
-const maxTenantUsers = 5;
+// The previous demo tenant was capped at five users. A hotel needs enough room
+// for reception, housekeeping, accounting and rotating staff.
+const maxTenantUsers = 100;
 const tenantAssignableRoles: Role[] = [
   Role.ADMIN,
   Role.ACCOUNTANT,
-  Role.CASHIER,
-  Role.ORDER_TAKER,
-  Role.WAREHOUSE_KEEPER,
+  Role.RECEPTION,
+  Role.HOUSEKEEPING,
 ];
 
 @Injectable()
@@ -84,11 +85,7 @@ export class EmployeesService {
       throw new ConflictException('This user already belongs to this tenant.');
     }
 
-    if (dto.role === Role.WAREHOUSE_KEEPER && !dto.password?.trim() && !existing?.passwordHash) {
-      throw new BadRequestException('Indica una contraseña para el usuario de Fábrica.');
-    }
-
-    const passwordHash = await bcrypt.hash(dto.password ?? 'DemoPassword123!', 12);
+    const passwordHash = await bcrypt.hash(dto.password, 12);
 
     const employee = await this.prisma.$transaction(async (tx) => {
       const profileStatus = dto.status ?? EmployeeStatus.ACTIVE;
@@ -491,6 +488,14 @@ export class EmployeesService {
       },
       {},
     );
+
+    if (role === Role.RECEPTION) {
+      return this.blankPermissions();
+    }
+
+    if (role === Role.HOUSEKEEPING) {
+      return this.blankPermissions();
+    }
 
     if (role === Role.ORDER_TAKER) {
       return {

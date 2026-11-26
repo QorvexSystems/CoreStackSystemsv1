@@ -5,7 +5,7 @@ import { InventoryMovementType, PrismaClient } from '../generated/client';
 
 const prisma = new PrismaClient({ datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } } });
 
-const TENANT_SLUG = 'unique-personalizado';
+const TENANT_SLUG = 'hotel-ancla';
 const GROUP_ID = 'UP-W-demo3d001';
 const SKU = 'DEMO-3D-001';
 const STOCK = 5;

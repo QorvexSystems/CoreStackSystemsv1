@@ -48,14 +48,14 @@ const defaultState: EmployeeFormState = {
   email: '',
   phone: '',
   password: '',
-  role: 'CASHIER',
+  role: 'RECEPTION',
   employeeCode: '',
   jobTitle: '',
   documentNumber: '',
   status: 'ACTIVE',
-  canUsePos: true,
-  canOpenCashSession: true,
-  canCloseCashSession: true,
+  canUsePos: false,
+  canOpenCashSession: false,
+  canCloseCashSession: false,
   canApplyDiscount: false,
   canCancelInvoice: false,
   canVoidInvoice: false,
@@ -65,7 +65,7 @@ const defaultState: EmployeeFormState = {
   canViewReports: false,
   canManageFiscalSequences: false,
   canViewCashLogs: false,
-  canReprintReceipt: true,
+  canReprintReceipt: false,
   canTakeOrders: false,
 };
 
@@ -213,13 +213,11 @@ export function EmployeeForm({
                 type="password"
                 value={form.password}
                 onChange={(event) => setField('password', event.target.value)}
-                required={!employeeId && form.role === 'WAREHOUSE_KEEPER'}
+                required={!employeeId}
                 placeholder={
                   employeeId
                     ? 'Dejar vacío para no cambiar'
-                    : form.role === 'WAREHOUSE_KEEPER'
-                      ? 'Crea una contraseña para Fábrica'
-                      : 'Contraseña de acceso'
+                    : 'Contraseña de acceso (mínimo 8 caracteres)'
                 }
               />
             </Field>
@@ -231,9 +229,8 @@ export function EmployeeForm({
               >
                 <option value="ADMIN">Administrador</option>
                 <option value="ACCOUNTANT">Contador</option>
-                <option value="CASHIER">Cajero</option>
-                <option value="ORDER_TAKER">Toma de órdenes</option>
-                <option value="WAREHOUSE_KEEPER">Fábrica</option>
+                <option value="RECEPTION">Recepción</option>
+                <option value="HOUSEKEEPING">Limpieza</option>
               </select>
             </Field>
             <Field label="Estado">
@@ -364,6 +361,14 @@ function getDefaultPermissionsForRole(
     };
   }
 
+  if (role === 'RECEPTION') {
+    return permissions;
+  }
+
+  if (role === 'HOUSEKEEPING') {
+    return permissions;
+  }
+
   if (role === 'ORDER_TAKER') {
     return {
       ...permissions,
@@ -398,6 +403,14 @@ function getDefaultPermissionsForRole(
 }
 
 function isPermissionLocked(role: string, key: (typeof permissionFields)[number][0]) {
+  if (role === 'RECEPTION') {
+    return true;
+  }
+
+  if (role === 'HOUSEKEEPING') {
+    return true;
+  }
+
   if (role === 'ORDER_TAKER') {
     return true;
   }
@@ -424,6 +437,14 @@ function isPermissionLocked(role: string, key: (typeof permissionFields)[number]
 function getForcedPermissionsForRole(
   role: string,
 ): Partial<Pick<EmployeeFormState, (typeof permissionFields)[number][0]>> {
+  if (role === 'RECEPTION') {
+    return getDefaultPermissionsForRole(role);
+  }
+
+  if (role === 'HOUSEKEEPING') {
+    return getDefaultPermissionsForRole(role);
+  }
+
   if (role === 'ORDER_TAKER') {
     return getDefaultPermissionsForRole(role);
   }

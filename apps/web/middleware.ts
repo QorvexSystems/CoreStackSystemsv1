@@ -101,7 +101,7 @@ function buildContentSecurityPolicy(nonce: string) {
   const connectSources = ["'self'", ocrAssetOrigin];
   const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
 
-  if (apiUrl) {
+  if (apiUrl?.startsWith('http://') || apiUrl?.startsWith('https://')) {
     connectSources.push(new URL(apiUrl).origin);
   }
 

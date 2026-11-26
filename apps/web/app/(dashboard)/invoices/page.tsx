@@ -1,5 +1,5 @@
-import { InvoicesView } from '@/components/operations/invoices-view';
+import { HotelInvoicesView } from '@/components/hotel/hotel-invoices-view';
 
 export default function InvoicesPage() {
-  return <InvoicesView />;
+  return <HotelInvoicesView />;
 }

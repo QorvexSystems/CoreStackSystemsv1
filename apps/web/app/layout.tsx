@@ -1,23 +1,24 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
 import { Providers } from './providers';
 import { brand } from '@/lib/brand';
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-});
+// En Android el teclado redimensiona el contenido (en vez de taparlo), así el campo activo queda visible.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#15988d',
+  interactiveWidget: 'resizes-content',
+};
 
 export const metadata: Metadata = {
   applicationName: brand.name,
   title: {
-    default: `${brand.name} | CoreStack`,
+    default: `${brand.name} | Operación hotelera`,
     template: `%s | ${brand.name}`,
   },
-  description: `${brand.descriptor}. Operación, facturación, personalización e inventario.`,
+  description: `${brand.descriptor}. Reservaciones, habitaciones, huéspedes, canales y facturación.`,
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [{ url: brand.faviconPath, type: 'image/png', sizes: '512x512' }],
@@ -38,7 +39,7 @@ export const dynamic = 'force-dynamic';
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es">
-      <body className={`${inter.variable} font-sans`}>
+      <body className="font-sans">
         <Providers>{children}</Providers>
       </body>
     </html>

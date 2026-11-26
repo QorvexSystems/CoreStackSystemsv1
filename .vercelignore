@@ -1,0 +1,23 @@
+# Despliegues por CLI desde la raíz del monorepo: nunca subir secretos ni artefactos locales.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+node_modules
+**/node_modules
+**/.next
+**/.next-dev
+**/dist
+**/*.tsbuildinfo
+.git
+.vercel
+**/.vercel
+.dev-logs
+*.log
+AbarrotesPDV
+docs
+supabase/.temp
+packages/database/generated
+Qorvex_RIVNU_Plantilla_Importacion_Product*.xlsx

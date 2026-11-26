@@ -32,7 +32,7 @@ const mk = (over = {}) => ({ reference: ref(), customer: customer('PRUEBA Client
 const prod = (variantId) => prisma.product.findFirst({ where: { legacyEcommerceVariantId: variantId } });
 
 (async () => {
-  const tenant = await prisma.tenant.findUnique({ where: { slug: 'unique-personalizado' } });
+  const tenant = await prisma.tenant.findUnique({ where: { slug: 'hotel-ancla' } });
   const baseline = {
     orders: await prisma.salesOrder.count(), invoices: await prisma.invoice.count(), payments: await prisma.payment.count(),
     movements: await prisma.inventoryMovement.count(), jobs: await prisma.inventorySyncJob.count(), customers: await prisma.customer.count(),

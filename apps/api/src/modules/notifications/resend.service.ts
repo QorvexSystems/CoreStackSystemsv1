@@ -113,7 +113,7 @@ export class ResendService {
         from,
         to: [input.recipient],
         subject: `Tu orden ${input.orderNumber} está lista`,
-        html: `<p>Hola ${escapeHtml(input.clientName)},</p><p>Tu orden <strong>${escapeHtml(input.orderNumber)}</strong> está lista.</p><p>${escapeHtml(input.deliveryLabel)}</p><p>Gracias por elegir Unique Personalizado.</p>`,
+        html: `<p>Hola ${escapeHtml(input.clientName)},</p><p>Tu reservación <strong>${escapeHtml(input.orderNumber)}</strong> está lista.</p><p>${escapeHtml(input.deliveryLabel)}</p><p>Gracias por elegir Hotel Ancla.</p>`,
         headers: { 'Idempotency-Key': `order-ready-${input.orderId}` },
       });
       if (error || !data?.id) throw new Error(error?.message ?? 'Resend no confirmó el envío.');

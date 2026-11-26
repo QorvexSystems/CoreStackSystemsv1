@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   FiscalSequenceStatus,
   InvoiceDocumentType,
+  Prisma,
   Role,
 } from '@qorvex/database';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
@@ -219,6 +221,18 @@ export class FiscalSequencesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      let activeBlock = await tx.fiscalSequence.findFirst({
+        where: {
+          tenantId,
+          documentType: dto.documentType,
+          status: FiscalSequenceStatus.ACTIVE,
+        },
+      });
+      if (activeBlock && dto.activateNow) {
+        await this.closeBlock(tx, activeBlock);
+        activeBlock = null;
+      }
+
       const overlap = await tx.fiscalSequence.findFirst({
         where: {
           tenantId,
@@ -226,21 +240,16 @@ export class FiscalSequencesService {
           startNumber: { lte: dto.endNumber },
           endNumber: { gte: dto.startNumber },
         },
-        select: { id: true },
+        select: { startNumber: true, endNumber: true, nextNumber: true, status: true },
       });
 
       if (overlap) {
-        throw new BadRequestException('El rango autorizado se solapa con un bloque ya registrado.');
+        throw new BadRequestException(
+          overlap.status === FiscalSequenceStatus.ACTIVE && !dto.activateNow
+            ? `El rango se solapa con el bloque activo (${overlap.startNumber}–${overlap.endNumber}). Marca "Usar este bloque desde ya" para cerrar el actual.`
+            : `El rango se solapa con un bloque ya registrado (${overlap.startNumber}–${overlap.endNumber}). Ya se usaron los números hasta el ${overlap.nextNumber - 1}.`,
+        );
       }
-
-      const activeBlock = await tx.fiscalSequence.findFirst({
-        where: {
-          tenantId,
-          documentType: dto.documentType,
-          status: FiscalSequenceStatus.ACTIVE,
-        },
-        select: { id: true },
-      });
 
       return tx.fiscalSequence.create({
         data: {
@@ -257,6 +266,47 @@ export class FiscalSequencesService {
           status: activeBlock ? FiscalSequenceStatus.INACTIVE : FiscalSequenceStatus.ACTIVE,
         },
       });
+    });
+  }
+
+  async close(tenantId: string, user: AuthenticatedUser, id: string) {
+    this.assertCanManageSequences(tenantId, user);
+    return this.prisma.$transaction(async (tx) => {
+      const block = await tx.fiscalSequence.findFirst({ where: { id, tenantId } });
+      if (!block) throw new NotFoundException('Bloque no encontrado.');
+      if (block.status !== FiscalSequenceStatus.ACTIVE && block.status !== FiscalSequenceStatus.INACTIVE)
+        throw new BadRequestException('Este bloque ya está cerrado.');
+      await this.closeBlock(tx, block);
+      // Si era el activo, el siguiente bloque en espera pasa a usarse.
+      if (block.status === FiscalSequenceStatus.ACTIVE) {
+        const next = await tx.fiscalSequence.findFirst({
+          where: {
+            tenantId,
+            documentType: block.documentType,
+            status: FiscalSequenceStatus.INACTIVE,
+            OR: [{ validUntil: null }, { validUntil: { gte: new Date() } }],
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (next)
+          await tx.fiscalSequence.update({ where: { id: next.id }, data: { status: FiscalSequenceStatus.ACTIVE } });
+      }
+      return { ok: true };
+    });
+  }
+
+  /** Sin números usados se descarta; si no, termina en el último usado y queda agotado. */
+  private async closeBlock(
+    tx: Prisma.TransactionClient,
+    block: { id: string; startNumber: number; nextNumber: number },
+  ) {
+    if (block.nextNumber <= block.startNumber) {
+      await tx.fiscalSequence.delete({ where: { id: block.id } });
+      return;
+    }
+    await tx.fiscalSequence.update({
+      where: { id: block.id },
+      data: { endNumber: block.nextNumber - 1, status: FiscalSequenceStatus.EXHAUSTED },
     });
   }
 
@@ -278,7 +328,10 @@ export class FiscalSequencesService {
 
     if (
       !tenantMembership ||
-      (!tenantMembership.canManageFiscalSequences && !platformMembership)
+      (!tenantMembership.canManageFiscalSequences &&
+        tenantMembership.role !== Role.ADMIN &&
+        tenantMembership.role !== Role.ACCOUNTANT &&
+        !platformMembership)
     ) {
       throw new ForbiddenException('Se requiere permiso para administrar secuencias fiscales.');
     }

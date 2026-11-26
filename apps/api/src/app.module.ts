@@ -11,6 +11,7 @@ import { EmployeeLogsModule } from './modules/employee-logs/employee-logs.module
 import { EmployeesModule } from './modules/employees/employees.module';
 import { FiscalSequencesModule } from './modules/fiscal-sequences/fiscal-sequences.module';
 import { HealthModule } from './modules/health/health.module';
+import { HotelModule } from './modules/hotel/hotel.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { OrdersModule } from './modules/orders/orders.module';
@@ -36,6 +37,7 @@ import { PrismaModule } from './prisma/prisma.module';
     }),
     PrismaModule,
     HealthModule,
+    HotelModule,
     AuthModule,
     BillingModule,
     CashModule,

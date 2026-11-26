@@ -47,7 +47,7 @@ let app;
   await app.listen(0, '127.0.0.1');
   const base = 'http://127.0.0.1:' + app.getHttpServer().address().port;
   const db = app.get(PrismaService);
-  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'unique-personalizado' } });
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'hotel-ancla' } });
   const membership = await db.membership.findFirstOrThrow({
     where: { tenantId: tenant.id, role: 'ADMIN', status: 'ACTIVE' },
     include: { user: true },

@@ -6,7 +6,7 @@ const db = new PrismaClient({ log: [{ level: 'query', emit: 'event' }] });
 let queries = 0;
 db.$on('query', () => queries++);
 (async () => {
-  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'unique-personalizado' } });
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'hotel-ancla' } });
   const service = new DashboardService(db);
   const baselineFile = process.argv[2];
   for (const method of ['getSummary', 'getProductSales']) {

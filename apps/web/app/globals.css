@@ -3,27 +3,118 @@
 @tailwind utilities;
 
 :root {
-  --background: 36 33% 97%;
-  --foreground: 221 37% 10%;
+  --background: 38 24% 96%;
+  --foreground: 210 30% 9%;
   --card: 0 0% 100%;
   --card-foreground: 221 37% 10%;
-  --muted: 40 38% 94%;
-  --muted-foreground: 218 14% 45%;
-  --primary: 42 100% 30%;
+  --muted: 174 24% 95%;
+  --muted-foreground: 211 12% 43%;
+  --primary: 175 73% 31%;
   --primary-foreground: 0 0% 100%;
-  --accent: 39 64% 33%;
+  --accent: 175 73% 31%;
   --accent-foreground: 0 0% 100%;
-  --border: 39 26% 87%;
-  --input: 39 26% 87%;
-  --ring: 42 100% 30%;
+  --border: 204 15% 87%;
+  --input: 204 15% 87%;
+  --ring: 175 73% 31%;
   --success: 151 58% 31%;
   --warning: 32 95% 40%;
   --danger: 0 72% 44%;
 }
 
+/* Impresión del ticket: solo se imprime la copia aislada en #thermal-print-root (ver printHotelInvoice). */
+#thermal-print-root {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+}
+@media print {
+  body.hotel-invoice-printing > *:not(#thermal-print-root) {
+    display: none !important;
+  }
+  body.hotel-invoice-printing {
+    background: #fff !important;
+    padding: 0 !important;
+  }
+  body.hotel-invoice-printing #thermal-print-root {
+    position: static;
+  }
+}
+
+/* ---- Factura en impresora térmica de 80 mm (72 mm imprimibles) ----
+   Se aplica mientras se imprime (también en pantalla, para medir el alto del ticket antes de imprimir). */
+body.hotel-invoice-printing .hotel-payment-invoice {
+  border: 0 !important;
+  border-radius: 0 !important;
+  width: 72mm !important;
+  margin: 0 auto !important;
+  padding: 2mm 0 4mm !important;
+  font-family: Arial, Helvetica, sans-serif !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+  color: #000 !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice * {
+  color: #000 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-color: #000 !important;
+  font-size: inherit !important;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+body.hotel-invoice-printing .hotel-payment-invoice > *,
+body.hotel-invoice-printing .hotel-payment-invoice section,
+body.hotel-invoice-printing .hotel-payment-invoice header,
+body.hotel-invoice-printing .hotel-payment-invoice footer {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+/* Espaciado vertical compacto: los márgenes de pantalla gastarían papel. */
+body.hotel-invoice-printing .hotel-payment-invoice [class*='py-'],
+body.hotel-invoice-printing .hotel-payment-invoice [class*='pt-'],
+body.hotel-invoice-printing .hotel-payment-invoice [class*='pb-'] {
+  padding-top: 1.2mm !important;
+  padding-bottom: 1.2mm !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice [class*='mt-'] {
+  margin-top: 0.6mm !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice .space-y-1 > * + * {
+  margin-top: 0.2mm !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice header {
+  padding-top: 1mm !important;
+  padding-bottom: 1.5mm !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice img {
+  height: 13mm !important;
+  width: auto !important;
+  filter: grayscale(1) contrast(1.4);
+}
+body.hotel-invoice-printing .hotel-payment-invoice .invoice-title,
+body.hotel-invoice-printing .hotel-payment-invoice .invoice-total {
+  font-size: 13px !important;
+  font-weight: 800 !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice .invoice-details {
+  display: grid !important;
+  grid-template-columns: auto 1fr !important;
+  column-gap: 2mm !important;
+  row-gap: 0.5mm !important;
+}
+body.hotel-invoice-printing .hotel-payment-invoice .invoice-details dd {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+body.hotel-invoice-printing .hotel-payment-invoice .invoice-badge {
+  border: 1px solid #000 !important;
+  padding: 0 1.5mm !important;
+}
+
 * {
   box-sizing: border-box;
-  scrollbar-color: rgb(138 101 30 / 0.32) transparent;
+  scrollbar-color: rgb(18 143 133 / 0.32) transparent;
   scrollbar-width: thin;
 }
 
@@ -38,7 +129,7 @@
 
 *::-webkit-scrollbar-thumb {
   background-clip: content-box;
-  background-color: rgb(138 101 30 / 0.38);
+  background-color: rgb(18 143 133 / 0.38);
   border: 2px solid transparent;
   border-radius: 999px;
 }
@@ -55,8 +146,7 @@ body {
   margin: 0;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: var(--font-inter), 'Segoe UI', Arial, sans-serif;
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 button,
@@ -67,7 +157,7 @@ textarea {
 }
 
 ::selection {
-  background: #e4c77c70;
+  background: #9fe2da80;
   color: #101623;
 }
 
@@ -173,7 +263,7 @@ a {
 
   .sidebar-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: rgb(138 101 30 / 0.35) transparent;
+    scrollbar-color: rgb(91 116 121 / 0.45) transparent;
   }
 
   .sidebar-scrollbar::-webkit-scrollbar {
@@ -185,8 +275,8 @@ a {
   }
 
   .sidebar-scrollbar::-webkit-scrollbar-thumb {
-    background-color: rgb(138 101 30 / 0.32);
-    border: 2px solid #faf8f5;
+    background-color: rgb(91 116 121 / 0.4);
+    border: 2px solid #121c21;
     border-radius: 999px;
   }
 

@@ -147,7 +147,7 @@ export class ShopifyService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('El webhook de Shopify no contiene una orden válida.');
     }
 
-    const tenantSlug = this.config.get<string>('SHOPIFY_TENANT_SLUG', 'unique-personalizado');
+    const tenantSlug = this.config.get<string>('SHOPIFY_TENANT_SLUG', 'hotel-ancla');
     const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
     if (!tenant) throw new ServiceUnavailableException('El tenant de Shopify no está configurado.');
 
@@ -887,7 +887,7 @@ export class ShopifyService implements OnModuleInit, OnModuleDestroy {
           input: {
             title: product.name,
             descriptionHtml: product.description ?? '',
-            vendor: product.brand ?? 'Unique Personalizado',
+            vendor: product.brand ?? 'Hotel Ancla',
             status: product.status === 'ACTIVE' ? 'ACTIVE' : 'DRAFT',
             productOptions: [{ name: 'Variante', values: [{ name: label }] }],
             variants: [
@@ -1131,7 +1131,7 @@ export class ShopifyService implements OnModuleInit, OnModuleDestroy {
 
   private async findShopifyOrder(payloadId: number | string | undefined) {
     if (!payloadId) throw new BadRequestException('Shopify no indicó la orden relacionada.');
-    const tenantSlug = this.config.get<string>('SHOPIFY_TENANT_SLUG', 'unique-personalizado');
+    const tenantSlug = this.config.get<string>('SHOPIFY_TENANT_SLUG', 'hotel-ancla');
     const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
     if (!tenant) throw new ServiceUnavailableException('El tenant de Shopify no está configurado.');
     const order = await this.prisma.salesOrder.findUnique({

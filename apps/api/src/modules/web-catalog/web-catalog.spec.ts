@@ -59,7 +59,7 @@ test('proyección pública: solo publicado, activo y decidido; sin datos interno
 });
 
 test('HMAC del canal: firma válida, manipulación, vencimiento, repetición y clave desconocida', () => {
-  const credentials = { keyId: 'key-1', secret: 'x'.repeat(40), tenantSlug: 'unique-personalizado' };
+  const credentials = { keyId: 'key-1', secret: 'x'.repeat(40), tenantSlug: 'hotel-ancla' };
   const nowMs = 1_800_000_000_000;
   const timestamp = String(nowMs / 1000);
   const request = { method: 'POST', pathAndQuery: '/channel/availability', body: '{"items":[]}' };

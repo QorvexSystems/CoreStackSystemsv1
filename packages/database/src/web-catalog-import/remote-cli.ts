@@ -51,7 +51,7 @@ async function snapshot(prisma: PrismaClient, tenantSlug: string) {
 
 async function main() {
   const catalogPath = arg('--catalog');
-  const tenantSlug = arg('--tenant') ?? 'unique-personalizado';
+  const tenantSlug = arg('--tenant') ?? 'hotel-ancla';
   const apply = process.argv.includes('--apply');
   if (!catalogPath) throw new Error('Uso: remote-cli.ts --catalog=<json> --backup=<dump> [--tenant=slug] [--apply] [--out=dir]');
   const outDir = resolve(arg('--out') ?? '.tmp/web-catalog-import');

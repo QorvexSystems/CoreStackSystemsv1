@@ -1,5 +1,5 @@
 // Prueba de integración contra una base PostgreSQL LOCAL y aislada. Se omite si el entorno no pasa assertIsolatedTarget.
-// Cada escenario usa su propio tenant de prueba para no alterar el tenant principal `unique-personalizado`.
+// Cada escenario usa su propio tenant de prueba para no alterar el tenant principal `hotel-ancla`.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -83,7 +83,7 @@ export function ProductFormDialog({ open, productId, onClose, onSaved }: Product
               <p className="mt-1 text-sm text-muted-foreground">
                 {editing
                   ? 'Actualiza la ficha del producto y guarda los cambios.'
-                  : 'Completa la ficha para agregarlo al catálogo de Unique Personalizado.'}
+                  : 'Completa la ficha para agregarlo al catálogo operativo de Hotel Ancla.'}
               </p>
             </div>
           </div>

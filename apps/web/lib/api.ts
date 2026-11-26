@@ -1064,6 +1064,8 @@ export type FiscalSequence = {
   status: string;
   issuerDocumentType: 'RNC' | 'CEDULA' | null;
   issuerDocumentNumber: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type CreateCashRegisterPayload = {
@@ -1080,6 +1082,7 @@ export type CreateFiscalSequenceInput = {
   validUntil?: string;
   issuerDocumentType: 'RNC' | 'CEDULA';
   issuerDocumentNumber: string;
+  activateNow?: boolean;
 };
 
 export type ImportBatch = {
@@ -2073,7 +2076,12 @@ export function deleteCustomer(tenantId: string, accessToken: string, customerId
 
 export type WebCollectionOption = { handle: string; title: string; count: number };
 
-export function getProducts(tenantId: string, accessToken: string, q?: string, collection?: string) {
+export function getProducts(
+  tenantId: string,
+  accessToken: string,
+  q?: string,
+  collection?: string,
+) {
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (collection) params.set('collection', collection);
@@ -2614,6 +2622,14 @@ export function createFiscalSequence(
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify(input),
+  });
+}
+
+/** Cierra un bloque fiscal en el último número usado (o lo descarta si no se usó). */
+export function closeFiscalSequence(tenantId: string, accessToken: string, id: string) {
+  return fetchJson<{ ok: true }>(`/fiscal-sequences/${id}/close`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
   });
 }
 
@@ -3261,5 +3277,507 @@ export function retryShopifyIntegration(tenantId: string, token: string) {
   return fetchJson<{ configured: boolean; processed: number }>('/integrations/shopify/retry', {
     method: 'POST',
     headers: tenantHeaders(tenantId, token),
+  });
+}
+
+export type HotelReservation = {
+  id: string;
+  code: string;
+  status: string;
+  paymentStatus: string;
+  checkIn: string;
+  checkOut: string;
+  checkedInAt?: string | null;
+  checkedOutAt?: string | null;
+  /** Momento en que pasó a inasistida (9:00 PM del día de llegada sin check-in). */
+  noShowAt?: string | null;
+  noShowRecoveredAt?: string | null;
+  adults: number;
+  children: number;
+  totalAmount: string;
+  paidAmount: string;
+  specialRequests?: string | null;
+  arrivalTime?: string | null;
+  guest: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email?: string | null;
+    phone?: string | null;
+    documentType?: 'CEDULA' | 'RNC' | 'PASSPORT' | null;
+    documentNumber?: string | null;
+    credits?: HotelGuestCredit[];
+  };
+  roomType: { id: string; name: string };
+  room?: { id: string; number: string };
+  channel?: { id: string; name: string; type?: string };
+  tenant?: {
+    name: string;
+    commercialName?: string | null;
+    legalName?: string | null;
+    rnc?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    address?: string | null;
+  };
+  payments?: HotelReservationPayment[];
+};
+
+export type HotelReservationPayment = {
+  id: string;
+  amount: string;
+  cashReceived?: string | null;
+  changeAmount?: string | null;
+  method: 'CASH' | 'CARD' | 'TRANSFER' | 'OTHER';
+  billingDocumentType: 'SALE_NOTE' | 'E31' | 'E32';
+  fiscalDocumentType?: 'RNC' | 'CEDULA' | null;
+  fiscalDocumentNumber?: string | null;
+  receiptNumber: string;
+  reference?: string | null;
+  notes?: string | null;
+  /** Pago Express (sin reservación): cliente, teléfono y descripción. */
+  customerName?: string | null;
+  customerPhone?: string | null;
+  description?: string | null;
+  recordedBy?: { id: string; name: string; email: string };
+  createdAt: string;
+};
+
+export type HotelInvoice = HotelReservationPayment & {
+  /** Vacío en las facturas de Pago Express. */
+  reservation: HotelReservation | null;
+  tenant?: HotelReservation['tenant'];
+};
+
+export type HotelExpressInvoicePayload = {
+  documentType: 'RNC' | 'CEDULA';
+  documentNumber: string;
+  customerName: string;
+  customerPhone?: string;
+  description: string;
+  amount: number;
+  method: 'CASH' | 'CARD' | 'TRANSFER';
+  cashReceived?: number;
+  billingDocumentType: 'E31' | 'E32';
+  reference?: string;
+};
+
+export type HotelRoomType = {
+  id: string;
+  name: string;
+  description?: string | null;
+  capacityAdults: number;
+  capacityChildren: number;
+  baseRate: string;
+  amenities?: string[] | null;
+};
+
+export type HotelRoom = {
+  id: string;
+  number: string;
+  floor?: number | null;
+  status: string;
+  housekeepingStatus: string;
+  notes?: string | null;
+  roomType: HotelRoomType;
+  lastCheckout?: {
+    checkOut: string;
+    checkedOutAt?: string | null;
+    specialRequests?: string | null;
+  } | null;
+  /** Próxima llegada asignada a la habitación (solo en la lista de limpieza). */
+  nextArrival?: { checkIn: string; guest: string } | null;
+};
+
+export type HotelChannel = {
+  id: string;
+  type: string;
+  name: string;
+  active: boolean;
+  lastSyncedAt?: string | null;
+  _count?: { reservations: number };
+};
+
+export type HotelGuest = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  documentType?: string | null;
+  documentNumber?: string | null;
+  nationality?: string | null;
+  notes?: string | null;
+  createdAt?: string;
+  credits?: HotelGuestCredit[];
+  _count?: { reservations: number };
+  reservations?: Array<{
+    id: string;
+    code: string;
+    status: string;
+    checkIn: string;
+    checkOut: string;
+    totalAmount: string;
+    paidAmount: string;
+    room?: { id: string; number: string; floor?: number | null } | null;
+    roomType: { id: string; name: string };
+    channel?: { id: string; name: string } | null;
+  }>;
+};
+
+export type CreateHotelReservationPayload = {
+  guestId?: string;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  phone?: string;
+  documentType?: 'CEDULA' | 'RNC' | 'PASSPORT';
+  documentNumber?: string;
+  roomTypeId: string;
+  roomId?: string;
+  channelId: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children?: number;
+  totalAmount: number;
+  specialRequests?: string;
+};
+
+export type UpdateHotelReservationPayload = Partial<
+  Omit<CreateHotelReservationPayload, 'guestId' | 'roomId'>
+> & { roomId?: string; arrivalTime?: string };
+
+export function updateHotelReservation(
+  tenantId: string,
+  accessToken: string,
+  reservationId: string,
+  payload: UpdateHotelReservationPayload,
+) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export type TaxIdentityLookup = {
+  outcome: 'FOUND' | 'NOT_FOUND' | 'INVALID' | 'UNAVAILABLE';
+  documentType: 'RNC' | 'CEDULA';
+  documentNumber: string;
+  name: string | null;
+  commercialName: string | null;
+  status: string | null;
+};
+
+export function lookupTaxIdentity(
+  tenantId: string,
+  accessToken: string,
+  documentType: 'RNC' | 'CEDULA',
+  documentNumber: string,
+) {
+  const query = new URLSearchParams({ documentType, documentNumber });
+  return fetchJson<TaxIdentityLookup>(`/hotel/tax-identities/lookup?${query}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export type PushConfig = { enabled: boolean; publicKey: string | null };
+
+export function getPushConfig(tenantId: string, accessToken: string) {
+  return fetchJson<PushConfig>('/hotel/push/config', { headers: tenantHeaders(tenantId, accessToken) });
+}
+
+export function registerPushSubscription(
+  tenantId: string,
+  accessToken: string,
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string }; expirationTime?: number | null },
+) {
+  return fetchJson<{ ok: true }>('/hotel/push/subscriptions', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(subscription),
+  });
+}
+
+export function revokePushSubscription(tenantId: string, accessToken: string, endpoint: string) {
+  return fetchJson<{ ok: true }>('/hotel/push/subscriptions/revoke', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+export function sendTestPush(tenantId: string, accessToken: string) {
+  return fetchJson<{ sent: number }>('/hotel/push/test', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export type HotelDashboardOverview = {
+  today: string;
+  revenue: { month: number; today: number };
+  reservationsToday: { total: number; arrivalsPending: number; inHouse: number; departuresPending: number };
+  pendingPayments: {
+    amount: number;
+    count: number;
+    top: { id: string; code: string; guest: string; balance: number }[];
+  };
+  rooms: {
+    total: number;
+    freeTonight: number;
+    occupied: number;
+    available: number;
+    reserved: number;
+    cleaning: number;
+    outOfService: number;
+  };
+  performance: { month: string; revenue: number; occupancy: number }[];
+  channels: { name: string; total: number; share: number }[];
+  arrivals: {
+    id: string;
+    code: string;
+    guest: string;
+    adults: number;
+    children: number;
+    checkIn: string;
+    arrivalTime: string | null;
+    room: string | null;
+    roomType: string;
+  }[];
+  priorities: {
+    webRequests: number;
+    arrivalsPending: number;
+    arrivalsWithoutRoom: number;
+    departuresPending: number;
+    paymentsPending: number;
+    topPayment: { code: string; balance: number } | null;
+    roomsToClean: string[];
+  };
+};
+
+export function getHotelDashboardOverview(tenantId: string, accessToken: string) {
+  return fetchJson<HotelDashboardOverview>('/hotel/dashboard/overview', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+/** Vencimiento de las secuencias e-CF (E31/E32) para imprimirlo en la factura. */
+export function getHotelFiscalSequenceValidity(tenantId: string, accessToken: string) {
+  return fetchJson<{ prefix: string; startNumber: number; endNumber: number; validUntil: string | null }[]>(
+    '/hotel/fiscal-sequences/validity',
+    { headers: tenantHeaders(tenantId, accessToken) },
+  );
+}
+
+export function getHotelDashboard(tenantId: string, accessToken: string) {
+  return fetchJson<Record<string, unknown>>('/hotel/dashboard', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+/** Solicitudes pendientes de aprobación (reservas que llegan desde la web). */
+export function getHotelRequests(tenantId: string, accessToken: string) {
+  return fetchJson<HotelReservation[]>('/hotel/requests', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getHotelReservations(tenantId: string, accessToken: string) {
+  return fetchJson<HotelReservation[]>('/hotel/reservations', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getHotelInvoices(tenantId: string, accessToken: string) {
+  return fetchJson<HotelInvoice[]>('/hotel/invoices', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function createHotelReservation(
+  tenantId: string,
+  accessToken: string,
+  payload: CreateHotelReservationPayload,
+) {
+  return fetchJson<HotelReservation>('/hotel/reservations', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getHotelRoomTypes(tenantId: string, accessToken: string) {
+  return fetchJson<HotelRoomType[]>('/hotel/room-types', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getHotelRooms(tenantId: string, accessToken: string) {
+  return fetchJson<HotelRoom[]>('/hotel/rooms', { headers: tenantHeaders(tenantId, accessToken) });
+}
+
+export function getHotelGuests(tenantId: string, accessToken: string) {
+  return fetchJson<HotelGuest[]>('/hotel/guests', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getHotelChannels(tenantId: string, accessToken: string) {
+  return fetchJson<HotelChannel[]>('/hotel/channels', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function assignHotelRoom(
+  tenantId: string,
+  accessToken: string,
+  reservationId: string,
+  roomId: string,
+) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}/room`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ roomId }),
+  });
+}
+
+export function updateHotelReservationStatus(
+  tenantId: string,
+  accessToken: string,
+  reservationId: string,
+  status: string,
+  options: { grantCredit?: boolean; payLater?: boolean } = {},
+) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}/status`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ status, ...options }),
+  });
+}
+
+/** Elimina una reservación antes del check-in. */
+export function deleteHotelReservation(tenantId: string, accessToken: string, reservationId: string) {
+  return fetchJson<{ id: string; deleted: boolean }>(`/hotel/reservations/${reservationId}`, {
+    method: 'DELETE',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export type UpdateHotelGuestPayload = {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  documentType?: 'CEDULA' | 'PASSPORT';
+  documentNumber?: string;
+  nationality?: string;
+  notes?: string;
+};
+
+/** Edita la ficha del huésped (teléfono, documento, nacionalidad, notas). */
+export function updateHotelGuest(
+  tenantId: string,
+  accessToken: string,
+  guestId: string,
+  payload: UpdateHotelGuestPayload,
+) {
+  return fetchJson<HotelGuest>(`/hotel/guests/${guestId}`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Recupera una reservación inasistida (vuelve a las llegadas). */
+export function recoverHotelReservation(tenantId: string, accessToken: string, reservationId: string) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}/recover`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+/** Pago Express: factura rápida sin reservación (el monto incluye ITBIS). */
+export function createHotelExpressInvoice(
+  tenantId: string,
+  accessToken: string,
+  payload: HotelExpressInvoicePayload,
+) {
+  return fetchJson<HotelInvoice>('/hotel/invoices/express', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Aplica el crédito a favor del huésped como pago de la reservación. */
+export function applyHotelGuestCredit(tenantId: string, accessToken: string, reservationId: string) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}/apply-credit`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export type HotelGuestCredit = {
+  id: string;
+  nights: number;
+  amount: string;
+  remainingAmount: string;
+  reason: string;
+  createdAt: string;
+  sourceReservation?: { code: string } | null;
+};
+
+export function recordHotelPayment(
+  tenantId: string,
+  accessToken: string,
+  reservationId: string,
+  payload: {
+    amount: number;
+    cashReceived?: number;
+    method: 'CASH' | 'CARD' | 'TRANSFER';
+    billingDocumentType: 'SALE_NOTE' | 'E31' | 'E32';
+    fiscalDocumentType?: 'RNC' | 'CEDULA';
+    fiscalDocumentNumber?: string;
+    reference?: string;
+    notes?: string;
+  },
+) {
+  return fetchJson<HotelReservation>(`/hotel/reservations/${reservationId}/payments`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateHotelRoomState(
+  tenantId: string,
+  accessToken: string,
+  roomId: string,
+  payload: { status?: string; housekeepingStatus?: string },
+) {
+  return fetchJson<HotelRoom>(`/hotel/rooms/${roomId}/state`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getHousekeepingRooms(tenantId: string, accessToken: string) {
+  return fetchJson<HotelRoom[]>('/hotel/housekeeping/rooms', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getHousekeepingRoom(tenantId: string, accessToken: string, roomId: string) {
+  return fetchJson<HotelRoom>(`/hotel/housekeeping/rooms/${roomId}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function confirmHotelRoomCleaning(tenantId: string, accessToken: string, roomId: string) {
+  return fetchJson<HotelRoom>(`/hotel/housekeeping/rooms/${roomId}/confirm`, {
+    method: 'PATCH',
+    headers: tenantHeaders(tenantId, accessToken),
   });
 }

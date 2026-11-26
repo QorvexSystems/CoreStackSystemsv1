@@ -1,6 +1,7 @@
 import { DocumentType, InvoiceDocumentType } from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -56,4 +57,9 @@ export class CreateFiscalSequenceDto {
   @IsNotEmpty()
   @MaxLength(20)
   issuerDocumentNumber: string;
+
+  /** Usar este bloque desde ya: el bloque activo se cierra en el último número usado. */
+  @IsOptional()
+  @IsBoolean()
+  activateNow?: boolean;
 }

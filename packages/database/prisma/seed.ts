@@ -9,22 +9,24 @@ import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-const uniqueAdminEmail = process.env.SEED_UNIQUE_ADMIN_EMAIL ?? 'admin@uniquepersonalizado.com';
-const uniqueAdminPassword = process.env.SEED_UNIQUE_ADMIN_PASSWORD;
+const hotelAdminEmail = process.env.SEED_HOTEL_ADMIN_EMAIL ?? 'admin@hotelancla.local';
+const hotelAdminPassword = process.env.SEED_HOTEL_ADMIN_PASSWORD;
 const coreStackAdminEmail = process.env.SEED_CORESTACK_ADMIN_EMAIL ?? 'soporte@corestack-systems.com';
 const coreStackAdminPassword = process.env.SEED_CORESTACK_ADMIN_PASSWORD;
 
-function requireSecret(value: string | undefined, variableName: string) {
-  if (!value || value.length < 16) {
-    throw new Error(`${variableName} debe contener una contraseña de al menos 16 caracteres.`);
+function requireSecret(value: string | undefined, variableName: string, minimumLength = 16) {
+  if (!value || value.length < minimumLength) {
+    throw new Error(
+      `${variableName} debe contener una contraseña de al menos ${minimumLength} caracteres.`,
+    );
   }
 
   return value;
 }
 
 async function main() {
-  const uniquePasswordHash = await bcrypt.hash(
-    requireSecret(uniqueAdminPassword, 'SEED_UNIQUE_ADMIN_PASSWORD'),
+  const hotelPasswordHash = await bcrypt.hash(
+    requireSecret(hotelAdminPassword, 'SEED_HOTEL_ADMIN_PASSWORD', 8),
     12,
   );
   const coreStackPasswordHash = await bcrypt.hash(
@@ -71,41 +73,43 @@ async function main() {
       },
     });
 
-    const uniqueTenant = await tx.tenant.upsert({
-      where: { slug: 'unique-personalizado' },
+    const hotelTenant = await tx.tenant.upsert({
+      where: { slug: 'hotel-ancla' },
       update: {
-        name: 'Unique Personalizado',
-        commercialName: 'Unique Personalizado',
-        email: 'info@uniquepersonalizado.com',
-        phone: '809-688-0490',
-        address: 'Av. 27 de Febrero 275, Santo Domingo, República Dominicana',
+        name: 'Hotel Ancla',
+        commercialName: 'Hotel Suite Ancla',
+        rnc: '132688521',
+        email: 'Serviosanchez2@icloud.com',
+        phone: '+1 (829) 318-9431',
+        address: 'Frente a la Escuela Laboral Vocacional, Calle Los Maestros #1, Barahona 81000',
       },
       create: {
-        name: 'Unique Personalizado',
-        commercialName: 'Unique Personalizado',
-        slug: 'unique-personalizado',
-        email: 'info@uniquepersonalizado.com',
-        phone: '809-688-0490',
-        address: 'Av. 27 de Febrero 275, Santo Domingo, República Dominicana',
+        name: 'Hotel Ancla',
+        commercialName: 'Hotel Suite Ancla',
+        slug: 'hotel-ancla',
+        rnc: '132688521',
+        email: 'Serviosanchez2@icloud.com',
+        phone: '+1 (829) 318-9431',
+        address: 'Frente a la Escuela Laboral Vocacional, Calle Los Maestros #1, Barahona 81000',
       },
     });
 
     await tx.companyBranding.upsert({
-      where: { tenantId: uniqueTenant.id },
+      where: { tenantId: hotelTenant.id },
       update: {
-        logoUrl: '/brand/logo-brand.png',
-        primaryColor: '#9A6B00',
-        accentColor: '#075ED1',
-        loginTitle: 'Unique Personalizado',
-        loginSubtitle: 'Joyas y regalos personalizados',
+        logoUrl: '/brand/hotel-ancla-logo.png',
+        primaryColor: '#15988D',
+        accentColor: '#0E746C',
+        loginTitle: 'Hotel Ancla',
+        loginSubtitle: 'Operación integral del hotel',
       },
       create: {
-        tenantId: uniqueTenant.id,
-        logoUrl: '/brand/logo-brand.png',
-        primaryColor: '#9A6B00',
-        accentColor: '#075ED1',
-        loginTitle: 'Unique Personalizado',
-        loginSubtitle: 'Joyas y regalos personalizados',
+        tenantId: hotelTenant.id,
+        logoUrl: '/brand/hotel-ancla-logo.png',
+        primaryColor: '#15988D',
+        accentColor: '#0E746C',
+        loginTitle: 'Hotel Ancla',
+        loginSubtitle: 'Operación integral del hotel',
       },
     });
 
@@ -150,17 +154,17 @@ async function main() {
       },
     });
 
-    const uniqueAdmin = await tx.user.upsert({
-      where: { email: uniqueAdminEmail },
+    const hotelAdmin = await tx.user.upsert({
+      where: { email: hotelAdminEmail },
       update: {
-        name: 'Administrador Unique Personalizado',
-        passwordHash: uniquePasswordHash,
+        name: 'Administrador Hotel Ancla',
+        passwordHash: hotelPasswordHash,
         status: UserStatus.ACTIVE,
       },
       create: {
-        email: uniqueAdminEmail,
-        name: 'Administrador Unique Personalizado',
-        passwordHash: uniquePasswordHash,
+        email: hotelAdminEmail,
+        name: 'Administrador Hotel Ancla',
+        passwordHash: hotelPasswordHash,
         status: UserStatus.ACTIVE,
       },
     });
@@ -168,8 +172,8 @@ async function main() {
     await tx.membership.upsert({
       where: {
         userId_tenantId: {
-          userId: uniqueAdmin.id,
-          tenantId: uniqueTenant.id,
+          userId: hotelAdmin.id,
+          tenantId: hotelTenant.id,
         },
       },
       update: {
@@ -191,8 +195,8 @@ async function main() {
         canTakeOrders: true,
       },
       create: {
-        userId: uniqueAdmin.id,
-        tenantId: uniqueTenant.id,
+        userId: hotelAdmin.id,
+        tenantId: hotelTenant.id,
         role: Role.ADMIN,
         canUsePos: true,
         canOpenCashSession: true,
@@ -214,45 +218,45 @@ async function main() {
     await tx.employeeProfile.upsert({
       where: {
         tenantId_userId: {
-          tenantId: uniqueTenant.id,
-          userId: uniqueAdmin.id,
+          tenantId: hotelTenant.id,
+          userId: hotelAdmin.id,
         },
       },
       update: {
-        employeeCode: 'UP-ADM-001',
+        employeeCode: 'HA-ADM-001',
         jobTitle: 'Administrador general',
         status: EmployeeStatus.ACTIVE,
       },
       create: {
-        tenantId: uniqueTenant.id,
-        userId: uniqueAdmin.id,
-        employeeCode: 'UP-ADM-001',
+        tenantId: hotelTenant.id,
+        userId: hotelAdmin.id,
+        employeeCode: 'HA-ADM-001',
         jobTitle: 'Administrador general',
         status: EmployeeStatus.ACTIVE,
       },
     });
 
     const existingCashRegister = await tx.cashRegister.findFirst({
-      where: { tenantId: uniqueTenant.id, name: 'Caja principal' },
+      where: { tenantId: hotelTenant.id, name: 'Caja principal' },
       select: { id: true },
     });
 
     if (!existingCashRegister) {
       await tx.cashRegister.create({
         data: {
-          tenantId: uniqueTenant.id,
+          tenantId: hotelTenant.id,
           name: 'Caja principal',
-          location: 'Tienda principal',
+          location: 'Recepción principal',
         },
       });
     }
 
     const existingAudit = await tx.auditLog.findFirst({
       where: {
-        tenantId: uniqueTenant.id,
-        action: 'UNIQUE_TENANT_BOOTSTRAPPED',
+        tenantId: hotelTenant.id,
+        action: 'HOTEL_TENANT_BOOTSTRAPPED',
         entity: 'Tenant',
-        entityId: uniqueTenant.id,
+        entityId: hotelTenant.id,
       },
       select: { id: true },
     });
@@ -260,11 +264,11 @@ async function main() {
     if (!existingAudit) {
       await tx.auditLog.create({
         data: {
-          tenantId: uniqueTenant.id,
+          tenantId: hotelTenant.id,
           userId: coreStackAdmin.id,
-          action: 'UNIQUE_TENANT_BOOTSTRAPPED',
+          action: 'HOTEL_TENANT_BOOTSTRAPPED',
           entity: 'Tenant',
-          entityId: uniqueTenant.id,
+          entityId: hotelTenant.id,
           metadata: {
             provider: 'CoreStack',
             operationalDataSeeded: false,
@@ -275,16 +279,16 @@ async function main() {
 
     return {
       coreStackTenantId: coreStackTenant.id,
-      uniqueTenantId: uniqueTenant.id,
-      uniqueAdminEmail,
+      hotelTenantId: hotelTenant.id,
+      hotelAdminEmail,
       coreStackAdminEmail,
     };
   });
 
-  console.log('Bootstrap de Unique Personalizado completado.');
-  console.log(`Tenant Unique: ${result.uniqueTenantId}`);
+  console.log('Bootstrap de Hotel Ancla completado.');
+  console.log(`Tenant Hotel Ancla: ${result.hotelTenantId}`);
   console.log(`Tenant CoreStack: ${result.coreStackTenantId}`);
-  console.log(`Administrador Unique: ${result.uniqueAdminEmail}`);
+  console.log(`Administrador Hotel Ancla: ${result.hotelAdminEmail}`);
   console.log(`Soporte CoreStack: ${result.coreStackAdminEmail}`);
   console.log('Las contraseñas permanecen únicamente en las variables SEED_* del .env.');
 }

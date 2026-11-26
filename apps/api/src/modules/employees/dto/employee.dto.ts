@@ -80,10 +80,9 @@ export class CreateEmployeeDto extends EmployeePermissionsDto {
   @IsString()
   phone?: string;
 
-  @IsOptional()
   @IsString()
   @MinLength(8)
-  password?: string;
+  password: string;
 
   @IsEnum(Role)
   role: Role;

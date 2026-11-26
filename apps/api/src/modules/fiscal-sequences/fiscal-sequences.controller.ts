@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { TenantId } from '../../common/decorators/tenant-id.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -29,5 +29,15 @@ export class FiscalSequencesController {
     @Body() dto: CreateFiscalSequenceDto,
   ) {
     return this.fiscalSequencesService.create(tenantId, user, dto);
+  }
+
+  /** Cierra un bloque: termina en el último número usado (o se descarta si no se usó). */
+  @Patch(':id/close')
+  close(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.fiscalSequencesService.close(tenantId, user, id);
   }
 }

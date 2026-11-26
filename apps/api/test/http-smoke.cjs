@@ -15,7 +15,7 @@ let app;
   const address = app.getHttpServer().address();
   const base = 'http://127.0.0.1:' + address.port;
   const db = app.get(PrismaService);
-  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'unique-personalizado' } });
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { slug: 'hotel-ancla' } });
   const roles = ['ADMIN', 'ORDER_TAKER', 'WAREHOUSE_KEEPER', 'ACCOUNTANT'];
   let passed = 0;
   for (const role of roles) {

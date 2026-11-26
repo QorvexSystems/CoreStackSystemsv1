@@ -6,17 +6,30 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-inter)', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: [
+          'ui-sans-serif',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Segoe UI',
+          'sans-serif',
+        ],
       },
       colors: {
+        teal: {
+          light: '#DDF5F1',
+          DEFAULT: '#15988D',
+          dark: '#0E746C',
+          deep: '#0A5853',
+        },
         gold: {
           light: '#E4C77C',
           DEFAULT: '#C6A45E',
           dark: '#996B00',
           deep: '#8A651E',
         },
-        navy: '#101A30',
-        'surface-muted': '#F5F1E9',
+        navy: '#111B20',
+        'surface-muted': '#F2F6F5',
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',

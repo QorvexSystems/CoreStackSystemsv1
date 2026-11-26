@@ -36,6 +36,8 @@ enum Role {
   ADMIN
   ACCOUNTANT
   CASHIER
+  RECEPTION
+  HOUSEKEEPING
   ORDER_TAKER
   WAREHOUSE_KEEPER
   QORVEX_SUPER_ADMIN
@@ -457,6 +459,56 @@ enum Currency {
   DOP
 }
 
+enum HotelRoomStatus {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+  CLEANING
+  MAINTENANCE
+  OUT_OF_SERVICE
+}
+
+enum HousekeepingStatus {
+  CLEAN
+  DIRTY
+  INSPECTING
+  IN_PROGRESS
+}
+
+enum HotelReservationStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  ASSIGNED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum HotelPaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum HotelBillingDocumentType {
+  SALE_NOTE
+  E31
+  E32
+}
+
+enum HotelChannelType {
+  DIRECT_WEB
+  WHATSAPP
+  BOOKING
+  EXPEDIA
+  AIRBNB
+  WALK_IN
+  PHONE
+  OTHER
+}
+
 model Tenant {
   id                         String                      @id @default(cuid())
   name                       String
@@ -505,6 +557,14 @@ model Tenant {
   goodsReceiptItems          GoodsReceiptItem[]
   creditSaleApprovals        CreditSaleApproval[]
   mobileOcrCaptureSessions   MobileOcrCaptureSession[]
+  hotelRoomTypes             HotelRoomType[]
+  hotelRooms                 HotelRoom[]
+  hotelGuests                HotelGuest[]
+  hotelChannels              HotelChannel[]
+  hotelReservations          HotelReservation[]
+  hotelReservationPayments   HotelReservationPayment[]
+  hotelGuestCredits          HotelGuestCredit[]
+  pushSubscriptions          PushSubscription[]
 
   @@index([status])
   @@index([createdAt])
@@ -586,6 +646,8 @@ model User {
   creditSaleApprovalsCancelled        CreditSaleApproval[]        @relation("CreditSaleApprovalCancelledBy")
   paymentsCancelled                   Payment[]                   @relation("PaymentCancelledBy")
   mobileOcrCaptureSessionsCreated     MobileOcrCaptureSession[]   @relation("MobileOcrCaptureCreatedBy")
+  hotelReservationPaymentsRecorded    HotelReservationPayment[]   @relation("HotelPaymentRecordedBy")
+  pushSubscriptions                   PushSubscription[]
 
   @@index([status])
   @@index([createdAt])
@@ -671,64 +733,64 @@ model ProductCategory {
 }
 
 model Product {
-  id                     String                      @id @default(cuid())
-  tenantId               String
-  categoryId             String?
-  name                   String
-  sku                    String?
-  barcode                String?
-  barcodeType            BarcodeType?
-  generatedBarcode       Boolean                     @default(false)
-  barcodeLabelPrintedAt  DateTime?
-  barcodeLabelPrintCount Int                         @default(0)
-  barcodeLastScannedAt   DateTime?
-  barcodeCreatedById     String?
-  description            String?
-  imageUrl               String?
-  brand                  String?
-  kind                   ProductKind                 @default(STANDARD)
-  material               String?
-  measurement            String?
-  shopifyProductId       String?
-  shopifyVariantId       String?
-  shopifyInventoryItemId String?
-  shopifySyncedAt        DateTime?
-  webProductId           String?
-  webOptions             Json?
-  webAvailability        WebAvailabilityPolicy?
+  id                       String                      @id @default(cuid())
+  tenantId                 String
+  categoryId               String?
+  name                     String
+  sku                      String?
+  barcode                  String?
+  barcodeType              BarcodeType?
+  generatedBarcode         Boolean                     @default(false)
+  barcodeLabelPrintedAt    DateTime?
+  barcodeLabelPrintCount   Int                         @default(0)
+  barcodeLastScannedAt     DateTime?
+  barcodeCreatedById       String?
+  description              String?
+  imageUrl                 String?
+  brand                    String?
+  kind                     ProductKind                 @default(STANDARD)
+  material                 String?
+  measurement              String?
+  shopifyProductId         String?
+  shopifyVariantId         String?
+  shopifyInventoryItemId   String?
+  shopifySyncedAt          DateTime?
+  webProductId             String?
+  webOptions               Json?
+  webAvailability          WebAvailabilityPolicy?
   legacyEcommerceVariantId String?
-  legacyShopifyVariantId String?
-  originalSku            String?
+  legacyShopifyVariantId   String?
+  originalSku              String?
   /// Aprobación del SKU por una persona. NULL = candidato (propuesto por el importador) que bloquea la publicación.
-  skuApprovedAt          DateTime?
-  unit                   ProductUnit                 @default(UNIT)
-  price                  Decimal                     @db.Decimal(12, 2)
-  salePrice              Decimal                     @default(0) @db.Decimal(12, 2)
-  cost                   Decimal?                    @db.Decimal(12, 2)
-  costWithTax            Decimal?                    @db.Decimal(14, 2)
-  margin                 Decimal?                    @db.Decimal(8, 4)
-  taxCategory            TaxCategory                 @default(ITBIS_18)
-  taxRate                Decimal                     @default(0.18) @db.Decimal(5, 4)
-  trackInventory         Boolean                     @default(true)
-  inventoryDestination   ProductInventoryDestination @default(SALES_INVENTORY)
-  stock                  Float                       @default(0)
-  reservedStock          Float                       @default(0)
-  minStock               Float                       @default(0)
-  status                 ProductStatus               @default(ACTIVE)
-  createdAt              DateTime                    @default(now())
-  updatedAt              DateTime                    @updatedAt
-  tenant                 Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  category               ProductCategory?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  inventoryMovements     InventoryMovement[]
-  invoiceItems           InvoiceItem[]
-  salesOrderItems        SalesOrderItem[]
-  returnRequestItems     ReturnRequestItem[]
-  supplierProducts       SupplierProduct[]
-  purchaseOrderItems     PurchaseOrderItem[]
-  supplierInvoiceItems   SupplierInvoiceItem[]
-  goodsReceiptItems      GoodsReceiptItem[]
-  importRows             ImportBatchRow[]
-  webProduct             WebProduct?                 @relation(fields: [tenantId, webProductId], references: [tenantId, id], onDelete: Restrict)
+  skuApprovedAt            DateTime?
+  unit                     ProductUnit                 @default(UNIT)
+  price                    Decimal                     @db.Decimal(12, 2)
+  salePrice                Decimal                     @default(0) @db.Decimal(12, 2)
+  cost                     Decimal?                    @db.Decimal(12, 2)
+  costWithTax              Decimal?                    @db.Decimal(14, 2)
+  margin                   Decimal?                    @db.Decimal(8, 4)
+  taxCategory              TaxCategory                 @default(ITBIS_18)
+  taxRate                  Decimal                     @default(0.18) @db.Decimal(5, 4)
+  trackInventory           Boolean                     @default(true)
+  inventoryDestination     ProductInventoryDestination @default(SALES_INVENTORY)
+  stock                    Float                       @default(0)
+  reservedStock            Float                       @default(0)
+  minStock                 Float                       @default(0)
+  status                   ProductStatus               @default(ACTIVE)
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+  tenant                   Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category                 ProductCategory?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  inventoryMovements       InventoryMovement[]
+  invoiceItems             InvoiceItem[]
+  salesOrderItems          SalesOrderItem[]
+  returnRequestItems       ReturnRequestItem[]
+  supplierProducts         SupplierProduct[]
+  purchaseOrderItems       PurchaseOrderItem[]
+  supplierInvoiceItems     SupplierInvoiceItem[]
+  goodsReceiptItems        GoodsReceiptItem[]
+  importRows               ImportBatchRow[]
+  webProduct               WebProduct?                 @relation(fields: [tenantId, webProductId], references: [tenantId, id], onDelete: Restrict)
 
   @@unique([tenantId, sku])
   @@unique([tenantId, barcode])
@@ -748,7 +810,7 @@ model Product {
 /// Producto comercial agrupado del catálogo web. No tiene precio ni existencias: cada variante es un Product.
 /// legacyShopifyProductId es solo procedencia; nunca alimenta la sincronización con Shopify.
 model WebProduct {
-  id                     String     @id @default(cuid())
+  id                     String    @id @default(cuid())
   tenantId               String
   legacyEcommerceId      String
   legacyShopifyProductId String?
@@ -764,12 +826,12 @@ model WebProduct {
   /// Modelos 3D asociados: [{ kind: "SKETCHFAB", modelId, sourceUrl }]. Nulo si no tiene.
   media3d                Json?
   publicationIntent      String
-  published              Boolean    @default(false)
+  published              Boolean   @default(false)
   publishedAt            DateTime?
   importSourceSha256     String?
-  createdAt              DateTime   @default(now())
-  updatedAt              DateTime   @updatedAt
-  tenant                 Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products               Product[]
 
   @@unique([tenantId, id])
@@ -1932,4 +1994,213 @@ model ChannelNonce {
 
   @@unique([keyId, nonce])
   @@index([expiresAt])
+}
+
+model HotelRoomType {
+  id               String             @id @default(cuid())
+  tenantId         String
+  name             String
+  description      String?
+  capacityAdults   Int                @default(2)
+  capacityChildren Int                @default(0)
+  baseRate         Decimal            @db.Decimal(14, 2)
+  amenities        Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rooms            HotelRoom[]
+  reservations     HotelReservation[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model HotelRoom {
+  id                 String             @id @default(cuid())
+  tenantId           String
+  roomTypeId         String
+  number             String
+  floor              Int?
+  status             HotelRoomStatus    @default(AVAILABLE)
+  housekeepingStatus HousekeepingStatus @default(CLEAN)
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomType           HotelRoomType      @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  reservations       HotelReservation[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([roomTypeId])
+}
+
+model HotelGuest {
+  id             String             @id @default(cuid())
+  tenantId       String
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  documentType   DocumentType?
+  documentNumber String?
+  nationality    String?
+  birthDate      DateTime?
+  preferences    Json?
+  notes          String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations   HotelReservation[]
+  credits        HotelGuestCredit[]
+
+  @@unique([tenantId, documentType, documentNumber])
+  @@index([tenantId, lastName, firstName])
+  @@index([tenantId, email])
+}
+
+model HotelChannel {
+  id           String             @id @default(cuid())
+  tenantId     String
+  type         HotelChannelType
+  name         String
+  active       Boolean            @default(true)
+  externalId   String?
+  settings     Json?
+  lastSyncedAt DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservations HotelReservation[]
+
+  @@unique([tenantId, type, name])
+  @@index([tenantId, active])
+}
+
+model HotelReservation {
+  id                String                    @id @default(cuid())
+  tenantId          String
+  code              String
+  guestId           String
+  roomTypeId        String
+  roomId            String?
+  channelId         String?
+  status            HotelReservationStatus    @default(PENDING_REVIEW)
+  paymentStatus     HotelPaymentStatus        @default(PENDING)
+  checkIn           DateTime
+  checkOut          DateTime
+  adults            Int                       @default(1)
+  children          Int                       @default(0)
+  totalAmount       Decimal                   @db.Decimal(14, 2)
+  paidAmount        Decimal                   @default(0) @db.Decimal(14, 2)
+  arrivalTime       String?
+  specialRequests   String?
+  sourceReference   String?
+  checkedInAt       DateTime?
+  checkedOutAt      DateTime?
+  cancelledAt       DateTime?
+  /// Pasó a "inasistida" (9:00 PM del día de llegada sin check-in). Se borra sola 24 h después.
+  noShowAt          DateTime?
+  /// Recepción la recuperó del listado de inasistidas: ya no vuelve a marcarse sola.
+  noShowRecoveredAt DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest             HotelGuest                @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  roomType          HotelRoomType             @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  room              HotelRoom?                @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  channel           HotelChannel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  payments          HotelReservationPayment[]
+  creditsGranted    HotelGuestCredit[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status, checkIn])
+  @@index([tenantId, checkOut])
+  @@index([guestId])
+  @@index([roomId])
+  @@index([channelId])
+}
+
+model HotelReservationPayment {
+  id                   String                   @id @default(cuid())
+  tenantId             String
+  /// Vacío en las facturas de Pago Express (venta rápida sin reservación).
+  reservationId        String?
+  recordedById         String
+  amount               Decimal                  @db.Decimal(14, 2)
+  cashReceived         Decimal?                 @db.Decimal(14, 2)
+  changeAmount         Decimal?                 @db.Decimal(14, 2)
+  method               PaymentMethod
+  billingDocumentType  HotelBillingDocumentType
+  fiscalDocumentType   DocumentType?
+  fiscalDocumentNumber String?
+  receiptNumber        String
+  reference            String?
+  notes                String?
+  /// Pago Express: cliente, teléfono y descripción del cobro (no hay reservación).
+  customerName         String?
+  customerPhone        String?
+  description          String?
+  createdAt            DateTime                 @default(now())
+  tenant               Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation          HotelReservation?        @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  recordedBy           User                     @relation("HotelPaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, receiptNumber])
+  @@index([tenantId, createdAt])
+  @@index([reservationId])
+  @@index([recordedById])
+}
+
+/// Dispositivos que reciben notificaciones push del ERP (Web Push / VAPID). Las claves p256dh y auth son
+/// secretos de entrega: nunca se devuelven al cliente.
+model PushSubscription {
+  id            String    @id @default(cuid())
+  tenantId      String
+  userId        String
+  endpoint      String    @unique
+  p256dh        String
+  auth          String
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  lastSuccessAt DateTime?
+  failureCount  Int       @default(0)
+  revokedAt     DateTime?
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, revokedAt])
+  @@index([userId])
+}
+
+/// Padrón de contribuyentes de la DGII (RNC de 9 dígitos y cédulas de 11). Solo lo necesario para mostrar
+/// el nombre o razón social; se reemplaza completo con cada importación del archivo oficial DGII_RNC.zip.
+model DgiiTaxpayer {
+  documentNumber String       @id
+  documentType   DocumentType
+  name           String
+  commercialName String?
+  status         String
+}
+
+/// Crédito a favor de un huésped (por ejemplo, noches pagadas y no usadas al hacer check-out anticipado).
+/// `remainingAmount` baja cuando el crédito se aplica como pago de otra reservación.
+model HotelGuestCredit {
+  id                  String            @id @default(cuid())
+  tenantId            String
+  guestId             String
+  sourceReservationId String?
+  nights              Int
+  amount              Decimal           @db.Decimal(14, 2)
+  remainingAmount     Decimal           @db.Decimal(14, 2)
+  reason              String
+  createdById         String?
+  createdAt           DateTime          @default(now())
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest               HotelGuest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  sourceReservation   HotelReservation? @relation(fields: [sourceReservationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, guestId])
+  @@index([sourceReservationId])
 }

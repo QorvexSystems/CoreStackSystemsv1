@@ -31,5 +31,5 @@ docker stop <contenedor-de-pruebas>                  # detener
 docker rm -f <contenedor-de-pruebas>; docker volume rm <su-volumen>   # eliminar SOLO sus recursos
 ```
 Variables (solo credenciales locales de prueba): `DATABASE_URL` y `DIRECT_URL` = `postgresql://<usuario>:<clave>@127.0.0.1:<puerto>/<base>_test` (el nombre de la base debe llevar `test`, `isolated`, `sandbox`, `scratch` o `ensayo`), y `WEB_CATALOG_IMPORT_ISOLATED=I_UNDERSTAND_THIS_IS_NOT_THE_REAL_DATABASE`.
-Esquema: `pnpm exec prisma migrate deploy --schema prisma/schema.prisma`; tenant: una fila en `"Tenant"` con slug `unique-personalizado`.
+Esquema: `pnpm exec prisma migrate deploy --schema prisma/schema.prisma`; tenant: una fila en `"Tenant"` con slug `hotel-ancla`.
 Integración: `pnpm --filter @qorvex/database test:web-catalog:integration`.

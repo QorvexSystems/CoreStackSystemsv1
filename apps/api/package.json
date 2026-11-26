@@ -15,6 +15,7 @@
     "test:dashboard-performance": "pnpm build && dotenv -e ../../.env -- node test/dashboard-performance.cjs",
     "test:module-performance": "pnpm build && dotenv -e ../../.env -- node test/module-performance.cjs",
     "test:channel-orders": "node test/channel-orders-integration.cjs",
+    "test:hotel": "node ../../packages/database/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json --test src/modules/hotel/hotel-availability.spec.ts",
     "test:web-catalog": "node ../../packages/database/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json --test src/modules/web-catalog/web-catalog.spec.ts"
   },
   "dependencies": {
@@ -34,7 +35,8 @@
     "read-excel-file": "^9.2.0",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.20.0",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "web-push": "3.6.7"
   },
   "dependenciesMeta": {
     "@qorvex/database": {
@@ -45,6 +47,7 @@
     "@nestjs/cli": "^11.0.7",
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.3",
+    "@types/web-push": "3.6.4",
     "dotenv-cli": "^8.0.0",
     "typescript": "^5.8.3"
   }

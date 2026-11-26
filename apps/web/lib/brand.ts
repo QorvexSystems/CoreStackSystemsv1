@@ -1,24 +1,24 @@
 export const brand = {
-  name: 'Unique Personalizado',
-  shortName: 'Unique',
-  tagline: 'Detalles únicos para momentos inolvidables',
-  descriptor: 'Joyas y regalos personalizados',
-  logoPath: '/brand/logo-brand.png',
-  horizontalLogoPath: '/brand/logo-negro.png',
-  stackedLogoPath: '/brand/logo-brand.png',
-  wordmarkPath: '/brand/unique-wordmark.png',
-  faviconPath: '/icon.png',
-  appleTouchIconPath: '/apple-icon.png',
-  loginEmailPlaceholder: 'usuario@uniquepersonalizado.com',
+  name: 'Hotel Ancla',
+  shortName: 'Ancla',
+  tagline: 'Hospitalidad que siempre te trae de vuelta',
+  descriptor: 'Operación integral del hotel',
+  logoPath: '/brand/hotel-ancla-logo.png',
+  horizontalLogoPath: '/brand/hotel-ancla-logo.png',
+  stackedLogoPath: '/brand/hotel-ancla-logo.png',
+  wordmarkPath: '/brand/hotel-ancla-logo.png',
+  faviconPath: '/brand/hotel-ancla-logo.png',
+  appleTouchIconPath: '/icons/apple-touch-icon.png',
+  loginEmailPlaceholder: 'usuario@hotelancla.local',
 } as const;
 
 export const platform = {
   name: 'CoreStack',
   logoPath: '/brand/corestack-logo.jpeg',
-  description: 'Tecnología empresarial creada por CoreStack',
+  description: 'Plataforma hotelera provista por CoreStack',
 } as const;
 
 export const brandCopy = {
   operationalDescription: `Operación diaria de ${brand.name}.`,
-  catalogDescription: `Catálogo, personalización, precios e inventario de ${brand.name}.`,
+  catalogDescription: `Reservas, habitaciones, huéspedes y facturación de ${brand.name}.`,
 } as const;

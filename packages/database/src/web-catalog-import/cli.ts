@@ -1,5 +1,5 @@
 // Importador del catálogo web. Por defecto es dry-run: no abre ninguna conexión ni lee ningún .env.
-//   pnpm --filter @qorvex/database import:web-catalog -- --catalog=<catalog.normalized.json> [--tenant=unique-personalizado]
+//   pnpm --filter @qorvex/database import:web-catalog -- --catalog=<catalog.normalized.json> [--tenant=hotel-ancla]
 // Modo aislado (solo base local de prueba, ver guard.ts):
 //   ... --mode=isolated      con DATABASE_URL y WEB_CATALOG_IMPORT_ISOLATED definidos en el entorno
 import { createHash } from 'node:crypto';
@@ -24,7 +24,7 @@ async function main() {
   }
   const mode = (arg('--mode') ?? 'dry-run') as ImportMode;
   if (mode !== 'dry-run' && mode !== 'isolated') throw new Error(`Modo desconocido: ${mode}`);
-  const tenantSlug = arg('--tenant') ?? 'unique-personalizado';
+  const tenantSlug = arg('--tenant') ?? 'hotel-ancla';
   const outDir = resolve(arg('--out') ?? '.tmp/web-catalog-import');
 
   const raw = readFileSync(resolve(catalogPath));

@@ -51,7 +51,7 @@ const small = { expectedGroups: 3, expectedVariants: 6 };
 // ---------- Almacén en memoria con las mismas restricciones únicas que el esquema ----------
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 class FakeStore implements ImportStore {
-  tenants = new Map([['unique-personalizado', 'tenant-1']]);
+  tenants = new Map([['hotel-ancla', 'tenant-1']]);
   webProducts: Row[] = [];
   products: Row[] = [];
   inventoryMovements: Row[] = [];
@@ -108,7 +108,7 @@ class FakeStore implements ImportStore {
   }
 }
 const run = (plan: ReturnType<typeof buildPlan>, store?: FakeStore, mode: 'dry-run' | 'isolated' = 'isolated') =>
-  runImport(plan, { mode, tenantSlug: 'unique-personalizado', sourceSha256: 'src', store });
+  runImport(plan, { mode, tenantSlug: 'hotel-ancla', sourceSha256: 'src', store });
 
 // ---------- Política de SKUs ----------
 test('SKUs: reglas, determinismo y detección de colisiones después de generar', () => {

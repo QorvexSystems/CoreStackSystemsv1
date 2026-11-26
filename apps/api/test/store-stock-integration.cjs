@@ -36,7 +36,7 @@ function check(name, condition) {
           return typeof value === 'function' ? value.bind(target) : value;
         },
       });
-      const tenant = await tx.tenant.findUniqueOrThrow({ where: { slug: 'unique-personalizado' } });
+      const tenant = await tx.tenant.findUniqueOrThrow({ where: { slug: 'hotel-ancla' } });
       const member = await tx.membership.findFirstOrThrow({
         where: { tenantId: tenant.id, role: 'ADMIN', status: 'ACTIVE' },
       });

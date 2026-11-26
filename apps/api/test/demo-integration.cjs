@@ -32,7 +32,7 @@ const check = (name, condition) => {
           return typeof value === 'function' ? value.bind(target) : value;
         },
       });
-      const tenant = await tx.tenant.findUniqueOrThrow({ where: { slug: 'unique-personalizado' } });
+      const tenant = await tx.tenant.findUniqueOrThrow({ where: { slug: 'hotel-ancla' } });
       const member = await tx.membership.findFirstOrThrow({
         where: { tenantId: tenant.id, role: 'ADMIN', status: 'ACTIVE' },
         include: { user: true },
@@ -258,7 +258,7 @@ const check = (name, condition) => {
           ({
             SHOPIFY_CLIENT_SECRET: 'test-secret',
             SHOPIFY_STORE_DOMAIN: 'test.myshopify.com',
-            SHOPIFY_TENANT_SLUG: 'unique-personalizado',
+            SHOPIFY_TENANT_SLUG: 'hotel-ancla',
           })[key] ?? fallback,
       });
       const webhook = async (method, payload) => {

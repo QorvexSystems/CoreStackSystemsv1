@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 export const AUTHORIZED_PROJECT_REF = 'judogvnjrqabxrlgeopm';
-export const AUTHORIZED_TENANT_SLUG = 'unique-personalizado';
+export const AUTHORIZED_TENANT_SLUG = 'hotel-ancla';
 export const REMOTE_CONFIRMATION = `AUTHORIZED:${AUTHORIZED_PROJECT_REF}:${AUTHORIZED_TENANT_SLUG}`;
 export const REQUIRED_MIGRATIONS = [
   '20261028120000_web_catalog_grouping',
