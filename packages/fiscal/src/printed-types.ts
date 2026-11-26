@@ -1,0 +1,20 @@
+import type { FiscalScope } from './catalog.ts';
+export type PrintField = Readonly<{ label: string; value: string }>;
+export type PrintedRepresentation = Readonly<{
+  scope: FiscalScope;
+  title: string;
+  encf: string;
+  issuer: string;
+  issuerRnc: string;
+  issuedOn: string;
+  signedAt: string;
+  securityCode: string;
+  total: string;
+  signedSha256: string;
+  sourceSha256: string;
+  qrUrl: string;
+  qrVersion: 8 | 9;
+  sections: readonly Readonly<{ title: string; fields: readonly PrintField[] }>[];
+  lines: readonly (readonly PrintField[])[];
+  notice: string;
+}>;

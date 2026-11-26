@@ -23,9 +23,9 @@ import { ReceivablesModule } from './modules/receivables/receivables.module';
 import { ReturnsModule } from './modules/returns/returns.module';
 import { SupplierInvoicesModule } from './modules/supplier-invoices/supplier-invoices.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { TaxIdentitiesModule } from './modules/tax-identities/tax-identities.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { UsersModule } from './modules/users/users.module';
-import { WarehouseModule } from './modules/warehouse/warehouse.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -52,12 +52,12 @@ import { PrismaModule } from './prisma/prisma.module';
     ReceiptsModule,
     ReceivablesModule,
     InventoryModule,
-    WarehouseModule,
     InvoicesModule,
     OrdersModule,
     PosModule,
     ReturnsModule,
     SuppliersModule,
+    TaxIdentitiesModule,
     DashboardModule,
     AuditModule,
   ],

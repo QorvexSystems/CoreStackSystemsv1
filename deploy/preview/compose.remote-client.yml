@@ -1,0 +1,13 @@
+# Combine after compose.preview.dgii.yml and compose.synthetic.yml.
+services:
+  rivnu-dgii-preview-api:
+    image: corestack/rivnu-api:ecf-rehearsal-20260924
+    environment:
+      RIVNU_PREVIEW_REMOTE_FISCAL: 'true'
+      RIVNU_PREVIEW_REMOTE_RECOVERY: 'true'
+    group_add: ['1007']
+    volumes:
+      - ${PREVIEW_REMOTE_CLIENT_DIR:?required}/ca.crt:/run/preview-fiscal/ca.crt:ro
+      - ${PREVIEW_REMOTE_CLIENT_DIR:?required}/token:/run/preview-fiscal/token:ro
+  rivnu-dgii-preview-web:
+    image: corestack/rivnu-api:ecf-rehearsal-20260924

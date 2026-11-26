@@ -1,0 +1,21 @@
+FROM corestack/rivnu-api:fiscal-hardening-20261124 AS api
+USER root
+COPY --chown=node:node apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts /app/apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts
+COPY --chown=node:node apps/api/src/modules/fiscal-sequences/fiscal-sequences.module.ts /app/apps/api/src/modules/fiscal-sequences/fiscal-sequences.module.ts
+COPY --chown=node:node apps/api/src/modules/pos/pos.service.ts /app/apps/api/src/modules/pos/pos.service.ts
+COPY --chown=node:node apps/api/src/modules/invoices/invoices.controller.ts /app/apps/api/src/modules/invoices/invoices.controller.ts
+COPY --chown=node:node apps/api/src/modules/invoices/invoices.service.ts /app/apps/api/src/modules/invoices/invoices.service.ts
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM corestack/rivnu-web:fiscal-hardening-20261124 AS web
+USER root
+COPY --chown=node:node apps/web/lib/electronic-invoice-progress.ts /app/apps/web/lib/electronic-invoice-progress.ts
+COPY --chown=node:node apps/web/lib/api.ts /app/apps/web/lib/api.ts
+COPY --chown=node:node apps/web/components/operations/invoice-detail.tsx /app/apps/web/components/operations/invoice-detail.tsx
+USER node
+WORKDIR /app
+RUN cd apps/web && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

@@ -16,7 +16,6 @@ import {
 type PosProductGridProps = {
   products: Product[];
   quantitiesByProduct: Record<string, number>;
-  inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
   isLoading?: boolean;
   onAddProduct: (product: Product) => void;
 };
@@ -24,7 +23,6 @@ type PosProductGridProps = {
 export function PosProductGrid({
   products,
   quantitiesByProduct,
-  inventorySource = 'SALES_INVENTORY',
   isLoading,
   onAddProduct,
 }: PosProductGridProps) {
@@ -79,9 +77,7 @@ export function PosProductGrid({
                 <Badge variant={lowStock || outOfStock ? 'danger' : 'outline'}>
                   {outOfStock
                     ? 'Sin stock'
-                    : inventorySource === 'WAREHOUSE'
-                      ? 'Almacén B2B'
-                      : product.trackInventory
+                    : product.trackInventory
                       ? formatQuantity(availableStock)
                       : 'Servicio'}
                 </Badge>
@@ -92,7 +88,7 @@ export function PosProductGrid({
                   <p className="text-lg font-bold text-zinc-950">{formatCurrency(getProductPrice(product))}</p>
                   <p className="text-xs text-muted-foreground">{product.sku ?? product.barcode ?? 'Sin SKU'}</p>
                 </div>
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground transition group-hover:bg-primary/90">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[#f36c10] text-white transition group-hover:bg-[#d85f0e]">
                   <PackagePlus className="h-4 w-4" />
                 </span>
               </div>

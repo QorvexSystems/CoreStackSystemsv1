@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-24",
+  "scope": "RIVNU ERP E31/E32, VM2 only",
+  "release": "fiscal-speed-20261124",
+  "apiImage": "sha256:bc7dd9be5225d02f9b5ed866eff15995004c1c11c533d2d890d0b7e488769005",
+  "webImage": "sha256:6cfa6eebecd547a6e0a9391a8ccb36c789f4dc4a43d9bba9ab70d68547ea394d",
+  "deployment": {
+    "apiHealthy": true,
+    "webHealthy": true,
+    "healthAndLoginHttp": 200,
+    "progressWithoutAuthenticationHttp": 401,
+    "rollbackDirectory": "/opt/corestack/backups/rivnu-fiscal-speed-20261124.iEMD8L0o"
+  },
+  "verification": {
+    "applicationTestsPassed": 116,
+    "isolatedPostgresTestsPassed": 4,
+    "newFiscalDocumentsCreatedForTesting": 0,
+    "printRegistrationsCreatedForTesting": 0,
+    "existingInvoicePaymentAndItemsUnchanged": true,
+    "authoritativeNextSequencesUnchanged": true,
+    "otherTenantServicesUnchanged": true
+  },
+  "readOnlySamplesMs": {
+    "fullInvoice": [525, 163, 103, 101, 35],
+    "fiscalProgress": [10, 19, 9, 71, 11]
+  },
+  "sampleResponseBytes": { "fullInvoice": 5149, "fiscalProgress": 449 },
+  "cleanup": {
+    "category": "unused rebuildable Docker build cache only",
+    "reportedReclaimedGB": [5.956, 1.098],
+    "databasesVolumesBackupsAndReleaseImagesPreserved": true
+  },
+  "limits": [
+    "No new live sale was issued to benchmark checkout-to-print latency.",
+    "No browser end-to-end test was run in this environment.",
+    "The reviewed core source schedules the first PROCESSING result poll after 10 seconds. The remote production database and worker were not changed; VM3/VM4 operator access is required for further review."
+  ]
+}

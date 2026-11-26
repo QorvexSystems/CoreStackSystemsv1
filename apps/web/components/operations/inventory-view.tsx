@@ -12,7 +12,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { getInventoryMovements, getProducts } from '@/lib/api';
-import { brand } from '@/lib/brand';
 import { translateInventoryMovementType } from '@/lib/display-labels';
 import { formatDate } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
@@ -44,7 +43,7 @@ export function InventoryView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Inventario"
-        description={`Stock y movimientos de ${brand.name} consultados directamente desde PostgreSQL.`}
+        description="Stock y movimientos de Ferreteria RIVNU consultados directamente desde PostgreSQL."
       />
 
       <section className="grid gap-4 md:grid-cols-3">

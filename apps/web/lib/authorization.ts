@@ -39,6 +39,10 @@ export function isAccountantSession(session: AuthSession | null | undefined) {
   return session?.role === 'ACCOUNTANT';
 }
 
+export function canCreateSuppliers(session: AuthSession | null | undefined) {
+  return isAdminSession(session) || isAccountantSession(session);
+}
+
 export function canTakeOrders(session: AuthSession | null | undefined) {
   return Boolean(isAdminSession(session) || session?.role === 'ORDER_TAKER');
 }
@@ -46,6 +50,10 @@ export function canTakeOrders(session: AuthSession | null | undefined) {
 export function canAccessPath(session: AuthSession | null | undefined, pathname: string) {
   if (!session) {
     return false;
+  }
+
+  if (pathname === '/tax-identity-approvals' || pathname.startsWith('/tax-identity-approvals/')) {
+    return isAdminSession(session);
   }
 
   if (isAccountantSession(session)) {
@@ -72,6 +80,13 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
     return true;
   }
 
+  if (pathname.startsWith('/invoices/') && pathname.endsWith('/print')) {
+    // The API decides whether this is the cashier's first print or a
+    // permission-gated reprint. POS cashiers still need to reach this route
+    // immediately after completing their own sale.
+    return Boolean(session.permissions.canUsePos || session.permissions.canReprintReceipt);
+  }
+
   if (session.permissions.canUsePos && (pathname === '/pos' || pathname.startsWith('/pos/'))) {
     return true;
   }
@@ -80,11 +95,7 @@ export function canAccessPath(session: AuthSession | null | undefined, pathname:
     return true;
   }
 
-  return Boolean(
-    session.permissions.canReprintReceipt &&
-    pathname.startsWith('/invoices/') &&
-    pathname.endsWith('/print'),
-  );
+  return false;
 }
 
 export function getDefaultPathForSession(session: AuthSession | null | undefined) {

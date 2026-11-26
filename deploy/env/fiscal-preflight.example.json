@@ -1,0 +1,5 @@
+{
+  "tenantId": "REPLACE_WITH_REAL_ERP_TENANT_ID",
+  "issuerRnc": "REPLACE_WITH_AUTHORIZED_TEST_ISSUER_RNC",
+  "environment": "certification"
+}

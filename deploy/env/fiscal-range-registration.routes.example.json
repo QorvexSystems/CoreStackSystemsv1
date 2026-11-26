@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "tenantId": "cmqn0r66a0002lit0vxbzq5l4",
+      "issuerRnc": "40220429126",
+      "origin": "https://10.0.0.1:4083",
+      "tokenFile": "/run/secrets/fiscal-range-registration/rivnu.token",
+      "caFile": "/run/secrets/fiscal-range-registration/rivnu-ca.crt"
+    }
+  ]
+}

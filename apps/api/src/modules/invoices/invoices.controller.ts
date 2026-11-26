@@ -36,6 +36,20 @@ export class InvoicesController {
     return this.invoicesService.findOne(tenantId, id);
   }
 
+  @Get(':id/fiscal-progress')
+  fiscalProgress(@TenantId() tenantId: string, @Param('id') id: string) {
+    return this.invoicesService.fiscalProgress(tenantId, id);
+  }
+
+  @Post(':id/print')
+  registerPrint(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.invoicesService.registerPrint(tenantId, user, id);
+  }
+
   @Patch(':id')
   @Roles(Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN, Role.ADMIN)
   update(

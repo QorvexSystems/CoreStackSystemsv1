@@ -9,8 +9,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { acceptSalesOrder, cancelSalesOrder, getSalesOrders, type SalesOrder } from '@/lib/api';
-import { brand } from '@/lib/brand';
+import { acceptSalesOrder, cancelSalesOrder, getQuotations, type SalesOrder } from '@/lib/api';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
 import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
@@ -32,7 +31,7 @@ export function QuotationsView() {
 
   const quotationsQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'quotations-all'],
-    queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? ''),
+    queryFn: () => getQuotations(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
 
@@ -143,7 +142,7 @@ export function QuotationsView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Cotizaciones"
-        description={`Gestión centralizada de cotizaciones ${brand.name}: pendientes, aceptadas y canceladas.`}
+        description="Gestion centralizada de cotizaciones RIVNU: pendientes, aceptadas y canceladas."
       />
 
       <Card>
@@ -178,6 +177,10 @@ export function QuotationsView() {
           {quotationsQuery.isLoading ? (
             <p className="rounded-md bg-zinc-50 px-3 py-4 text-sm text-muted-foreground">
               Cargando cotizaciones...
+            </p>
+          ) : quotationsQuery.isError ? (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-4 text-sm text-red-700">
+              No se pudieron cargar las cotizaciones. Vuelve a intentarlo.
             </p>
           ) : activeOrders.length ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -294,7 +297,7 @@ function QuotationCard({
       <div className="mt-4 border-t border-zinc-100 pt-3">
         <div className="mb-3 flex items-center justify-between gap-3">
           <span className="text-xs text-muted-foreground">{order.items.length} producto(s)</span>
-          <strong className="text-lg font-extrabold text-primary">
+          <strong className="text-lg font-extrabold text-[#f36c10]">
             {formatCurrency(Number(order.total))}
           </strong>
         </div>
@@ -304,7 +307,7 @@ function QuotationCard({
             <>
               <Button
                 type="button"
-                className="text-primary-foreground"
+                className="bg-[#f36c10] text-white hover:bg-[#d85f0e]"
                 size="sm"
                 onClick={onAccept}
                 disabled={isAccepting}

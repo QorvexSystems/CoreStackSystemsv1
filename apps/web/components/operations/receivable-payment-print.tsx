@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { getReceivablePayment } from '@/lib/api';
-import { brand } from '@/lib/brand';
+import { getInvoiceCustomerName } from '@/lib/invoice-customer';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { SessionRequired, useCurrentSession } from './session-required';
 
@@ -58,6 +58,9 @@ export function ReceivablePaymentPrint({
   const payment = paymentQuery.data;
   const invoice = payment.invoice;
   const customer = invoice.customer;
+  const fiscalCustomer = invoice.fiscalCustomerSnapshot;
+  const customerDocumentType = fiscalCustomer?.documentType ?? customer?.documentType;
+  const customerDocumentNumber = fiscalCustomer?.documentNumber ?? customer?.documentNumber;
   const cancelled = payment.status === 'CANCELLED';
 
   return (
@@ -88,11 +91,11 @@ export function ReceivablePaymentPrint({
 
         <header className="flex flex-col gap-5 border-b border-zinc-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#f36c10]">
               Recibo de abono
             </p>
             <h2 className="mt-2 text-2xl font-bold">{session.tenantName}</h2>
-            <p className="mt-1 text-sm text-zinc-600">{brand.name}</p>
+            <p className="mt-1 text-sm text-zinc-600">Ferretería RIVNU</p>
           </div>
           <div className="text-sm sm:text-right">
             <p className="font-semibold">{payment.receiptNumber ?? 'Recibo sin numeración'}</p>
@@ -105,11 +108,11 @@ export function ReceivablePaymentPrint({
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">Recibido de</p>
             <p className="mt-1 text-lg font-semibold">
-              {customer?.name ?? 'Cliente no disponible'}
+              {getInvoiceCustomerName(invoice, 'Cliente no disponible')}
             </p>
-            {customer?.documentNumber ? (
+            {customerDocumentNumber ? (
               <p className="text-sm">
-                {customer.documentType}: {customer.documentNumber}
+                {customerDocumentType}: {customerDocumentNumber}
               </p>
             ) : null}
             {customer?.phone ? <p className="text-sm">Teléfono: {customer.phone}</p> : null}
@@ -117,6 +120,7 @@ export function ReceivablePaymentPrint({
           <div className="sm:text-right">
             <p className="text-xs uppercase tracking-wide text-zinc-500">Aplicado a</p>
             <p className="mt-1 font-semibold">Factura {invoice.invoiceNumber}</p>
+            <p className="text-sm">NCF: {invoice.ncf ?? '-'}</p>
             <p className="text-sm">Emitida: {formatDate(invoice.issuedAt ?? invoice.createdAt)}</p>
             <p className="text-sm">Vence: {formatDate(invoice.dueDate)}</p>
           </div>

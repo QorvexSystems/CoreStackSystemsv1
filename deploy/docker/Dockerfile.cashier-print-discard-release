@@ -1,0 +1,19 @@
+# Extend only the deployed RIVNU release. Do not rebuild unrelated applications.
+ARG RIVNU_COMPILED_IMAGE=corestack/rivnu-web:unified-fiscal-ui-20261102
+FROM ${RIVNU_COMPILED_IMAGE} AS build
+USER root
+COPY --chown=node:node apps/api/src/modules/orders/orders.service.ts /app/apps/api/src/modules/orders/orders.service.ts
+COPY --chown=node:node apps/web/components/operations/pos-view.tsx /app/apps/web/components/operations/pos-view.tsx
+COPY --chown=node:node apps/web/components/operations/pos/pos-cart.tsx /app/apps/web/components/operations/pos/pos-cart.tsx
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build \
+    && cd ../web && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+
+FROM build AS api
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

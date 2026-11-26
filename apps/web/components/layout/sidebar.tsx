@@ -3,7 +3,6 @@
 import {
   Activity,
   BadgeDollarSign,
-  Barcode,
   Boxes,
   ChevronDown,
   ChevronRight,
@@ -20,6 +19,7 @@ import {
   RotateCcw,
   ScrollText,
   Settings,
+  ShieldCheck,
   ShoppingCart,
   Users,
   type LucideIcon,
@@ -29,7 +29,6 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { getSession, type AuthSession } from '@/lib/auth-session';
 import { canTakeOrders, isAccountantSession, isAdminSession } from '@/lib/authorization';
-import { brand, platform } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 
 type NavigationSectionId = 'main' | 'accounting' | 'secondary' | 'logs' | 'settings';
@@ -70,7 +69,6 @@ export const navigation: NavigationItem[] = [
   },
   { name: 'Cotizaciones', href: '/quotations', icon: FileText, section: 'main' },
   { name: 'Productos', href: '/products', icon: Package, section: 'main' },
-  { name: 'Códigos de barras', href: '/barcodes', icon: Barcode, section: 'main' },
   { name: 'Clientes', href: '/customers', icon: Users, section: 'main' },
   { name: 'Facturas', href: '/invoices', icon: FileText, primary: true, section: 'main' },
   { name: 'Devoluciones', href: '/returns', icon: RotateCcw, primary: true, section: 'main' },
@@ -95,18 +93,22 @@ export const navigation: NavigationItem[] = [
     section: 'accounting',
   },
   { name: 'Suplidores', href: '/suppliers', icon: Users, section: 'secondary' },
-  { name: 'Almacén', href: '/warehouse', icon: Boxes, section: 'secondary' },
   {
     name: 'Aprobaciones de crédito',
     href: '/credit-approvals',
     icon: BadgeDollarSign,
     section: 'secondary',
   },
+  {
+    name: 'Validaciones fiscales',
+    href: '/tax-identity-approvals',
+    icon: ShieldCheck,
+    section: 'secondary',
+  },
   { name: 'Empleados', href: '/employees', icon: Users, section: 'secondary' },
   { name: 'Logs operativos', href: '/operations/logs', icon: Activity, section: 'logs' },
   { name: 'Movimiento de caja', href: '/cash/logs', icon: ClipboardList, section: 'logs' },
   { name: 'Sesiones', href: '/cash/sessions', icon: ScrollText, section: 'logs' },
-  { name: 'Cajas', href: '/cash/registers', icon: Landmark, section: 'settings' },
   { name: 'Importaciones', href: '/settings/imports', icon: FileUp, section: 'settings' },
   { name: 'Configuración', href: '/settings', icon: Settings, section: 'settings' },
 ];
@@ -164,9 +166,7 @@ export function SidebarContent({
     if (!activeSection) return;
 
     const groupId = activeSection.id as NavigationGroupId;
-    setExpandedGroups((current) =>
-      current[groupId] ? current : { ...current, [groupId]: true },
-    );
+    setExpandedGroups((current) => (current[groupId] ? current : { ...current, [groupId]: true }));
   }, [pathname]);
 
   return (
@@ -178,11 +178,15 @@ export function SidebarContent({
         )}
       >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm">
-          <img src={brand.logoPath} alt="" className="h-full w-full object-contain p-1" />
+          <img
+            src="/tenants/RIVNU.jpeg"
+            alt="Logo Ferretería RIVNU"
+            className="h-full w-full object-cover"
+          />
         </div>
         <div className={cn('min-w-0', collapsed && 'hidden')}>
-          <p className="truncate text-sm font-semibold">{brand.name}</p>
-          <p className="truncate text-xs text-slate-400">{brand.tagline}</p>
+          <p className="truncate text-sm font-semibold">Ferretería RIVNU</p>
+          <p className="truncate text-xs text-slate-400">Powered by CoreStack</p>
         </div>
       </div>
 
@@ -192,13 +196,17 @@ export function SidebarContent({
             type="button"
             onClick={onToggle}
             className={cn(
-              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400',
               collapsed && 'justify-center px-2',
             )}
             aria-label={collapsed ? 'Desplegar menú' : 'Contraer menú'}
             title={collapsed ? 'Desplegar menú' : undefined}
           >
-            {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            {collapsed ? (
+              <PanelLeftOpen className="h-5 w-5" />
+            ) : (
+              <PanelLeftClose className="h-5 w-5" />
+            )}
             <span className={cn(collapsed && 'hidden')}>Contraer menú</span>
           </button>
         </div>
@@ -250,13 +258,23 @@ export function SidebarContent({
       </nav>
 
       <div className={cn('shrink-0 border-t border-slate-800 p-4', collapsed && 'px-3')}>
-        <div className={cn('rounded-lg border border-slate-800 bg-slate-900/80 p-3', collapsed && 'px-2.5')}>
-          <div className={cn('flex items-center gap-2 text-sm font-medium', collapsed && 'justify-center')}>
-            <img src={platform.logoPath} alt="" className="h-5 w-5 rounded object-cover" />
-            <span className={cn(collapsed && 'hidden')}>{platform.name}</span>
+        <div
+          className={cn(
+            'rounded-lg border border-slate-800 bg-slate-900/80 p-3',
+            collapsed && 'px-2.5',
+          )}
+        >
+          <div
+            className={cn(
+              'flex items-center gap-2 text-sm font-medium',
+              collapsed && 'justify-center',
+            )}
+          >
+            <Boxes className="h-4 w-4 text-[#f36c10]" />
+            <span className={cn(collapsed && 'hidden')}>CoreStack Core</span>
           </div>
           <p className={cn('mt-2 text-xs leading-5 text-slate-400', collapsed && 'hidden')}>
-            {platform.description} para {brand.name}.
+            Plataforma provista por CoreStack. Datos aislados por tenant.
           </p>
         </div>
       </div>
@@ -293,13 +311,13 @@ function SidebarNavigationGroup({
           type="button"
           onClick={() => onExpandedChange(!isExpanded)}
           className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400',
             (isActive || isExpanded) && 'bg-white/[0.08] text-white',
           )}
           aria-expanded={isExpanded}
           aria-controls={`sidebar-section-${section.id}`}
         >
-          <Icon className={cn('h-5 w-5', isActive && 'text-white')} />
+          <Icon className={cn('h-5 w-5', isActive && 'text-[#f36c10]')} />
           <span className="flex-1 text-left">{section.label}</span>
           <ChevronDown
             className={cn('h-4 w-4 transition-transform duration-200', !isExpanded && '-rotate-90')}
@@ -351,14 +369,14 @@ function SidebarNavigationGroup({
         type="button"
         onClick={() => onOpenChange(!isOpen)}
         className={cn(
-          'flex w-full items-center justify-center rounded-lg p-2.5 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+          'flex w-full items-center justify-center rounded-lg p-2.5 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400',
           isActive && 'bg-white/[0.12] text-white shadow-sm',
         )}
         aria-expanded={isOpen}
         aria-label={`${section.label}: mostrar opciones`}
         title={section.label}
       >
-        <Icon className={cn('h-5 w-5', isActive && 'text-white')} />
+        <Icon className={cn('h-5 w-5', isActive && 'text-[#f36c10]')} />
       </button>
 
       {isOpen ? (
@@ -404,7 +422,7 @@ function SidebarNavigationLink({
       href={item.href}
       onClick={onNavigate}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400',
         collapsed && 'justify-center px-2.5',
         isActive
           ? 'bg-white/[0.13] text-white shadow-sm'
@@ -413,12 +431,7 @@ function SidebarNavigationLink({
       title={collapsed ? item.name : undefined}
       aria-current={isActive ? 'page' : undefined}
     >
-      <Icon
-        className={cn(
-          'h-5 w-5 shrink-0',
-          isActive && 'text-white',
-        )}
-      />
+      <Icon className={cn('h-5 w-5 shrink-0', isActive && 'text-[#f36c10]')} />
       <span className={cn('min-w-0 truncate', collapsed && 'hidden')}>{item.name}</span>
     </Link>
   );
@@ -436,16 +449,18 @@ export function MobileNavigation() {
   const quickNavigationIds = new Set(quickNavigation.map((item) => item.href));
   const moreNavigation = visibleNavigation.filter(
     (item) =>
-      !quickNavigationIds.has(item.href) && item.section !== 'accounting' && item.section !== 'logs',
+      !quickNavigationIds.has(item.href) &&
+      item.section !== 'accounting' &&
+      item.section !== 'logs',
   );
   const popoverItems =
     activePopover === 'more'
       ? moreNavigation
-      : sections.find((section) => section.id === activePopover)?.items ?? [];
+      : (sections.find((section) => section.id === activePopover)?.items ?? []);
   const popoverTitle =
     activePopover === 'more'
       ? 'Más opciones'
-      : sections.find((section) => section.id === activePopover)?.label ?? '';
+      : (sections.find((section) => section.id === activePopover)?.label ?? '');
 
   useEffect(() => {
     setActivePopover(null);
@@ -497,14 +512,14 @@ export function MobileNavigation() {
                       href={item.href}
                       onClick={() => setActivePopover(null)}
                       className={cn(
-                        'flex min-h-12 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+                        'flex min-h-12 items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400',
                         isActive
                           ? 'bg-white/[0.14] text-white'
                           : 'text-slate-200 hover:bg-white/[0.08] hover:text-white',
                       )}
                       aria-current={isActive ? 'page' : undefined}
                     >
-                      <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-white')} />
+                      <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-[#f36c10]')} />
                       <span className="min-w-0 truncate">{item.name}</span>
                     </Link>
                   );
@@ -526,7 +541,7 @@ export function MobileNavigation() {
                 onClick={() => setActivePopover(null)}
                 className={cn(
                   'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[0.64rem] font-medium text-muted-foreground transition-colors',
-                  isActive ? 'bg-slate-950 text-white shadow-sm ring-1 ring-white/70' : '',
+                  isActive ? 'bg-slate-950 text-white shadow-sm ring-1 ring-[#f36c10]/70' : '',
                 )}
                 aria-current={isActive ? 'page' : undefined}
               >
@@ -539,7 +554,9 @@ export function MobileNavigation() {
             <MobilePopoverTrigger
               label={accountingSection.label ?? 'Contable'}
               icon={accountingSection.icon ?? Landmark}
-              active={accountingSection.items.some((item) => isNavigationItemActive(pathname, item))}
+              active={accountingSection.items.some((item) =>
+                isNavigationItemActive(pathname, item),
+              )}
               open={activePopover === 'accounting'}
               onClick={() =>
                 setActivePopover((current) => (current === 'accounting' ? null : 'accounting'))
@@ -589,7 +606,7 @@ function MobilePopoverTrigger({
       onClick={onClick}
       className={cn(
         'flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-center text-[0.64rem] font-medium text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        (active || open) && 'bg-slate-950 text-white shadow-sm ring-1 ring-white/70',
+        (active || open) && 'bg-slate-950 text-white shadow-sm ring-1 ring-[#f36c10]/70',
       )}
       aria-expanded={open}
       aria-label={`${label}: mostrar opciones`}
@@ -617,7 +634,6 @@ export function getVisibleNavigation(session: AuthSession | null) {
       '/customers',
       '/invoices',
       '/suppliers',
-      '/warehouse',
       '/purchase-orders',
       '/supplier-invoices',
       '/payables',

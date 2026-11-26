@@ -11,7 +11,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { closeCashSession, getCashRegisters, getCashSessions, openCashSession } from '@/lib/api';
-import { brand } from '@/lib/brand';
 import { isAdminSession } from '@/lib/authorization';
 import {
   getStatusVariant,
@@ -19,6 +18,8 @@ import {
   translatePaymentMethod,
   translateStatus,
 } from '@/lib/display-labels';
+import { getInvoiceCustomerName } from '@/lib/invoice-customer';
+import { getOrderClientLabel } from '@/lib/order-client';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import {
@@ -172,7 +173,7 @@ export function CashSessionsView() {
     <div className="space-y-6">
       <ModuleHeader
         title="Sesiones de caja"
-        description={`Apertura, control y cierre de caja de ${brand.name}.`}
+        description="Apertura, control y cierre de caja de Ferreteria RIVNU."
       />
 
       {canOpenCashSession ? (
@@ -589,7 +590,7 @@ function CashSessionReport({
                           : 'Venta directa admin'}
                       </td>
                       <td className="px-3 py-2 font-medium">{invoice.invoiceNumber}</td>
-                      <td className="px-3 py-2">{invoice.customer?.name ?? 'Consumidor final'}</td>
+                      <td className="px-3 py-2">{getInvoiceCustomerName(invoice)}</td>
                       <td className="px-3 py-2">{invoice.issuedBy?.name ?? 'Empleado'}</td>
                       <td className="px-3 py-2">{translatePaymentMethod(invoice.paymentMethod)}</td>
                       <td className="px-3 py-2 text-right">
@@ -628,7 +629,9 @@ function CashSessionReport({
                   salesOrders.map((order) => (
                     <tr key={order.id} className="border-b border-border last:border-b-0">
                       <td className="px-3 py-2 font-medium">{order.orderNumber}</td>
-                      <td className="px-3 py-2">{order.customer?.name ?? 'Consumidor final'}</td>
+                      <td className="px-3 py-2">
+                        {order.fiscalCustomerSnapshot?.name || getOrderClientLabel(order)}
+                      </td>
                       <td className="px-3 py-2">
                         <Badge variant={getStatusVariant(order.status)}>
                           {translateStatus(order.status)}
@@ -767,8 +770,8 @@ const reportMetricClasses: Record<
     value: 'text-emerald-950',
   },
   order: {
-    card: 'border-primary/25 bg-primary/10',
-    label: 'text-primary',
+    card: 'border-[#f36c10]/25 bg-[#f36c10]/10',
+    label: 'text-[#9a3f05]',
     value: 'text-[#7a3103]',
   },
   quote: {

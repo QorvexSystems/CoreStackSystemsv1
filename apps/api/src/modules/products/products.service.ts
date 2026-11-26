@@ -10,15 +10,16 @@ import {
   EmployeeLogAction,
   InventoryMovementType,
   Prisma,
-  ProductInventoryDestination,
   ProductStatus,
   ProductUnit,
+  TaxCategory,
 } from '@qorvex/database';
 import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getBarcodeLookupCandidates, normalizeBarcodeInput } from '../../common/utils/barcode';
 import { AuditService } from '../audit/audit.service';
+import { resolveFiscalItemKind } from '../fiscal-documents/fiscal-item-kind';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
@@ -26,6 +27,11 @@ const internalBarcodePrefix = 'QV';
 const defaultProductImageBucket = 'product-images';
 const maxProductImageSize = 5 * 1024 * 1024;
 const allowedProductImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const expectedTaxRateByCategory: Record<TaxCategory, string> = {
+  [TaxCategory.ITBIS_18]: '0.18',
+  [TaxCategory.ITBIS_16]: '0.16',
+  [TaxCategory.EXEMPT]: '0',
+};
 
 export type UploadedProductImageFile = {
   originalname: string;
@@ -46,7 +52,6 @@ export class ProductsService {
     return this.prisma.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         ...(q ? { OR: this.searchConditions(q) } : {}),
       },
       include: {
@@ -66,7 +71,6 @@ export class ProductsService {
     return this.prisma.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
         OR: this.searchConditions(query),
       },
@@ -84,7 +88,6 @@ export class ProductsService {
     const product = await this.prisma.product.findFirst({
       where: {
         tenantId,
-        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
         status: ProductStatus.ACTIVE,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
@@ -127,6 +130,9 @@ export class ProductsService {
     const cost = dto.cost === undefined ? undefined : new Prisma.Decimal(dto.cost);
     const barcodeWasGenerated = !dto.barcode?.trim();
     const unit = dto.unit ?? ProductUnit.UNIT;
+    const taxCategory =
+      dto.taxCategory ?? this.inferTaxCategory(dto.taxRate) ?? TaxCategory.ITBIS_18;
+    const taxRate = this.resolveTaxRate(taxCategory, dto.taxRate);
 
     this.ensureQuantityMatchesUnit(unit, stock, 'stock');
     this.ensureQuantityMatchesUnit(unit, dto.minStock ?? 0, 'stock minimo');
@@ -152,10 +158,13 @@ export class ProductsService {
           salePrice: price,
           cost,
           margin: cost ? price.sub(cost).div(price).toDecimalPlaces(4) : undefined,
-          taxCategory: dto.taxCategory,
-          taxRate: dto.taxRate ?? 0.18,
+          taxCategory,
+          taxRate,
+          fiscalItemKind: resolveFiscalItemKind({
+            fiscalItemKind: dto.fiscalItemKind,
+            unit,
+          }),
           trackInventory: dto.trackInventory ?? true,
-          inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
           stock,
           minStock: dto.minStock ?? 0,
           status: dto.status,
@@ -214,11 +223,7 @@ export class ProductsService {
 
   async findOne(tenantId: string, id: string) {
     const product = await this.prisma.product.findFirst({
-      where: {
-        id,
-        tenantId,
-        inventoryDestination: ProductInventoryDestination.SALES_INVENTORY,
-      },
+      where: { id, tenantId },
       include: {
         category: true,
       },
@@ -257,6 +262,17 @@ export class ProductsService {
     const nextStock = dto.stock ?? currentProduct.stock;
     const nextMinStock = dto.minStock ?? currentProduct.minStock;
     const shouldTrackInventory = dto.trackInventory ?? currentProduct.trackInventory;
+    const nextTaxCategory =
+      dto.taxCategory ?? this.inferTaxCategory(dto.taxRate) ?? currentProduct.taxCategory;
+    const nextTaxRate = this.resolveTaxRate(
+      nextTaxCategory,
+      dto.taxRate ?? (dto.taxCategory === undefined ? currentProduct.taxRate : undefined),
+    );
+    const nextFiscalItemKind = resolveFiscalItemKind({
+      fiscalItemKind:
+        dto.fiscalItemKind === undefined ? currentProduct.fiscalItemKind : dto.fiscalItemKind,
+      unit: nextUnit,
+    });
     const shouldCreateStockMovement =
       dto.stock !== undefined && dto.stock !== currentProduct.stock && shouldTrackInventory;
 
@@ -283,8 +299,9 @@ export class ProductsService {
             nextPrice && nextCost && !nextPrice.isZero()
               ? nextPrice.sub(nextCost).div(nextPrice).toDecimalPlaces(4)
               : undefined,
-          taxCategory: dto.taxCategory,
-          taxRate: dto.taxRate,
+          taxCategory: nextTaxCategory,
+          taxRate: nextTaxRate,
+          fiscalItemKind: nextFiscalItemKind,
           trackInventory: dto.trackInventory,
           stock: dto.stock,
           minStock: dto.minStock,
@@ -704,6 +721,31 @@ export class ProductsService {
     if (requiresWholeQuantity(unit) && !Number.isInteger(quantity)) {
       throw new BadRequestException(`Product unit ${unit} requires whole quantities for ${field}.`);
     }
+  }
+
+  private resolveTaxRate(taxCategory: TaxCategory, taxRate: number | Prisma.Decimal | undefined) {
+    const expectedRate = new Prisma.Decimal(expectedTaxRateByCategory[taxCategory]);
+    const resolvedRate = taxRate === undefined ? expectedRate : new Prisma.Decimal(taxRate);
+
+    if (!resolvedRate.eq(expectedRate)) {
+      throw new BadRequestException(
+        `Tax category ${taxCategory} requires tax rate ${expectedRate.toFixed(2)}.`,
+      );
+    }
+
+    return expectedRate;
+  }
+
+  private inferTaxCategory(taxRate: number | Prisma.Decimal | undefined) {
+    if (taxRate === undefined) {
+      return undefined;
+    }
+
+    const rate = new Prisma.Decimal(taxRate);
+
+    return (Object.entries(expectedTaxRateByCategory) as Array<[TaxCategory, string]>).find(
+      ([, expectedRate]) => rate.eq(expectedRate),
+    )?.[0];
   }
 }
 

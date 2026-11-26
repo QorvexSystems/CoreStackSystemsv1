@@ -2,15 +2,20 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
 import { Providers } from './providers';
-import { brand } from '@/lib/brand';
 
 export const metadata: Metadata = {
-  title: brand.name,
-  description: `${brand.descriptor}. Operación, facturación e inventario.`,
+  title: 'Ferreteria RIVNU',
+  description: 'POS, facturacion e inventario para Ferreteria RIVNU.',
   icons: {
-    icon: [{ url: brand.faviconPath, type: 'image/png' }],
-    shortcut: brand.faviconPath,
-    apple: brand.faviconPath,
+    icon: '/favicon.ico',
+    shortcut: '/favicon.ico',
+    apple: [
+      {
+        url: '/apple-touch-icon.png',
+        sizes: '180x180',
+        type: 'image/png',
+      },
+    ],
   },
 };
 

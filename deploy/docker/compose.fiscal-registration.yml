@@ -1,0 +1,46 @@
+name: corestack-fiscal-registration
+services:
+  fiscal-registration:
+    image: ${FISCAL_REGISTRATION_IMAGE:?Set a reviewed registration image}
+    command: [node, --experimental-strip-types, src/registration-main.ts]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    ports:
+      - "127.0.0.1:4081:8443"
+    volumes:
+      - /opt/corestack/fe/config/fiscal-registration.json:/run/config/fiscal-registration.json:ro
+      - /opt/corestack/fe/config/internal-root-2026.crt:/run/secrets/postgresql-ca.crt:ro
+      - /opt/corestack/secrets/rivnu-fe-pre-postgresql.password:/run/secrets/postgresql-password:ro
+      - /opt/corestack/secrets/fiscal-registration.token:/run/secrets/fiscal_registration_token:ro
+      - /opt/corestack/fe/config/rivnu-fe-registration-2026.crt:/run/secrets/registration-server.crt:ro
+      - /opt/corestack/secrets/rivnu-fe-registration-tls.key:/run/secrets/registration-server.key:ro
+    healthcheck:
+      test: [CMD, node, --experimental-strip-types, src/registration-health.ts]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    networks: [fiscal-network]
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+networks:
+  fiscal-network:
+    external: true

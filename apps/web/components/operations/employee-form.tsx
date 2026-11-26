@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createEmployee, getEmployee, updateEmployee } from '@/lib/api';
-import { brand } from '@/lib/brand';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
 
@@ -159,7 +158,7 @@ export function EmployeeForm({ employeeId }: { employeeId?: string }) {
     <div className="space-y-6">
       <ModuleHeader
         title={employeeId ? 'Editar empleado' : 'Nuevo empleado'}
-        description={`Controla accesos operativos de ${brand.name} sin mezclar usuarios de otras empresas.`}
+        description="Controla accesos operativos de Ferreteria RIVNU sin mezclar usuarios internos de CoreStack."
       />
 
       <Card>

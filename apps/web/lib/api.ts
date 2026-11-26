@@ -6,22 +6,6 @@ export type Tenant = {
   slug: string;
 };
 
-export type FiscalSequenceAlert = {
-  id: string;
-  documentType: string;
-  prefix: string;
-  nextNumber: number;
-  endNumber: number;
-  remaining: number;
-  threshold: number;
-  validUntil: string | null;
-  status: string;
-  severity: 'warning' | 'critical';
-  expired: boolean;
-  exhausted: boolean;
-  missing?: boolean;
-};
-
 export type DashboardSummary = {
   totalBilledMonth: number;
   totalBilledToday: number;
@@ -92,7 +76,21 @@ export type DashboardSummary = {
   }>;
   recentCashMovements: CashMovement[];
   recentEmployeeLogs: EmployeeLog[];
-  fiscalSequenceAlerts: FiscalSequenceAlert[];
+  fiscalSequenceAlerts: Array<{
+    id: string;
+    documentType: string;
+    prefix: string;
+    status: FiscalSequenceStatus | 'MISSING';
+    startNumber: number;
+    nextNumber: number;
+    endNumber: number;
+    remaining: number;
+    authorizedCount: number;
+    alertThreshold: number;
+    severity: 'WARNING' | 'CRITICAL';
+    validUntil: string | null;
+    hasQueuedReplacement: boolean;
+  }>;
   employeeSummary: {
     activeEmployees: number;
     openCashSessions: number;
@@ -152,6 +150,7 @@ export type ProductSalesMetric = {
   sku: string | null;
   brand: string | null;
   unit: string;
+  categoryId: string | null;
   categoryName: string;
   currentPrice: number;
   quantitySold: number;
@@ -162,11 +161,29 @@ export type ProductSalesMetric = {
 
 export type ProductSalesRanking = {
   generatedAt: string;
+  range: {
+    from: string | null;
+    to: string | null;
+  };
   productCount: number;
   productsWithSales: number;
   productsWithoutSales: number;
   mostSold: ProductSalesMetric[];
   leastSold: ProductSalesMetric[];
+};
+
+export type FiscalSequenceOperationalAlert = DashboardSummary['fiscalSequenceAlerts'][number];
+
+export type OperationalAlertsSummary = {
+  pendingInvoices: number;
+  lowStockProducts: number;
+  openCashSessions: number;
+  fiscalSequenceAlerts: FiscalSequenceOperationalAlert[];
+};
+
+export type ProductSalesQuery = {
+  from?: string;
+  to?: string;
 };
 
 export type LoginResponse = {
@@ -188,10 +205,163 @@ export type LoginResponse = {
   }>;
 };
 
+export type CustomerDocumentType = 'RNC' | 'CEDULA' | 'PASSPORT' | 'CONSUMER_FINAL' | 'OTHER';
+export type TaxIdentityDocumentType = 'RNC' | 'CEDULA';
+export type TaxIdentityLookupOutcome =
+  | 'VERIFIED'
+  | 'NOT_FOUND'
+  | 'NON_ACTIVE'
+  | 'REGISTRY_STALE'
+  | 'UNAVAILABLE';
+export type TaxIdentityLookup = {
+  outcome: TaxIdentityLookupOutcome;
+  documentType: TaxIdentityDocumentType;
+  documentNumber: string;
+  fiscalName: string | null;
+  registryStatus: string | null;
+  source: string | null;
+  sourceUpdatedAt: string | null;
+  checkedAt: string;
+  overrideId?: string;
+};
+export type VerifiedTaxIdentityEvidence = {
+  outcome: 'VERIFIED' | 'MANUAL_OVERRIDE';
+  documentType: TaxIdentityDocumentType;
+  documentNumber: string;
+  fiscalName: string;
+  source: 'DGII_OFFICIAL' | 'TEST_FIXTURE' | 'MANUAL_OVERRIDE';
+  sourceUpdatedAt: string | null;
+  verifiedAt: string;
+  registryStatus: string;
+  overrideId?: string;
+};
+export type ManualTaxIdentityEntryEvidence = {
+  outcome: 'UNVERIFIED_MANUAL';
+  documentType: TaxIdentityDocumentType;
+  documentNumber: string;
+  fiscalName: string;
+  source: 'MANUAL_ENTRY';
+  sourceUpdatedAt: string | null;
+  registryStatus: string;
+  registryOutcome: 'NOT_FOUND';
+  registryCheckedAt: string;
+  recordedAt: string;
+};
+export type TaxIdentityVerificationEvidence =
+  | VerifiedTaxIdentityEvidence
+  | ManualTaxIdentityEntryEvidence;
+export type FiscalCustomerVerificationEvidence = Pick<
+  VerifiedTaxIdentityEvidence,
+  'outcome' | 'source' | 'sourceUpdatedAt' | 'verifiedAt' | 'registryStatus' | 'overrideId'
+>;
+export type TaxIdentityContextType = 'POS_ORDER';
+export type TaxIdentityOverrideResult = TaxIdentityLookup & {
+  overrideId: string;
+  expiresAt: string;
+};
+export type TaxIdentityApprovalRequestStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'EXPIRED'
+  | 'CANCELLED';
+export type TaxIdentityApprovalRequest = {
+  id: string;
+  status: TaxIdentityApprovalRequestStatus;
+  contextType: TaxIdentityContextType;
+  contextId: string;
+  documentType: TaxIdentityDocumentType;
+  documentNumber: string;
+  documentLast4: string;
+  fiscalName: string;
+  reason: string | null;
+  registryOutcome: Exclude<TaxIdentityLookupOutcome, 'VERIFIED'>;
+  registrySource: string | null;
+  registryCheckedAt: string;
+  registrySourceUpdatedAt: string | null;
+  requestedAt: string;
+  expiresAt: string;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  requestedBy: {
+    id: string;
+    name: string;
+    email?: string;
+  };
+  decidedBy: {
+    id: string;
+    name: string;
+    email?: string;
+  } | null;
+  override: {
+    overrideId: string;
+    expiresAt: string;
+    usedAt: string | null;
+  } | null;
+};
+export type CreateTaxIdentityApprovalRequestPayload = {
+  contextType: 'POS_ORDER';
+  contextId: string;
+  documentType: TaxIdentityDocumentType;
+  documentNumber: string;
+  fiscalName: string;
+  reason?: string;
+};
+export type FiscalCustomerSnapshot = {
+  id: string | null;
+  name: string;
+  operationalName?: string;
+  documentType: CustomerDocumentType;
+  documentNumber: string;
+  verification?: FiscalCustomerVerificationEvidence;
+};
+export type FiscalDocumentPurpose = 'CONSUMER' | 'FISCAL_CREDIT';
+export type LocalNcfDocumentType = 'CONSUMER_02' | 'FISCAL_CREDIT_01';
+export type InvoiceDocumentType =
+  | LocalNcfDocumentType
+  | 'LOCAL_SALE_NOTE'
+  | 'CONSUMER_ELECTRONIC_32'
+  | 'FISCAL_CREDIT_ELECTRONIC_31'
+  | 'DEBIT_NOTE_ELECTRONIC_33'
+  | 'CREDIT_NOTE_ELECTRONIC_34';
+export type InvoiceFiscalStatus =
+  | 'NOT_APPLICABLE'
+  | 'PENDING_SEQUENCE'
+  | 'LOCAL_ISSUED'
+  | 'LEGACY_UNVERIFIED'
+  | 'READY_TO_SEND'
+  | 'PENDING_SIGNATURE'
+  | 'SIGNED'
+  | 'SENT'
+  | 'ACCEPTED'
+  | 'REJECTED'
+  | 'FAILED'
+  | 'CANCELLED';
+export type ProductUnit =
+  | 'UNIT'
+  | 'BOX'
+  | 'PACK'
+  | 'BAG'
+  | 'ROLL'
+  | 'METER'
+  | 'FOOT'
+  | 'YARD'
+  | 'POUND'
+  | 'GALLON'
+  | 'LITER'
+  | 'KILOGRAM'
+  | 'QUINTAL'
+  | 'SERVICE';
+export type PosPaymentMethod = 'CASH' | 'CARD' | 'TRANSFER';
+export type PaymentMethod = PosPaymentMethod | 'CHECK' | 'OTHER';
+export type FiscalSequenceStatus = 'ACTIVE' | 'INACTIVE' | 'EXPIRED' | 'EXHAUSTED';
+export type ElectronicFiscalRangeSyncStatus = 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED';
+export type ReturnRequestStatus = 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'COMPLETED' | 'CANCELLED';
+
 export type Customer = {
   id: string;
   name: string;
-  documentType: string;
+  documentType: CustomerDocumentType;
   documentNumber: string | null;
   email: string | null;
   phone: string | null;
@@ -204,8 +374,29 @@ export type Customer = {
   creditStatus: 'ACTIVE' | 'BLOCKED';
   creditEnabledAt: string | null;
   creditEnabledById: string | null;
+  taxIdentityVerification: TaxIdentityVerificationEvidence | null;
   createdAt: string;
 };
+
+export type UpdatePosOrderFiscalDetailsPayload = {
+  fiscalPurpose: FiscalDocumentPurpose;
+  invoiceDocumentType?: Extract<
+    InvoiceDocumentType,
+    | 'LOCAL_SALE_NOTE'
+    | 'CONSUMER_02'
+    | 'FISCAL_CREDIT_01'
+    | 'CONSUMER_ELECTRONIC_32'
+    | 'FISCAL_CREDIT_ELECTRONIC_31'
+  >;
+  /** Compatibility-only; omit it to preserve the customer already linked to the order. */
+  customerId?: string | null;
+  documentType?: 'RNC' | 'CEDULA';
+  documentNumber?: string;
+  taxIdentityOverrideId?: string;
+};
+
+export type ProductTaxCategory = 'ITBIS_18' | 'ITBIS_16' | 'EXEMPT';
+export type FiscalItemKind = 'GOOD' | 'SERVICE';
 
 export type Product = {
   id: string;
@@ -218,15 +409,16 @@ export type Product = {
   description: string | null;
   imageUrl: string | null;
   brand: string | null;
-  unit: string;
+  unit: ProductUnit;
   price: string;
   salePrice: string;
   cost: string | null;
   costWithTax?: string | null;
   margin?: string | null;
+  taxCategory: ProductTaxCategory;
+  fiscalItemKind?: FiscalItemKind | null;
   taxRate: string;
   trackInventory: boolean;
-  inventoryDestination: 'SALES_INVENTORY' | 'WAREHOUSE';
   stock: number;
   reservedStock: number;
   minStock: number;
@@ -236,6 +428,29 @@ export type Product = {
     name: string;
   } | null;
 };
+
+export type CreateProductPayload = {
+  categoryId?: string;
+  name: string;
+  sku?: string;
+  barcode?: string;
+  barcodeType?: string;
+  brand?: string;
+  unit?: ProductUnit;
+  description?: string;
+  imageUrl?: string;
+  price: number;
+  cost?: number;
+  taxCategory?: ProductTaxCategory;
+  fiscalItemKind?: FiscalItemKind | null;
+  taxRate?: number;
+  trackInventory?: boolean;
+  stock: number;
+  minStock: number;
+  status?: string;
+};
+
+export type UpdateProductPayload = Partial<CreateProductPayload>;
 
 export type InventoryMovement = {
   id: string;
@@ -249,53 +464,31 @@ export type InventoryMovement = {
   product: Product;
 };
 
-export type WarehouseStock = {
-  id: string;
-  tenantId: string;
-  productId: string;
-  quantity: number;
-  unitCost: string | null;
-  createdAt: string;
-  updatedAt: string;
-  product: Product;
-};
-
-export type WarehouseMovement = {
-  id: string;
-  type: 'PURCHASE' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
-  quantity: number;
-  previousQuantity: number | null;
-  newQuantity: number | null;
-  unitCost: string | null;
-  reason: string | null;
-  reference: string | null;
-  createdAt: string;
-  product: Pick<Product, 'id' | 'name' | 'sku' | 'barcode' | 'unit'>;
-  createdBy: { id: string; name: string; email: string } | null;
-};
-
-export type WarehouseProductPayload = {
-  name: string;
-  sku?: string;
-  barcode?: string;
-  brand?: string;
-  description?: string;
-  unit?: string;
-  cost?: number;
-  salePrice?: number;
-  initialQuantity?: number;
-};
-
 export type Invoice = {
   id: string;
   tenantId: string;
   customerId: string | null;
   invoiceNumber: string;
-  documentType: string;
+  documentType: InvoiceDocumentType;
   eNcf: string | null;
   ncf: string | null;
+  fiscalSequenceId: string | null;
+  fiscalAuthorizationNumber: string | null;
+  fiscalValidUntil: string | null;
+  fiscalIssuerSnapshot: {
+    rnc: string;
+    legalName: string;
+    commercialName: string;
+    address: string;
+    phone: string;
+    email: string;
+    logoUrl: string | null;
+    pointOfSale: string;
+    pointOfSaleLocation: string | null;
+  } | null;
+  fiscalCustomerSnapshot: FiscalCustomerSnapshot | null;
   status: string;
-  fiscalStatus: string;
+  fiscalStatus: InvoiceFiscalStatus;
   subtotal: string;
   taxTotal: string;
   discountTotal: string;
@@ -305,10 +498,12 @@ export type Invoice = {
   changeAmount: string;
   balance: string;
   paymentMode: 'CASH' | 'CREDIT';
-  paymentMethod: string | null;
+  paymentMethod: PaymentMethod | null;
   dueDate: string | null;
   issuedAt: string | null;
   createdAt: string;
+  /** Present on invoice list/detail responses; POS create responses may omit it. */
+  receiptPrintCount?: number;
   tenant?: {
     id: string;
     name: string;
@@ -318,6 +513,9 @@ export type Invoice = {
     email: string | null;
     phone: string | null;
     address: string | null;
+    branding?: {
+      logoUrl: string | null;
+    } | null;
   };
   customer: Customer | null;
   issuedBy?: {
@@ -325,9 +523,17 @@ export type Invoice = {
     name: string;
     email: string;
   } | null;
+  cashSession?: {
+    id: string;
+    cashRegister: {
+      id: string;
+      name: string;
+      location: string | null;
+    };
+  } | null;
   payments?: Array<{
     id: string;
-    method: string;
+    method: PaymentMethod;
     amount: string | number;
     status: string;
     receiptNumber?: string | null;
@@ -342,13 +548,14 @@ export type Invoice = {
     orderNumber: string;
     status: string;
   } | null;
-  cashSession?: {
+  electronicDocument?: {
     id: string;
-    cashRegister: {
-      id: string;
-      name: string;
-      location: string | null;
-    };
+    provider: string;
+    status: string;
+    trackId: string | null;
+    externalId: string | null;
+    errorMessage: string | null;
+    updatedAt: string;
   } | null;
   items: Array<{
     id: string;
@@ -356,8 +563,10 @@ export type Invoice = {
     sku: string | null;
     barcode: string | null;
     quantity: string;
+    unit: ProductUnit;
     unitPrice: string;
     discountTotal: string;
+    taxCategory: ProductTaxCategory;
     taxRate: string;
     taxTotal: string;
     subtotal: string;
@@ -365,12 +574,39 @@ export type Invoice = {
   }>;
 };
 
+export type InvoicePrintRegistration = {
+  action: 'PRINT_RECEIPT' | 'REPRINT_RECEIPT';
+  printNumber: number;
+  isReprint: boolean;
+  registeredAt: string;
+  representation?: ElectronicPrintedRepresentation;
+};
+
+export type ElectronicPrintedRepresentation = {
+  scope: { tenantId: string; issuerRnc: string; environment: 'production' };
+  title: string;
+  encf: string;
+  issuer: string;
+  issuerRnc: string;
+  issuedOn: string;
+  signedAt: string;
+  securityCode: string;
+  total: string;
+  signedSha256: string;
+  sourceSha256: string;
+  qrUrl: string;
+  qrVersion: 8 | 9;
+  sections: Array<{ title: string; fields: Array<{ label: string; value: string }> }>;
+  lines: Array<Array<{ label: string; value: string }>>;
+  notice: string;
+};
+
 export type CreateInvoicePayload = {
   customerId?: string;
   invoiceNumber?: string;
-  documentType?: string;
-  paymentMethod?: string;
-  status: 'DRAFT' | 'ISSUED' | 'PAID';
+  documentType?: LocalNcfDocumentType;
+  paymentMethod?: PosPaymentMethod;
+  status?: 'DRAFT';
   issuedAt?: string;
   items: Array<{
     productId: string;
@@ -380,11 +616,11 @@ export type CreateInvoicePayload = {
 };
 
 export type PosSalePayload = {
+  /** @deprecated The fiscal document is resolved from the persisted sales order. */
   customerId?: string;
-  documentType: string;
-  fiscalDocumentType?: 'RNC' | 'CEDULA';
-  fiscalDocumentNumber?: string;
-  paymentMethod: string;
+  /** @deprecated The fiscal document is resolved from the persisted sales order. */
+  documentType?: LocalNcfDocumentType;
+  paymentMethod: PosPaymentMethod;
   amountReceived?: number;
   cashSessionId?: string;
   orderId?: string;
@@ -419,7 +655,7 @@ export type ReturnRequest = {
   approvedById: string | null;
   rejectedById: string | null;
   cashSessionId: string | null;
-  status: string;
+  status: ReturnRequestStatus;
   reason: string;
   adminNote: string | null;
   refundMethod: string | null;
@@ -500,12 +736,9 @@ export type SalesOrder = {
   tenantId: string;
   customerId: string | null;
   destination: 'CASH_SALE' | 'QUOTATION';
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE';
   clientName: string | null;
   quotationDocumentType: string | null;
   quotationDocumentNumber: string | null;
-  electronicInvoiceRequested: boolean;
-  ecfRecipientEmail: string | null;
   orderNumber: string;
   status: string;
   priceLevel: SalesOrderPriceLevel;
@@ -515,6 +748,9 @@ export type SalesOrder = {
   discountTotal: string;
   total: string;
   paymentMode: SalePaymentMode;
+  fiscalPurpose: FiscalDocumentPurpose;
+  fiscalDocumentTypeSnapshot: InvoiceDocumentType;
+  fiscalCustomerSnapshot: FiscalCustomerSnapshot | null;
   initialPaymentOption: InitialPaymentOption | null;
   initialPaymentRate: string;
   initialPaymentAmount: string;
@@ -587,13 +823,13 @@ export type SalesOrder = {
 };
 
 export type CreateSalesOrderPayload = {
+  fiscalIssuanceMode?: 'LOCAL_NCF' | 'ELECTRONIC_ECF';
   destination: 'CASH_SALE' | 'QUOTATION';
-  inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
-  electronicInvoiceRequested?: boolean;
   clientName?: string;
   customerId?: string;
   priceLevel?: SalesOrderPriceLevel;
   paymentMode?: SalePaymentMode;
+  fiscalPurpose?: FiscalDocumentPurpose;
   initialPaymentOption?: InitialPaymentOption;
   creditTermOption?: CreditTermOption;
   customDueDate?: string;
@@ -898,33 +1134,53 @@ export type OperationalLog = {
 
 export type FiscalSequence = {
   id: string;
-  documentType: string;
+  documentType: InvoiceDocumentType;
   prefix: string;
   startNumber: number;
   endNumber: number;
   nextNumber: number;
   authorizationNumber: string | null;
+  issuerTaxId: string | null;
   validUntil: string | null;
-  status: string;
-  issuerDocumentType: 'RNC' | 'CEDULA' | null;
-  issuerDocumentNumber: string | null;
+  status: FiscalSequenceStatus;
 };
 
-export type CreateCashRegisterPayload = {
-  name: string;
-  location?: string;
-};
-
-export type CreateFiscalSequenceInput = {
-  documentType: string;
+export type CreateFiscalSequencePayload = {
+  documentType: LocalNcfDocumentType;
   startNumber: number;
   endNumber: number;
   nextNumber: number;
-  authorizationNumber?: string;
+  authorizationNumber: string;
   validUntil?: string;
-  issuerDocumentType: 'RNC' | 'CEDULA';
-  issuerDocumentNumber: string;
 };
+
+export type ElectronicFiscalRange = {
+  id: string;
+  issuerTaxId: string;
+  ecfType: 31 | 32 | 33 | 34 | 41 | 43 | 44 | 45 | 46 | 47;
+  prefix: string;
+  startNumber: string;
+  endNumber: string;
+  nextNumber: string | null;
+  authorizationNumber: string;
+  authorizedAt: string | null;
+  validUntil: string | null;
+  syncStatus: ElectronicFiscalRangeSyncStatus;
+  remaining: string | null;
+  used: string | null;
+  exhausted: boolean;
+  authoritative: boolean;
+  syncAttempts: number;
+  lastErrorCode: string | null;
+  remoteRangeId: string | null;
+  syncedAt: string | null;
+};
+
+export type CreateElectronicFiscalRangePayload = Pick<
+  ElectronicFiscalRange,
+  'ecfType' | 'startNumber' | 'endNumber' | 'nextNumber' | 'authorizationNumber'
+> & { authorizedAt?: string; validUntil?: string };
+
 
 export type ImportBatch = {
   id: string;
@@ -1041,6 +1297,7 @@ export type Supplier = {
   notes: string | null;
   status: SupplierStatus;
   deactivatedAt: string | null;
+  taxIdentityVerification: TaxIdentityVerificationEvidence | null;
   createdAt: string;
   updatedAt: string;
   products?: SupplierProduct[];
@@ -1064,6 +1321,7 @@ export type SupplierPayload = {
   creditDays?: number;
   notes?: string;
   status?: SupplierStatus;
+  manualTaxIdentityConfirmed?: boolean;
 };
 
 export type PurchaseOrderStatus =
@@ -1105,7 +1363,6 @@ export type PurchaseOrder = {
   supplierId: string;
   orderNumber: string;
   status: PurchaseOrderStatus;
-  destination: 'SALES_INVENTORY' | 'WAREHOUSE';
   displayStatus: PurchaseOrderStatus | 'OVERDUE';
   isOverdue: boolean;
   currency: 'DOP';
@@ -1152,7 +1409,6 @@ export type PurchaseOrder = {
 
 export type PurchaseOrderPayload = {
   supplierId: string;
-  destination: 'SALES_INVENTORY' | 'WAREHOUSE';
   expectedDeliveryDate?: string;
   notes?: string;
   items: Array<{
@@ -1467,7 +1723,7 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
 if (!apiUrl) {
   throw new Error(
-    'NEXT_PUBLIC_API_URL is required to connect the frontend with the application API.',
+    'NEXT_PUBLIC_API_URL is required to connect the frontend with the CoreStack API.',
   );
 }
 
@@ -1515,6 +1771,37 @@ const apiMessageTranslations: Record<string, string> = {
   'Sale must include at least one item.': 'La venta debe incluir al menos un producto.',
   'Fiscal credit invoices require an RNC customer.':
     'Las facturas de credito fiscal requieren un cliente con RNC.',
+  'Only local B01 and B02 invoices are enabled.':
+    'Solo estan habilitados los comprobantes locales B01 y B02.',
+  'B01 requires a customer with a valid RNC or Dominican ID.':
+    'La factura B01 requiere un cliente con RNC o cedula dominicana valida.',
+  'B02 invoices of RD$250,000 or more before ITBIS require an identified customer.':
+    'Una factura B02 de RD$250,000 o mas antes de ITBIS requiere identificar al cliente.',
+  'Issuer tax identity, legal name, commercial name, address, phone, and email must be configured.':
+    'Configura la identificacion fiscal, razon social, nombre comercial, direccion, telefono y correo del emisor.',
+  'B01 and B02 require the DGII authorization number.':
+    'B01 y B02 requieren el numero de autorizacion de la DGII.',
+  'B01 requires its DGII expiration date.':
+    'B01 requiere la fecha de vencimiento asignada por la DGII.',
+  'Configure a valid issuer RNC or Dominican ID before registering fiscal sequences.':
+    'Configura primero el RNC o la cédula válida del emisor.',
+  'The fiscal sequence authorization is already expired.':
+    'La autorizacion de la secuencia fiscal ya esta vencida.',
+  'Fiscal sequence start cannot exceed its end.':
+    'El inicio de la secuencia no puede superar el final.',
+  'Next fiscal number must be inside the authorized range.':
+    'El siguiente NCF debe estar dentro del rango autorizado.',
+  'An active fiscal sequence already exists for this type.':
+    'Ya existe una secuencia fiscal activa para este tipo.',
+  'The authorized range overlaps a sequence already registered.':
+    'El rango autorizado se superpone con otra secuencia registrada.',
+  'An active or overlapping fiscal sequence was created concurrently.':
+    'Otra sesion registro una secuencia activa o superpuesta al mismo tiempo.',
+  'Only issued local B01 or B02 invoices with a valid NCF can be printed.':
+    'Solo se pueden imprimir facturas locales B01 o B02 emitidas con un NCF valido.',
+  'The first print is restricted to the issuing cashier or an administrator.':
+    'La primera impresion solo puede realizarla el cajero emisor o un administrador.',
+  'Receipt reprint permission is required.': 'Necesitas permiso para reimprimir facturas.',
   'One or more POS products do not belong to tenant.':
     'Uno o mas productos de la venta no pertenecen a esta empresa.',
   'No active fiscal sequence available for this document type.':
@@ -1813,6 +2100,29 @@ function translateApiMessage(message: string) {
     return `Stock insuficiente para ${productName}.`;
   }
 
+  if (message.startsWith('No active B') && message.endsWith(' sequence is configured.')) {
+    const prefix = message.split(' ')[2];
+    return `No hay una secuencia ${prefix} activa configurada.`;
+  }
+
+  if (message.startsWith('The active B') && message.endsWith(' sequence is expired.')) {
+    const prefix = message.split(' ')[2];
+    return `La secuencia ${prefix} activa esta vencida.`;
+  }
+
+  if (message.startsWith('The active B') && message.endsWith(' sequence is exhausted.')) {
+    const prefix = message.split(' ')[2];
+    return `La secuencia ${prefix} activa esta agotada.`;
+  }
+
+  if (
+    message.startsWith('The active B') &&
+    message.endsWith(' sequence belongs to a different issuer tax identity.')
+  ) {
+    const prefix = message.split(' ')[2];
+    return `La secuencia ${prefix} pertenece a otro RNC o cédula del emisor.`;
+  }
+
   if (message.startsWith('Insufficient available stock for ') && message.endsWith('.')) {
     const productName = message.replace('Insufficient available stock for ', '').replace(/\.$/, '');
     return `Stock disponible insuficiente para ${productName}.`;
@@ -1869,8 +2179,23 @@ export function getDashboardSummary(tenantId: string, accessToken: string) {
   });
 }
 
-export function getProductSalesRanking(tenantId: string, accessToken: string) {
-  return fetchJson<ProductSalesRanking>('/dashboard/product-sales', {
+export function getOperationalAlerts(tenantId: string, accessToken: string) {
+  return fetchJson<OperationalAlertsSummary>('/dashboard/alerts', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getProductSalesRanking(
+  tenantId: string,
+  accessToken: string,
+  query: ProductSalesQuery = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (query.from) searchParams.set('from', query.from);
+  if (query.to) searchParams.set('to', query.to);
+  const suffix = searchParams.size ? `?${searchParams.toString()}` : '';
+
+  return fetchJson<ProductSalesRanking>(`/dashboard/product-sales${suffix}`, {
     headers: tenantHeaders(tenantId, accessToken),
   });
 }
@@ -1881,10 +2206,117 @@ export function getCustomers(tenantId: string, accessToken: string) {
   });
 }
 
+export function lookupTaxIdentity(
+  tenantId: string,
+  accessToken: string,
+  payload: {
+    documentType: TaxIdentityDocumentType;
+    documentNumber: string;
+  },
+) {
+  return fetchJson<TaxIdentityLookup>('/tax-identities/lookup', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createTaxIdentityApprovalRequest(
+  tenantId: string,
+  accessToken: string,
+  payload: CreateTaxIdentityApprovalRequestPayload,
+) {
+  return fetchJson<TaxIdentityApprovalRequest>('/tax-identities/approval-requests', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getTaxIdentityApprovalRequests(
+  tenantId: string,
+  accessToken: string,
+  query: {
+    status?: TaxIdentityApprovalRequestStatus;
+    contextType?: TaxIdentityContextType;
+    contextId?: string;
+  } = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (query.status) searchParams.set('status', query.status);
+  if (query.contextType) searchParams.set('contextType', query.contextType);
+  if (query.contextId) searchParams.set('contextId', query.contextId);
+  const suffix = searchParams.size ? `?${searchParams.toString()}` : '';
+
+  return fetchJson<TaxIdentityApprovalRequest[]>(`/tax-identities/approval-requests${suffix}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getTaxIdentityApprovalRequest(
+  tenantId: string,
+  accessToken: string,
+  requestId: string,
+) {
+  return fetchJson<TaxIdentityApprovalRequest>(`/tax-identities/approval-requests/${requestId}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function approveTaxIdentityApprovalRequest(
+  tenantId: string,
+  accessToken: string,
+  requestId: string,
+  payload: {
+    fiscalName?: string;
+    decisionNote?: string;
+    expiresInMinutes?: number;
+  },
+) {
+  return fetchJson<TaxIdentityApprovalRequest>(
+    `/tax-identities/approval-requests/${requestId}/approve`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function rejectTaxIdentityApprovalRequest(
+  tenantId: string,
+  accessToken: string,
+  requestId: string,
+  decisionNote: string,
+) {
+  return fetchJson<TaxIdentityApprovalRequest>(
+    `/tax-identities/approval-requests/${requestId}/reject`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+      body: JSON.stringify({ decisionNote }),
+    },
+  );
+}
+
+export function cancelTaxIdentityApprovalRequest(
+  tenantId: string,
+  accessToken: string,
+  requestId: string,
+) {
+  return fetchJson<TaxIdentityApprovalRequest>(
+    `/tax-identities/approval-requests/${requestId}/cancel`,
+    {
+      method: 'POST',
+      headers: tenantHeaders(tenantId, accessToken),
+    },
+  );
+}
+
 export function createCustomer(
   tenantId: string,
   accessToken: string,
-  payload: Record<string, string | undefined>,
+  payload: Record<string, string | boolean | undefined>,
 ) {
   return fetchJson<Customer>('/customers', {
     method: 'POST',
@@ -1897,7 +2329,7 @@ export function updateCustomer(
   tenantId: string,
   accessToken: string,
   customerId: string,
-  payload: Record<string, string | undefined>,
+  payload: Record<string, string | boolean | undefined>,
 ) {
   return fetchJson<Customer>(`/customers/${customerId}`, {
     method: 'PATCH',
@@ -1941,6 +2373,12 @@ export function getPosProductByBarcode(tenantId: string, accessToken: string, ba
 export function getSalesOrders(tenantId: string, accessToken: string, status?: string) {
   const query = status ? `?status=${encodeURIComponent(status)}` : '';
   return fetchJson<SalesOrder[]>(`/orders${query}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getQuotations(tenantId: string, accessToken: string) {
+  return fetchJson<SalesOrder[]>('/orders?origin=QUOTATION', {
     headers: tenantHeaders(tenantId, accessToken),
   });
 }
@@ -2016,34 +2454,22 @@ export function acceptSalesOrder(tenantId: string, accessToken: string, orderId:
   });
 }
 
-export function searchOrderProducts(
-  tenantId: string,
-  accessToken: string,
-  q: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
-) {
-  return fetchJson<Product[]>(
-    `/orders/products/search?q=${encodeURIComponent(q)}&inventorySource=${inventorySource}`,
-    { headers: tenantHeaders(tenantId, accessToken) },
-  );
+export function searchOrderProducts(tenantId: string, accessToken: string, q: string) {
+  return fetchJson<Product[]>(`/orders/products/search?q=${encodeURIComponent(q)}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
 }
 
-export function getOrderProductByBarcode(
-  tenantId: string,
-  accessToken: string,
-  barcode: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
-) {
-  return fetchJson<Product>(
-    `/orders/products/barcode/${encodeURIComponent(barcode)}?inventorySource=${inventorySource}`,
-    { headers: tenantHeaders(tenantId, accessToken) },
-  );
+export function getOrderProductByBarcode(tenantId: string, accessToken: string, barcode: string) {
+  return fetchJson<Product>(`/orders/products/barcode/${encodeURIComponent(barcode)}`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
 }
 
 export function createProduct(
   tenantId: string,
   accessToken: string,
-  payload: Record<string, string | number | boolean | undefined>,
+  payload: CreateProductPayload,
 ) {
   return fetchJson<Product>('/products', {
     method: 'POST',
@@ -2056,7 +2482,7 @@ export function updateProduct(
   tenantId: string,
   accessToken: string,
   productId: string,
-  payload: Record<string, string | number | boolean | undefined>,
+  payload: UpdateProductPayload,
 ) {
   return fetchJson<Product>(`/products/${productId}`, {
     method: 'PATCH',
@@ -2147,7 +2573,11 @@ export function approveReturnRequest(
   tenantId: string,
   accessToken: string,
   returnRequestId: string,
-  payload: { cashSessionId?: string; refundMethod?: string; adminNote?: string },
+  payload: {
+    cashSessionId?: string;
+    refundMethod?: string;
+    adminNote?: string;
+  },
 ) {
   return fetchJson<ReturnRequest>(`/returns/${returnRequestId}/approve`, {
     method: 'POST',
@@ -2175,6 +2605,22 @@ export function getInvoice(tenantId: string, accessToken: string, invoiceId: str
   });
 }
 
+export type InvoiceFiscalProgress = Pick<Invoice,
+  'id' | 'tenantId' | 'invoiceNumber' | 'documentType' | 'eNcf' | 'status' | 'fiscalStatus' | 'electronicDocument'>;
+
+export function getInvoiceFiscalProgress(tenantId: string, accessToken: string, invoiceId: string) {
+  return fetchJson<InvoiceFiscalProgress>(`/invoices/${invoiceId}/fiscal-progress`, {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function registerInvoicePrint(tenantId: string, accessToken: string, invoiceId: string) {
+  return fetchJson<InvoicePrintRegistration>(`/invoices/${invoiceId}/print`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
 export function createInvoice(
   tenantId: string,
   accessToken: string,
@@ -2190,6 +2636,70 @@ export function createInvoice(
 export function completePosSale(tenantId: string, accessToken: string, payload: PosSalePayload) {
   return fetchJson<Invoice>('/pos/sales/complete', {
     method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export type SyntheticPreparation = {
+  executionMode?: 'LOCAL' | 'REMOTE_VM4';
+  id: string;
+  state: 'PENDING' | 'DONE' | 'FAILED';
+  errorCode: string | null;
+  synthetic: true;
+  stale?: boolean;
+  result: { xml: string; encf: string; sha256: string; notice: string; sendable: false } | null;
+};
+export type SyntheticRehearsal = {
+  preparationId: string;
+  stale: boolean;
+  terminal: boolean;
+  synthetic: true;
+  sendable: false;
+  errorCode: string | null;
+  result: {
+    state: string;
+    errorCode: string | null;
+    model: import('../../../packages/fiscal/src/printed-types').PrintedRepresentation | null;
+  } | null;
+};
+export function syntheticOrderRehearsal(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  start = false,
+) {
+  return fetchJson<SyntheticRehearsal | null>(
+    `/pos/orders/${encodeURIComponent(orderId)}/synthetic-rehearsal`,
+    {
+      method: start ? 'POST' : 'GET',
+      headers: tenantHeaders(tenantId, accessToken),
+    },
+  );
+}
+export function syntheticOrderPreparation(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  prepare = false,
+) {
+  return fetchJson<SyntheticPreparation | null>(
+    `/pos/orders/${encodeURIComponent(orderId)}/synthetic-preparation`,
+    {
+      method: prepare ? 'POST' : 'GET',
+      headers: tenantHeaders(tenantId, accessToken),
+    },
+  );
+}
+
+export function updatePosOrderFiscalDetails(
+  tenantId: string,
+  accessToken: string,
+  orderId: string,
+  payload: UpdatePosOrderFiscalDetailsPayload,
+) {
+  return fetchJson<SalesOrder>(`/pos/orders/${orderId}/fiscal-details`, {
+    method: 'PATCH',
     headers: tenantHeaders(tenantId, accessToken),
     body: JSON.stringify(payload),
   });
@@ -2299,94 +2809,43 @@ export function getFiscalSequences(tenantId: string, accessToken: string) {
   });
 }
 
-export function getWarehouseStock(tenantId: string, accessToken: string) {
-  return fetchJson<WarehouseStock[]>('/warehouse/stock', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function getWarehouseMovements(tenantId: string, accessToken: string) {
-  return fetchJson<WarehouseMovement[]>('/warehouse/movements', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function getWarehouseProducts(tenantId: string, accessToken: string) {
-  return fetchJson<
-    (Product & {
-      warehouseStocks: Array<{
-        id: string;
-        quantity: number;
-        unitCost: string | null;
-        updatedAt: string;
-      }>;
-    })[]
-  >('/warehouse/products', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function createWarehouseProduct(
-  tenantId: string,
-  accessToken: string,
-  payload: WarehouseProductPayload,
-) {
-  return fetchJson<Product>('/warehouse/products', {
-    method: 'POST',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function updateWarehouseProduct(
-  tenantId: string,
-  accessToken: string,
-  productId: string,
-  payload: Partial<WarehouseProductPayload>,
-) {
-  return fetchJson<Product>(`/warehouse/products/${productId}`, {
-    method: 'PATCH',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteWarehouseProduct(tenantId: string, accessToken: string, productId: string) {
-  return fetchJson<Product>(`/warehouse/products/${productId}`, {
-    method: 'DELETE',
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
-export function createCashRegister(
-  tenantId: string,
-  accessToken: string,
-  payload: CreateCashRegisterPayload,
-) {
-  return fetchJson<CashRegister>('/cash/registers', {
-    method: 'POST',
-    headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(payload),
-  });
-}
-
-export function getFiscalSequenceAlerts(tenantId: string, accessToken: string) {
-  return fetchJson<FiscalSequenceAlert[]>('/fiscal-sequences/alerts', {
-    headers: tenantHeaders(tenantId, accessToken),
-  });
-}
-
 export function createFiscalSequence(
   tenantId: string,
   accessToken: string,
-  input: CreateFiscalSequenceInput,
+  payload: CreateFiscalSequencePayload,
 ) {
   return fetchJson<FiscalSequence>('/fiscal-sequences', {
     method: 'POST',
     headers: tenantHeaders(tenantId, accessToken),
-    body: JSON.stringify(input),
+    body: JSON.stringify(payload),
   });
 }
+
+export function getElectronicFiscalRanges(tenantId: string, accessToken: string) {
+  return fetchJson<ElectronicFiscalRange[]>('/fiscal-sequences/electronic', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function createElectronicFiscalRange(
+  tenantId: string,
+  accessToken: string,
+  payload: CreateElectronicFiscalRangePayload,
+) {
+  return fetchJson<ElectronicFiscalRange>('/fiscal-sequences/electronic', {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function retryElectronicFiscalRange(tenantId: string, accessToken: string, id: string) {
+  return fetchJson<ElectronicFiscalRange>(`/fiscal-sequences/electronic/${id}/retry`, {
+    method: 'POST',
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
 
 export function getImportBatches(tenantId: string, accessToken: string) {
   return fetchJson<ImportBatch[]>('/imports', {

@@ -1,0 +1,29 @@
+.git
+.github
+deploy
+.env
+.env.*
+!.env.example
+node_modules
+.pnpm-store
+**/node_modules
+**/.next
+**/.next-dev
+**/dist
+packages/database/generated
+coverage
+*.log
+*.tsbuildinfo
+.turbo
+.tmp
+.dev-logs
+.vscode
+.DS_Store
+CORESTACK_MIGRACION_RIVNU.txt
+Qorvex_RIVNU_Plantilla_Importacion_Product*.xlsx
+40220429126-*.xlsx
+
+# Private OCR samples and regression fixtures are never runtime assets.
+docs/factura test.jpeg
+apps/web/test
+apps/api/test

@@ -1,4 +1,10 @@
-import { BarcodeType, ProductStatus, ProductUnit, TaxCategory } from '@qorvex/database';
+import {
+  BarcodeType,
+  FiscalItemKind,
+  ProductStatus,
+  ProductUnit,
+  TaxCategory,
+} from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -7,11 +13,16 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
 
 export class CreateProductDto {
+  @IsOptional()
+  @IsEnum(FiscalItemKind)
+  fiscalItemKind?: FiscalItemKind | null;
+
   @IsOptional()
   @IsString()
   categoryId?: string;
@@ -71,8 +82,9 @@ export class CreateProductDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 4 })
   @Min(0)
+  @Max(1)
   taxRate?: number;
 
   @IsOptional()

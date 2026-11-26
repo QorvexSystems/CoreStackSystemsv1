@@ -4,7 +4,6 @@ import { TenantId } from '../../common/decorators/tenant-id.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantMembershipGuard } from '../../common/guards/tenant-membership.guard';
 import { AuthenticatedUser } from '../../common/types/authenticated-request';
-import { ProductInventoryDestination } from '@qorvex/database';
 import {
   CancelSalesOrderDto,
   ClaimSalesOrderDto,
@@ -22,8 +21,9 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('status') status?: string,
+    @Query('origin') origin?: string,
   ) {
-    return this.ordersService.findAll(tenantId, user, status);
+    return this.ordersService.findAll(tenantId, user, status, origin);
   }
 
   @Get('products/search')
@@ -31,9 +31,8 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('q') q = '',
-    @Query('inventorySource') inventorySource?: ProductInventoryDestination,
   ) {
-    return this.ordersService.searchProducts(tenantId, user, q, inventorySource);
+    return this.ordersService.searchProducts(tenantId, user, q);
   }
 
   @Get('products/barcode/:barcode')
@@ -41,9 +40,8 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('barcode') barcode: string,
-    @Query('inventorySource') inventorySource?: ProductInventoryDestination,
   ) {
-    return this.ordersService.findProductByBarcode(tenantId, user, barcode, inventorySource);
+    return this.ordersService.findProductByBarcode(tenantId, user, barcode);
   }
 
   @Get(':id')

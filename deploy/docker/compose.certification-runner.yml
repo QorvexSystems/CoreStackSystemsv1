@@ -1,0 +1,26 @@
+name: corestack-certification-${CERTIFICATION_TENANT_SLUG:?tenant slug required}
+services:
+  certification-runner:
+    image: corestack/certification-runner:${CERTIFICATION_RUNNER_TAG:?reviewed image tag required}
+    user: '10004:4101'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 384m
+    cpus: 0.35
+    ports:
+      - '${CERTIFICATION_BIND_IP:-127.0.0.1}:${CERTIFICATION_BIND_PORT:-8445}:8445'
+    volumes:
+      - '${CERTIFICATION_CLIENT_ROOT:?client root required}/config:/run/config:ro'
+      - '${CERTIFICATION_CLIENT_ROOT:?client root required}/secrets:/run/secrets:ro'
+      - '${CERTIFICATION_CLIENT_ROOT:?client root required}/trust:/run/trust:ro'
+      - '${CERTIFICATION_CLIENT_ROOT:?client root required}/input:/input:ro'
+      - '${CERTIFICATION_CLIENT_ROOT:?client root required}/evidence:/evidence:rw'
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: '3'}

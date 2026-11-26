@@ -1,0 +1,43 @@
+name: corestack-fiscal-receiver
+services:
+  fiscal-receiver:
+    image: ${FISCAL_RECEIVER_IMAGE:?Set a reviewed fiscal receiver image}
+    user: "10001:4101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: 0.75
+    mem_limit: 384m
+    memswap_limit: 384m
+    pids_limit: 64
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+      nofile:
+        soft: 1024
+        hard: 1024
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+      - /run/signing-work:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10001,gid=4101
+    network_mode: host
+    volumes:
+      - /opt/corestack/fe/config/fiscal-receiver.json:/run/config/fiscal-receiver.json:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/certificate.p12:/run/secrets/signing/certificate.p12:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/certificate.password:/run/secrets/signing/password:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/root.crt:/run/trust/digifirma/root.crt:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/subordinate.crt:/run/trust/digifirma/subordinate.crt:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/subordinate.crl.pem:/run/trust/digifirma/subordinate.crl.pem:ro
+      - /opt/corestack/fe/config/trust/dgii/communication-root.pem:/run/trust/dgii/communication-root.pem:ro
+      - /opt/corestack/fe/config/fiscal-receiver-tls.crt:/run/secrets/tls/server.crt:ro
+      - /opt/corestack/secrets/fiscal-receiver-tls.key:/run/secrets/tls/server.key:ro
+      - /opt/corestack/fe/evidence/receiver:/var/lib/corestack/fiscal-receiver:rw
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "3"
+

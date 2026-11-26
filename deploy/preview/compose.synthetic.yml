@@ -1,0 +1,10 @@
+# Combine ONLY with deploy/docker/compose.preview.dgii.yml.
+services:
+  rivnu-dgii-preview-migrate:
+    image: corestack/rivnu-api:ecf-synthetic-20260922
+  rivnu-dgii-preview-api:
+    image: corestack/rivnu-api:ecf-synthetic-20260922
+  rivnu-dgii-preview-web:
+    image: corestack/rivnu-api:ecf-synthetic-20260922
+    working_dir: /app/apps/web
+    command: ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]

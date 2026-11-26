@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,10 +14,12 @@ import {
   DocumentType,
   EmployeeLogAction,
   EmployeeStatus,
+  FiscalDocumentPurpose,
+  FiscalIssuanceMode,
   InitialPaymentOption,
+  InvoiceDocumentType,
   InvoiceStatus,
   Prisma,
-  ProductInventoryDestination,
   ProductStatus,
   ProductUnit,
   Role,
@@ -32,12 +35,15 @@ import {
   validateDominicanRnc,
 } from '../../common/utils/dominican-documents';
 import { getBarcodeLookupCandidates } from '../../common/utils/barcode';
+import { allocateFiscalTaxByRate } from '../../common/utils/fiscal-tax-allocation';
 import {
   addBusinessDays,
   businessDateKey,
   parseBusinessDate,
 } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FiscalSequencesService } from '../fiscal-sequences/fiscal-sequences.service';
+import { resolveFiscalItemKind } from '../fiscal-documents/fiscal-item-kind';
 import {
   CancelSalesOrderDto,
   ClaimSalesOrderDto,
@@ -52,12 +58,31 @@ const openOrderStatuses: SalesOrderStatus[] = [
   SalesOrderStatus.IN_CASHIER,
 ];
 const claimTtlMs = 30 * 60 * 1000;
+// Legacy helper retained for existing persisted orders. New Order Taking
+// traffic always starts in the electronic family and Caja chooses Local/E32/E31.
+export const orderFiscalMode = (type: InvoiceDocumentType) =>
+  type === InvoiceDocumentType.CONSUMER_ELECTRONIC_32 ||
+  type === InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31
+    ? ('ELECTRONIC_ECF' as const)
+    : ('LOCAL_NCF' as const);
+export const provisionalFiscalDetails = (mode: 'LOCAL_NCF' | 'ELECTRONIC_ECF' = 'ELECTRONIC_ECF') =>
+  ({
+    fiscalPurpose: FiscalDocumentPurpose.CONSUMER,
+    // E32 is only the provisional state. Caja may replace it with a local sale
+    // note (internal sequence), E32 or E31 before charging.
+    fiscalDocumentTypeSnapshot:
+      mode === 'ELECTRONIC_ECF'
+        ? InvoiceDocumentType.CONSUMER_ELECTRONIC_32
+        : InvoiceDocumentType.CONSUMER_02,
+    fiscalCustomerSnapshot: Prisma.JsonNull,
+  }) as const;
 
 type ComputedOrderItem = {
   product: Awaited<ReturnType<PrismaService['product']['findMany']>>[number];
   quantity: Prisma.Decimal;
   reservedQuantity: number;
   unitPrice: Prisma.Decimal;
+  originalUnitPrice: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   subtotal: Prisma.Decimal;
   taxTotal: Prisma.Decimal;
@@ -66,13 +91,20 @@ type ComputedOrderItem = {
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fiscalSequences: FiscalSequencesService,
+  ) {}
 
-  async findAll(tenantId: string, user: AuthenticatedUser, status?: string) {
+  async findAll(tenantId: string, user: AuthenticatedUser, status?: string, origin?: string) {
     await this.releaseExpiredClaims(tenantId);
 
     const membership = this.getMembership(tenantId, user);
     this.ensureCanViewOrders(membership);
+
+    if (origin && origin !== 'QUOTATION') {
+      throw new BadRequestException('Invalid sales order origin.');
+    }
 
     const parsedStatuses = this.parseStatuses(status);
     const ownOrdersOnly =
@@ -90,10 +122,21 @@ export class OrdersService {
         ...(destinationFilter ? { destination: destinationFilter } : {}),
         ...(parsedStatuses ? { status: { in: parsedStatuses } } : {}),
         ...(ownOrdersOnly ? { createdById: user.id } : {}),
+        ...(origin === 'QUOTATION'
+          ? {
+              OR: [
+                { destination: SalesOrderDestination.QUOTATION },
+                { orderNumber: { startsWith: 'COT-' } },
+              ],
+            }
+          : {}),
       },
       include: this.orderInclude(),
-      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
-      take: 150,
+      orderBy:
+        origin === 'QUOTATION'
+          ? [{ createdAt: 'desc' }]
+          : [{ status: 'asc' }, { createdAt: 'desc' }],
+      ...(origin === 'QUOTATION' ? {} : { take: 150 }),
     });
   }
 
@@ -124,12 +167,7 @@ export class OrdersService {
     return order;
   }
 
-  async searchProducts(
-    tenantId: string,
-    user: AuthenticatedUser,
-    q: string,
-    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
-  ) {
+  async searchProducts(tenantId: string, user: AuthenticatedUser, q: string) {
     await this.ensureCanTakeOrders(tenantId, user);
     const query = q.trim();
 
@@ -140,7 +178,6 @@ export class OrdersService {
     return this.prisma.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
         status: ProductStatus.ACTIVE,
         OR: [
           { name: { contains: query, mode: 'insensitive' } },
@@ -155,18 +192,12 @@ export class OrdersService {
     });
   }
 
-  async findProductByBarcode(
-    tenantId: string,
-    user: AuthenticatedUser,
-    barcode: string,
-    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
-  ) {
+  async findProductByBarcode(tenantId: string, user: AuthenticatedUser, barcode: string) {
     await this.ensureCanTakeOrders(tenantId, user);
     const lookupCandidates = getBarcodeLookupCandidates(barcode);
     const product = await this.prisma.product.findFirst({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
         status: ProductStatus.ACTIVE,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
@@ -193,13 +224,13 @@ export class OrdersService {
     }
 
     const clientName = dto.clientName?.trim() || undefined;
+    if (!clientName) {
+      throw new BadRequestException('El nombre del cliente es obligatorio para crear la orden.');
+    }
     const destination = dto.destination ?? SalesOrderDestination.CASH_SALE;
-    const inventorySource = dto.inventorySource ?? ProductInventoryDestination.SALES_INVENTORY;
     const priceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
     const discountRate = this.getDiscountRate(priceLevel);
     const paymentMode = dto.paymentMode ?? SalePaymentMode.CASH;
-    const electronicInvoiceRequested =
-      destination === SalesOrderDestination.CASH_SALE && dto.electronicInvoiceRequested === true;
 
     if (destination === SalesOrderDestination.QUOTATION) {
       this.validateQuotationDetails(dto);
@@ -208,21 +239,6 @@ export class OrdersService {
     this.validatePaymentModeFields(paymentMode, dto);
 
     return this.prisma.$transaction(async (tx) => {
-      const ecfRecipientEmail = electronicInvoiceRequested
-        ? (
-            await tx.tenant.findUniqueOrThrow({
-              where: { id: tenantId },
-              select: { email: true },
-            })
-          ).email?.trim() || null
-        : null;
-
-      if (electronicInvoiceRequested && !ecfRecipientEmail) {
-        throw new BadRequestException(
-          'Configura el correo de la empresa antes de solicitar una factura electrónica.',
-        );
-      }
-
       const customer = dto.customerId
         ? await tx.customer.findFirst({
             where: {
@@ -240,15 +256,31 @@ export class OrdersService {
         this.validateCreditCustomer(customer);
       }
 
-      const computed = await this.computeOrder(
-        tenantId,
-        dto.items,
-        tx,
-        priceLevel,
-        inventorySource,
-      );
+      const computed = await this.computeOrder(tenantId, dto.items, tx, priceLevel);
       const isQuotation = destination === SalesOrderDestination.QUOTATION;
       const isCredit = paymentMode === SalePaymentMode.CREDIT;
+      // Compatibility clients may still send LOCAL_NCF during a rolling
+      // deployment. Order Taking no longer owns that decision.
+      const issuanceMode = FiscalIssuanceMode.ELECTRONIC_ECF;
+      const electronic = true;
+
+      if (!isQuotation && electronic) {
+        const issuer = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: { rnc: true, legalName: true, address: true },
+        });
+        if (
+          !issuer?.rnc?.trim() ||
+          (!validateDominicanRnc(issuer.rnc) && !validateDominicanCedula(issuer.rnc)) ||
+          !issuer.legalName?.trim() ||
+          !issuer.address?.trim()
+        ) {
+          throw new BadRequestException(
+            'Antes de crear una orden e-CF configure RNC, razón social y dirección del emisor.',
+          );
+        }
+      }
+
       const initialPaymentOption = isCredit ? dto.initialPaymentOption : undefined;
       const initialPaymentRate = isCredit
         ? this.getInitialPaymentRate(initialPaymentOption!)
@@ -261,11 +293,7 @@ export class OrdersService {
           : null;
       const waitsForCreditApproval = isCredit && !isQuotation;
 
-      if (
-        !isQuotation &&
-        !isCredit &&
-        inventorySource === ProductInventoryDestination.SALES_INVENTORY
-      ) {
+      if (!isQuotation && !isCredit) {
         await this.reserveStockForOrder(tenantId, computed.items, tx);
       }
 
@@ -280,15 +308,13 @@ export class OrdersService {
           tenantId,
           customerId: customer?.id,
           destination,
-          inventorySource,
+          ...provisionalFiscalDetails(issuanceMode),
           clientName,
           quotationDocumentType: isQuotation ? dto.quotationDocumentType : undefined,
           quotationDocumentNumber:
             isQuotation && dto.quotationDocumentNumber?.trim()
               ? normalizeDominicanDocument(dto.quotationDocumentNumber)
               : undefined,
-          electronicInvoiceRequested,
-          ecfRecipientEmail,
           orderNumber: this.generateOrderNumber(isQuotation),
           status: isQuotation
             ? SalesOrderStatus.QUOTATION
@@ -319,9 +345,13 @@ export class OrdersService {
               barcode: item.product.barcode,
               description: item.product.name,
               quantity: item.quantity,
+              unit: item.product.unit,
               reservedQuantity: isQuotation || isCredit ? 0 : item.reservedQuantity,
               unitPrice: item.unitPrice,
+              originalUnitPrice: item.originalUnitPrice,
+              fiscalItemKind: resolveFiscalItemKind(item.product),
               discountTotal: item.discountTotal,
+              taxCategory: item.product.taxCategory,
               taxRate: item.product.taxRate,
               taxTotal: item.taxTotal,
               subtotal: item.subtotal,
@@ -501,18 +531,37 @@ export class OrdersService {
         );
       }
 
-      const released = await tx.salesOrder.update({
-        where: { id },
+      const releasedRows = await tx.salesOrder.updateMany({
+        where: {
+          id,
+          tenantId,
+          status: SalesOrderStatus.IN_CASHIER,
+          invoiceId: null,
+          ...(!adminRoles.includes(membership.role) ? { claimedById: user.id } : {}),
+        },
         data: {
           status: SalesOrderStatus.SENT_TO_CASHIER,
+          ...provisionalFiscalDetails('ELECTRONIC_ECF'),
           claimedById: null,
           claimedCashSessionId: null,
           claimedAt: null,
           claimExpiresAt: null,
           releasedAt: new Date(),
         },
+      });
+      if (releasedRows.count !== 1) {
+        throw new ConflictException(
+          'Sales order changed while it was being released. Refresh and try again.',
+        );
+      }
+
+      const released = await tx.salesOrder.findFirst({
+        where: { id, tenantId },
         include: this.orderInclude(),
       });
+      if (!released) {
+        throw new ConflictException('Released sales order could not be reloaded.');
+      }
 
       await tx.employeeActivityLog.create({
         data: {
@@ -538,6 +587,9 @@ export class OrdersService {
 
   async cancel(tenantId: string, user: AuthenticatedUser, id: string, dto?: CancelSalesOrderDto) {
     return this.prisma.$transaction(async (tx) => {
+      // Serialize with checkout/claim so an already paid order cannot be
+      // discarded or have its inventory reservation released a second time.
+      await this.lockSalesOrder(tx, tenantId, id);
       const order = await tx.salesOrder.findFirst({
         where: { id, tenantId },
         include: this.orderInclude(),
@@ -566,8 +618,9 @@ export class OrdersService {
       }
 
       if (
-        !openOrderStatuses.includes(order.status) &&
-        order.status !== SalesOrderStatus.QUOTATION
+        order.invoiceId !== null ||
+        (!openOrderStatuses.includes(order.status) &&
+          order.status !== SalesOrderStatus.QUOTATION)
       ) {
         throw new BadRequestException('Only pending sales orders can be cancelled.');
       }
@@ -581,6 +634,7 @@ export class OrdersService {
         where: {
           id,
           tenantId,
+          invoiceId: null,
           status: { in: cancellableStatuses },
         },
         data: {
@@ -668,6 +722,23 @@ export class OrdersService {
         throw new BadRequestException('Only quotations can be accepted.');
       }
 
+      // Repair only the immutable order snapshot for quotations created
+      // before fiscal classification was introduced. The product catalogue
+      // itself remains untouched.
+      for (const item of order.items) {
+        if (!item.fiscalItemKind) {
+          await tx.salesOrderItem.update({
+            where: { id: item.id },
+            data: {
+              fiscalItemKind: resolveFiscalItemKind({
+                fiscalItemKind: item.product?.fiscalItemKind,
+                unit: item.product?.unit ?? item.unit,
+              }),
+            },
+          });
+        }
+      }
+
       if (order.paymentMode === SalePaymentMode.CREDIT) {
         this.validateCreditCustomer(order.customer);
         if (!order.customer || !order.initialPaymentOption || !order.creditTermOption) {
@@ -714,6 +785,7 @@ export class OrdersService {
           data: {
             destination: SalesOrderDestination.CASH_SALE,
             status: SalesOrderStatus.CREATED,
+            ...provisionalFiscalDetails('ELECTRONIC_ECF'),
             initialPaymentAmount,
             creditTermDays: creditTerms.days,
             dueDate: creditTerms.dueDate,
@@ -749,30 +821,17 @@ export class OrdersService {
       }));
 
       // Compute order and validate stock
-      const computed = await this.computeOrder(
-        tenantId,
-        orderItems,
-        tx,
-        order.priceLevel,
-        order.inventorySource,
-      );
+      const computed = await this.computeOrder(tenantId, orderItems, tx, order.priceLevel);
 
       // Reserve stock for the order
-      if (order.inventorySource === ProductInventoryDestination.SALES_INVENTORY) {
-        await this.reserveStockForOrder(tenantId, computed.items, tx);
-      }
+      await this.reserveStockForOrder(tenantId, computed.items, tx);
 
       // Update the reservedQuantity of each item
       for (const item of order.items) {
         const reservedQuantity = Number(item.quantity);
         await tx.salesOrderItem.update({
           where: { id: item.id },
-          data: {
-            reservedQuantity:
-              order.inventorySource === ProductInventoryDestination.SALES_INVENTORY
-                ? reservedQuantity
-                : 0,
-          },
+          data: { reservedQuantity },
         });
       }
 
@@ -782,6 +841,7 @@ export class OrdersService {
         data: {
           destination: SalesOrderDestination.CASH_SALE,
           status: SalesOrderStatus.SENT_TO_CASHIER,
+          ...provisionalFiscalDetails('ELECTRONIC_ECF'),
           sentToCashierAt: now,
         },
         include: this.orderInclude(),
@@ -852,11 +912,17 @@ export class OrdersService {
         throw new BadRequestException('Custom credit due date cannot be changed after creation.');
       }
       this.validatePaymentModeFields(order.paymentMode, dto, false);
+
+      const customer = dto.customerId
+        ? await tx.customer.findFirst({ where: { id: dto.customerId, tenantId } })
+        : null;
+      if (dto.customerId && !customer) {
+        throw new NotFoundException('Customer not found for tenant.');
+      }
       if (order.paymentMode === SalePaymentMode.CREDIT) {
-        const creditCustomer = dto.customerId
-          ? await tx.customer.findFirst({ where: { id: dto.customerId, tenantId } })
-          : null;
-        this.validateCreditCustomer(creditCustomer);
+        // Financial credit eligibility is independent from fiscal purpose: a
+        // cash sale can be B01 and a credit sale can be B02.
+        this.validateCreditCustomer(customer);
       }
 
       // Delete existing items
@@ -866,11 +932,7 @@ export class OrdersService {
 
       const priceLevel = dto.priceLevel ?? SalesOrderPriceLevel.REGULAR;
       const discountRate = this.getDiscountRate(priceLevel);
-      const inventorySource = dto.inventorySource ?? order.inventorySource;
-      if (inventorySource !== order.inventorySource) {
-        throw new BadRequestException('The inventory source cannot be changed after creating a quotation.');
-      }
-      const computed = await this.computeOrder(tenantId, dto.items, tx, priceLevel, inventorySource);
+      const computed = await this.computeOrder(tenantId, dto.items, tx, priceLevel);
 
       // Update order fields
       const updated = await tx.salesOrder.update({
@@ -878,6 +940,7 @@ export class OrdersService {
         data: {
           clientName: dto.clientName?.trim() || undefined,
           customerId: dto.customerId || null,
+          ...provisionalFiscalDetails('ELECTRONIC_ECF'),
           priceLevel,
           discountRate,
           quotationDocumentType: dto.quotationDocumentType ?? null,
@@ -904,9 +967,13 @@ export class OrdersService {
               barcode: item.product.barcode,
               description: item.product.name,
               quantity: item.quantity,
+              unit: item.product.unit,
               reservedQuantity: 0,
               unitPrice: item.unitPrice,
+              originalUnitPrice: item.originalUnitPrice,
+              fiscalItemKind: resolveFiscalItemKind(item.product),
               discountTotal: item.discountTotal,
+              taxCategory: item.product.taxCategory,
               taxRate: item.product.taxRate,
               taxTotal: item.taxTotal,
               subtotal: item.subtotal,
@@ -929,6 +996,10 @@ export class OrdersService {
           metadata: {
             orderNumber: updated.orderNumber,
             isUpdate: true,
+            previousFiscalPurpose: order.fiscalPurpose,
+            fiscalPurpose: updated.fiscalPurpose,
+            previousFiscalDocumentType: order.fiscalDocumentTypeSnapshot,
+            fiscalDocumentType: updated.fiscalDocumentTypeSnapshot,
             sourceDestination: updated.destination,
             sourceStatus: updated.status,
             clientName: updated.clientName,
@@ -945,7 +1016,6 @@ export class OrdersService {
     items: SalesOrderItemDto[],
     client: PrismaService | Prisma.TransactionClient = this.prisma,
     priceLevel: SalesOrderPriceLevel = SalesOrderPriceLevel.REGULAR,
-    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
   ) {
     if (!items.length) {
       throw new BadRequestException('Sales order must include at least one item.');
@@ -962,7 +1032,6 @@ export class OrdersService {
     const products = await client.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
         id: { in: Array.from(quantitiesByProduct.keys()) },
         status: ProductStatus.ACTIVE,
       },
@@ -973,7 +1042,7 @@ export class OrdersService {
     }
 
     const discountRate = this.getDiscountRate(priceLevel);
-    const computedItems: ComputedOrderItem[] = products.map((product) => {
+    const computedItems: ComputedOrderItem[] = allocateFiscalTaxByRate(products.map((product) => {
       const quantity = new Prisma.Decimal(quantitiesByProduct.get(product.id) ?? 0);
       const regularUnitPrice = product.salePrice.gt(0) ? product.salePrice : product.price;
       const unitPrice = regularUnitPrice
@@ -982,19 +1051,18 @@ export class OrdersService {
       const regularSubtotal = quantity.mul(regularUnitPrice).toDecimalPlaces(2);
       const subtotal = quantity.mul(unitPrice).toDecimalPlaces(2);
       const discountTotal = regularSubtotal.sub(subtotal).toDecimalPlaces(2);
-      const taxTotal = subtotal.mul(product.taxRate).toDecimalPlaces(2);
 
       return {
         product,
         quantity,
         reservedQuantity: product.trackInventory ? quantity.toNumber() : 0,
         unitPrice,
+        originalUnitPrice: regularUnitPrice,
         discountTotal,
         subtotal,
-        taxTotal,
-        total: subtotal.add(taxTotal).toDecimalPlaces(2),
+        taxRate: product.taxRate,
       };
-    });
+    })).map(({ taxRate: _taxRate, ...item }) => item);
 
     for (const item of computedItems) {
       const quantity = item.quantity.toNumber();
@@ -1384,6 +1452,7 @@ export class OrdersService {
       },
       data: {
         status: SalesOrderStatus.SENT_TO_CASHIER,
+        ...provisionalFiscalDetails('ELECTRONIC_ECF'),
         claimedById: null,
         claimedCashSessionId: null,
         claimedAt: null,
@@ -1487,6 +1556,8 @@ export class OrdersService {
       orderNumber: string;
       customerId: string | null;
       destination: SalesOrderDestination;
+      fiscalPurpose: FiscalDocumentPurpose;
+      fiscalDocumentTypeSnapshot: InvoiceDocumentType;
       status: SalesOrderStatus;
       clientName: string | null;
     },
@@ -1496,6 +1567,8 @@ export class OrdersService {
     return {
       orderNumber: order.orderNumber,
       customerId: order.customerId,
+      fiscalPurpose: order.fiscalPurpose,
+      fiscalDocumentType: order.fiscalDocumentTypeSnapshot,
       createdById: userId,
       sourceDestination: order.destination,
       sourceStatus: order.status,

@@ -7,7 +7,6 @@ import { useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { getCustomerStatement, type ReceivableInvoice } from '@/lib/api';
-import { brand } from '@/lib/brand';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { SessionRequired, useCurrentSession } from './session-required';
 
@@ -85,11 +84,11 @@ export function ReceivableCustomerStatementPrint({
       <article className="rounded-lg border border-zinc-200 bg-white p-4 text-zinc-950 shadow-sm sm:p-7 print:border-0 print:p-0 print:shadow-none">
         <header className="flex flex-col gap-5 border-b border-zinc-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#f36c10]">
               Estado de cuenta por cobrar
             </p>
             <h2 className="mt-2 text-2xl font-bold">{session.tenantName}</h2>
-            <p className="mt-1 text-sm text-zinc-600">{brand.name}</p>
+            <p className="mt-1 text-sm text-zinc-600">Ferretería RIVNU</p>
           </div>
           <div className="text-sm sm:text-right">
             <p>
@@ -153,6 +152,7 @@ export function ReceivableCustomerStatementPrint({
                 <thead>
                   <tr className="border-b border-zinc-300 text-left">
                     <th className="py-2 pr-3">Factura</th>
+                    <th className="px-3 py-2">NCF</th>
                     <th className="px-3 py-2">Emisión</th>
                     <th className="px-3 py-2">Vencimiento</th>
                     <th className="px-3 py-2">Estado</th>
@@ -165,6 +165,7 @@ export function ReceivableCustomerStatementPrint({
                   {statement.invoices.map((invoice) => (
                     <tr key={invoice.id} className="border-b border-zinc-100">
                       <td className="py-3 pr-3 font-medium">{invoice.invoiceNumber}</td>
+                      <td className="px-3 py-3">{invoice.ncf ?? '-'}</td>
                       <td className="px-3 py-3">
                         {formatDate(invoice.issuedAt ?? invoice.createdAt)}
                       </td>

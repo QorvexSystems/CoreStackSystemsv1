@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import { isAdminSession } from '@/lib/authorization';
 import { getStatusVariant, translatePaymentMethod, translateStatus } from '@/lib/display-labels';
+import { getInvoiceCustomerName } from '@/lib/invoice-customer';
 import { cn, formatCurrency, formatDate } from '@/lib/utils';
 import { formatQuantity, getQuantityStep } from './pos/pos-utils';
 import { ModuleHeader } from './module-header';
@@ -235,10 +236,7 @@ export function ReturnsView() {
     lookupMutation.mutate(query);
   }
 
-  function updateSelection(
-    itemId: string,
-    patch: Partial<SelectionState[string]>,
-  ) {
+  function updateSelection(itemId: string, patch: Partial<SelectionState[string]>) {
     setSelections((current) => ({
       ...current,
       [itemId]: buildNextSelection(current[itemId], patch),
@@ -301,7 +299,9 @@ export function ReturnsView() {
         <SummaryCard label="Pendientes" value={pendingCount.toString()} />
         <SummaryCard
           label="Completadas"
-          value={returnRequests.filter((request) => request.status === 'COMPLETED').length.toString()}
+          value={returnRequests
+            .filter((request) => request.status === 'COMPLETED')
+            .length.toString()}
         />
         <SummaryCard
           label="Monto pendiente"
@@ -317,7 +317,7 @@ export function ReturnsView() {
         <CardHeader>
           <CardTitle>Crear solicitud</CardTitle>
           <CardDescription>
-            Busca por numero de factura, e-NCF o numero de orden cobrada.
+            Busca por numero de factura, NCF o numero de orden cobrada.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -328,7 +328,7 @@ export function ReturnsView() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 className="bg-white pl-9"
-                placeholder="Ejemplo: RIV-E32-000009 u ORD-202606..."
+                placeholder="Ejemplo: B0200000001 u ORD-202606..."
               />
             </div>
             <Button type="submit" disabled={lookupMutation.isPending}>
@@ -344,9 +344,11 @@ export function ReturnsView() {
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground">Factura</p>
-                      <h2 className="mt-1 text-xl font-semibold">{selectedInvoice.invoiceNumber}</h2>
+                      <h2 className="mt-1 text-xl font-semibold">
+                        {selectedInvoice.invoiceNumber}
+                      </h2>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        {selectedInvoice.customer?.name ?? 'Consumidor final'} ·{' '}
+                        {getInvoiceCustomerName(selectedInvoice)} ·{' '}
                         {formatDate(selectedInvoice.issuedAt ?? selectedInvoice.createdAt)}
                       </p>
                     </div>
@@ -383,7 +385,7 @@ export function ReturnsView() {
                           <label className="flex min-w-0 items-start gap-3">
                             <input
                               type="checkbox"
-                              className="mt-1 h-4 w-4 accent-primary"
+                              className="mt-1 h-4 w-4 accent-[#f36c10]"
                               checked={selection.selected}
                               disabled={!item.canReturn}
                               onChange={(event) =>
@@ -418,7 +420,7 @@ export function ReturnsView() {
                             <label className="flex h-10 items-center gap-2 rounded-md border border-border bg-zinc-50 px-3 text-sm">
                               <input
                                 type="checkbox"
-                                className="h-4 w-4 accent-primary"
+                                className="h-4 w-4 accent-[#f36c10]"
                                 checked={selection.restock}
                                 disabled={!selection.selected || !item.productId}
                                 onChange={(event) =>
@@ -435,14 +437,14 @@ export function ReturnsView() {
                 </div>
               </div>
 
-              <div className="space-y-4 rounded-md border border-primary/35 bg-primary/5 p-4">
+              <div className="space-y-4 rounded-md border border-[#f36c10]/35 bg-[#f36c10]/5 p-4">
                 <div>
                   <Label htmlFor="returnReason">Motivo de devolucion</Label>
                   <textarea
                     id="returnReason"
                     value={reason}
                     onChange={(event) => setReason(event.target.value)}
-                    className="mt-2 min-h-28 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="mt-2 min-h-28 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#f36c10]"
                     maxLength={500}
                     placeholder="Ejemplo: producto equivocado, cliente cambio la medida o material defectuoso."
                   />
@@ -474,7 +476,7 @@ export function ReturnsView() {
 
                 <Button
                   type="button"
-                  className="h-12 w-full text-base"
+                  className="h-12 w-full bg-[#f36c10] text-base text-white hover:bg-[#d95f0e]"
                   onClick={() => createMutation.mutate()}
                   disabled={createMutation.isPending || !selectedItems.length}
                 >
@@ -593,7 +595,7 @@ function ReturnRequestCard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <ReceiptText className="h-4 w-4 text-primary" />
+            <ReceiptText className="h-4 w-4 text-[#f36c10]" />
             <p className="text-sm font-semibold">{request.invoice.invoiceNumber}</p>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -601,14 +603,19 @@ function ReturnRequestCard({
           </p>
         </div>
         <div className="flex items-center gap-2 sm:justify-end">
-          <Badge variant={getStatusVariant(request.status)}>{translateStatus(request.status)}</Badge>
+          <Badge variant={getStatusVariant(request.status)}>
+            {translateStatus(request.status)}
+          </Badge>
           <span className="text-sm font-bold">{formatCurrency(Number(request.refundAmount))}</span>
         </div>
       </div>
 
       <div className="mt-4 space-y-2">
         {request.items.map((item) => (
-          <div key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-3 py-2">
+          <div
+            key={item.id}
+            className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-3 py-2"
+          >
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{item.description}</p>
               <p className="text-xs text-muted-foreground">
@@ -616,7 +623,9 @@ function ReturnRequestCard({
                 {item.restock ? 'regresa al almacen' : 'no regresa al almacen'}
               </p>
             </div>
-            <span className="shrink-0 text-sm font-semibold">{formatCurrency(Number(item.total))}</span>
+            <span className="shrink-0 text-sm font-semibold">
+              {formatCurrency(Number(item.total))}
+            </span>
           </div>
         ))}
       </div>
@@ -688,10 +697,10 @@ function DecisionModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/65 px-4 backdrop-blur-sm">
       <div className="w-full max-w-xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl">
-        <div className="border-b border-primary/20 bg-primary/10 px-5 py-4">
+        <div className="border-b border-[#f36c10]/20 bg-[#f36c10]/10 px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="flex gap-3">
-              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#f36c10] text-white">
                 {approving ? <Check className="h-5 w-5" /> : <Ban className="h-5 w-5" />}
               </div>
               <div>
@@ -699,7 +708,8 @@ function DecisionModal({
                   {approving ? 'Aprobar devolucion' : 'Rechazar devolucion'}
                 </h2>
                 <p className="mt-1 text-sm leading-5 text-zinc-700">
-                  Factura {target.invoice.invoiceNumber} · {formatCurrency(Number(target.refundAmount))}
+                  Factura {target.invoice.invoiceNumber} ·{' '}
+                  {formatCurrency(Number(target.refundAmount))}
                 </p>
               </div>
             </div>
@@ -772,7 +782,7 @@ function DecisionModal({
               id="adminNote"
               value={adminNote}
               onChange={(event) => onAdminNoteChange(event.target.value)}
-              className="mt-2 min-h-28 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-2 min-h-28 w-full rounded-md border border-input bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#f36c10]"
               maxLength={500}
               placeholder={
                 approving
@@ -835,6 +845,8 @@ function getSelectedItems(invoice: ReturnInvoiceLookup, selections: SelectionSta
     }))
     .filter(({ item, selection }) => {
       const quantity = Number(selection?.quantity ?? 0);
-      return Boolean(selection?.selected && item.canReturn && Number.isFinite(quantity) && quantity > 0);
+      return Boolean(
+        selection?.selected && item.canReturn && Number.isFinite(quantity) && quantity > 0,
+      );
     });
 }

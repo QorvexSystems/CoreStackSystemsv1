@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,359 +16,316 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { createFiscalSequence, getFiscalSequences } from '@/lib/api';
-import { getStatusVariant, translateStatus } from '@/lib/display-labels';
-import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
-import { formatDate } from '@/lib/utils';
+import {
+  createElectronicFiscalRange,
+  createFiscalSequence,
+  getElectronicFiscalRanges,
+  getFiscalSequences,
+  retryElectronicFiscalRange,
+  type ElectronicFiscalRange,
+  type FiscalSequence,
+  type LocalNcfDocumentType,
+} from '@/lib/api';
+import {
+  getStatusVariant,
+  translateInvoiceDocumentType,
+  translateStatus,
+} from '@/lib/display-labels';
+import { formatDateOnly } from '@/lib/utils';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
 
-const fiscalDocumentTypes = [
-  {
-    value: 'FISCAL_CREDIT_01',
-    label: 'Factura de crédito fiscal B01',
-    prefix: 'B01',
-    requiresRnc: true,
-    description: 'NCF local para empresas o contratistas que necesitan sustentar el gasto.',
-  },
-  {
-    value: 'CONSUMER_02',
-    label: 'Factura de consumo B02',
-    prefix: 'B02',
-    requiresRnc: false,
-    description: 'NCF local para consumidores finales y compras regulares.',
-  },
-  {
-    value: 'FISCAL_CREDIT_ELECTRONIC_31',
-    label: 'Factura de crédito fiscal electrónica E31',
-    prefix: 'E31',
-    requiresRnc: true,
-    description: 'e-CF que requiere solicitar el RNC del cliente.',
-  },
-  {
-    value: 'CONSUMER_ELECTRONIC_32',
-    label: 'Factura de consumo electrónica E32',
-    prefix: 'E32',
-    requiresRnc: false,
-    description: 'e-CF para consumidores finales.',
-  },
-] as const;
-
-type OperationalFiscalDocumentType = (typeof fiscalDocumentTypes)[number]['value'];
-
-type SequenceForm = {
-  documentType: OperationalFiscalDocumentType;
-  startNumber: string;
-  endNumber: string;
-  nextNumber: string;
-  authorizationNumber: string;
-  validUntil: string;
-  issuerDocumentType: 'RNC' | 'CEDULA';
-  issuerDocumentNumber: string;
+const electronicTypes = [31, 32, 33, 34, 41, 43, 44, 45, 46, 47] as const;
+const electronicNames: Record<(typeof electronicTypes)[number], string> = {
+  31: 'Crédito fiscal',
+  32: 'Consumo',
+  33: 'Nota de débito',
+  34: 'Nota de crédito',
+  41: 'Compras',
+  43: 'Gastos menores',
+  44: 'Regímenes especiales',
+  45: 'Gubernamental',
+  46: 'Exportaciones',
+  47: 'Pagos al exterior',
 };
+
+type ElectronicRegistrationType = `E${(typeof electronicTypes)[number]}`;
+type RegistrationType = LocalNcfDocumentType | ElectronicRegistrationType;
 
 export function FiscalSequencesView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
+  const [form, setForm] = useState({
+    registrationType: 'E32' as RegistrationType,
+    startNumber: '',
+    endNumber: '',
+    nextNumber: '',
+    authorizationNumber: '',
+    authorizedAt: '',
+    validUntil: '',
+  });
   const sequencesQuery = useQuery({
     queryKey: ['fiscal-sequences', session?.tenantId],
     queryFn: () => getFiscalSequences(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
-  const [form, setForm] = useState<SequenceForm>({
-    documentType: 'CONSUMER_02',
-    startNumber: '1',
-    endNumber: '1',
-    nextNumber: '1',
-    authorizationNumber: '',
-    validUntil: '',
-    issuerDocumentType: 'RNC',
-    issuerDocumentNumber: '',
+  const electronicRangesQuery = useQuery({
+    queryKey: ['electronic-fiscal-ranges', session?.tenantId],
+    queryFn: () =>
+      getElectronicFiscalRanges(session?.tenantId ?? '', session?.accessToken ?? ''),
+    enabled: Boolean(session),
+    refetchInterval: 5_000,
   });
 
-  const sequences = sequencesQuery.data ?? [];
-  const selectedType = fiscalDocumentTypes.find((type) => type.value === form.documentType)!;
-  const suggestedStart = useMemo(() => {
-    const previousBlocks = sequences.filter((sequence) => sequence.documentType === form.documentType);
-    return previousBlocks.length
-      ? Math.max(...previousBlocks.map((sequence) => sequence.endNumber)) + 1
-      : 1;
-  }, [form.documentType, sequences]);
-  const hasActiveBlock = sequences.some(
-    (sequence) => sequence.documentType === form.documentType && sequence.status === 'ACTIVE',
-  );
-  const canManage =
-    Boolean(session?.permissions.canManageFiscalSequences) ||
-    ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session?.role ?? '');
+  useEffect(() => {
+    const suggestedStart = getSuggestedRegistrationStart(
+      form.registrationType,
+      sequencesQuery.data ?? [],
+      electronicRangesQuery.data ?? [],
+    );
+    if (suggestedStart === null) return;
+
+    setForm((current) => {
+      if (current.startNumber || current.nextNumber) return current;
+      return { ...current, startNumber: suggestedStart, nextNumber: suggestedStart };
+    });
+  }, [electronicRangesQuery.data, form.registrationType, sequencesQuery.data]);
 
   const createMutation = useMutation({
-    mutationFn: (input: {
-      documentType: OperationalFiscalDocumentType;
-      startNumber: number;
-      endNumber: number;
-      nextNumber: number;
-      authorizationNumber?: string;
-      validUntil?: string;
-      issuerDocumentType: 'RNC' | 'CEDULA';
-      issuerDocumentNumber: string;
-    }) => {
+    mutationFn: async () => {
       if (!session) throw new Error('Sesión requerida.');
-      return createFiscalSequence(session.tenantId, session.accessToken, input);
+
+      if (isElectronicRegistrationType(form.registrationType)) {
+        const record = await createElectronicFiscalRange(
+          session.tenantId,
+          session.accessToken,
+          {
+            ecfType: electronicTypeNumber(form.registrationType),
+            startNumber: form.startNumber,
+            endNumber: form.endNumber,
+            nextNumber: form.nextNumber,
+            authorizationNumber: form.authorizationNumber.trim(),
+            authorizedAt: form.authorizedAt || undefined,
+            validUntil: form.validUntil || undefined,
+          },
+        );
+        return { kind: 'electronic' as const, record };
+      }
+
+      const record = await createFiscalSequence(session.tenantId, session.accessToken, {
+        documentType: form.registrationType,
+        startNumber: Number(form.startNumber),
+        endNumber: Number(form.endNumber),
+        nextNumber: Number(form.nextNumber),
+        authorizationNumber: form.authorizationNumber.trim(),
+        validUntil: form.validUntil || undefined,
+      });
+      return { kind: 'local' as const, record };
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['fiscal-sequences'] });
-      toast.success('Bloque autorizado registrado.');
-      const nextSuggested = suggestedStart;
+    onSuccess: async (result) => {
+      const nextStart = String(Number(result.record.endNumber) + 1);
       setForm((current) => ({
         ...current,
-        startNumber: String(nextSuggested),
-        endNumber: String(nextSuggested),
-        nextNumber: String(nextSuggested),
+        startNumber: nextStart,
+        endNumber: '',
+        nextNumber: nextStart,
         authorizationNumber: '',
+        authorizedAt: '',
         validUntil: '',
       }));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fiscal-sequences'] }),
+        queryClient.invalidateQueries({ queryKey: ['electronic-fiscal-ranges'] }),
+        queryClient.invalidateQueries({ queryKey: ['operational-alerts'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] }),
+      ]);
+      toast.success(
+        result.kind === 'electronic'
+          ? 'Rango e-NCF registrado; la sincronización fiscal continuará automáticamente.'
+          : result.record.status === 'INACTIVE'
+            ? 'Bloque NCF registrado y puesto en espera.'
+            : 'Bloque NCF registrado y activado.',
+      );
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el bloque.');
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudo registrar el bloque.'),
+  });
+  const retryMutation = useMutation({
+    mutationFn: (id: string) =>
+      retryElectronicFiscalRange(session!.tenantId, session!.accessToken, id),
+    onSuccess: async () =>
+      queryClient.invalidateQueries({ queryKey: ['electronic-fiscal-ranges'] }),
+    onError: () => toast.error('No se pudo solicitar el reintento.'),
   });
 
   if (!session) return <SessionRequired session={session} />;
 
-  function changeDocumentType(documentType: OperationalFiscalDocumentType) {
-    const priorBlocks = sequences.filter((sequence) => sequence.documentType === documentType);
-    const start = priorBlocks.length
-      ? Math.max(...priorBlocks.map((sequence) => sequence.endNumber)) + 1
-      : 1;
+  const canManage =
+    Boolean(session.permissions.canManageFiscalSequences) ||
+    ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session.role);
+  const suggestedStart = getSuggestedRegistrationStart(
+    form.registrationType,
+    sequencesQuery.data ?? [],
+    electronicRangesQuery.data ?? [],
+  );
+  const loading = sequencesQuery.isLoading || electronicRangesQuery.isLoading;
+  const failed = sequencesQuery.isError || electronicRangesQuery.isError;
+  const empty = !sequencesQuery.data?.length && !electronicRangesQuery.data?.length;
 
-    setForm((current) => ({
-      documentType,
-      startNumber: String(start),
-      endNumber: String(start),
-      nextNumber: String(start),
-      authorizationNumber: '',
-      validUntil: '',
-      issuerDocumentType: current.issuerDocumentType,
-      issuerDocumentNumber: current.issuerDocumentNumber,
-    }));
+  function submitSequence(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    createMutation.mutate();
   }
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const startNumber = Number(form.startNumber);
-    const endNumber = Number(form.endNumber);
-    const nextNumber = Number(form.nextNumber);
-
-    if (!validateDominicanDocument(form.issuerDocumentType, form.issuerDocumentNumber)) {
-      toast.error(
-        form.issuerDocumentType === 'RNC'
-          ? 'El RNC del emisor no es válido.'
-          : 'La cédula del emisor no es válida.',
-      );
-      return;
-    }
-
-    if (!Number.isInteger(startNumber) || !Number.isInteger(endNumber) || !Number.isInteger(nextNumber)) {
-      toast.error('Los números del bloque deben ser enteros válidos.');
-      return;
-    }
-
-    createMutation.mutate({
-      documentType: form.documentType,
-      startNumber,
-      endNumber,
-      nextNumber,
-      authorizationNumber: form.authorizationNumber.trim(),
-      ...(form.validUntil ? { validUntil: form.validUntil } : {}),
-      issuerDocumentType: form.issuerDocumentType,
-      issuerDocumentNumber: normalizeDominicanDocument(form.issuerDocumentNumber),
-    });
+  function selectRegistrationType(registrationType: RegistrationType) {
+    const nextStart = getSuggestedRegistrationStart(
+      registrationType,
+      sequencesQuery.data ?? [],
+      electronicRangesQuery.data ?? [],
+    );
+    setForm((current) => ({
+      ...current,
+      registrationType,
+      startNumber: nextStart ?? '',
+      endNumber: '',
+      nextNumber: nextStart ?? '',
+      authorizedAt: '',
+      validUntil: '',
+    }));
   }
 
   return (
     <div className="space-y-6">
       <ModuleHeader
         title="Secuencias fiscales"
-        description="Bloques NCF B01/B02 y e-CF E31/E32 autorizados por DGII. E31/E32 se emiten como simulación hasta configurar firma y envío."
+        description="Autorizaciones NCF y e-NCF asignadas por DGII."
       />
 
       {canManage ? (
         <Card>
           <CardHeader>
-            <CardTitle>Agregar un nuevo bloque autorizado</CardTitle>
+            <CardTitle>Registrar bloque autorizado</CardTitle>
             <CardDescription>
-              Cada autorización se conserva como un bloque independiente. Nunca se amplía ni se
-              reinicia un rango que ya fue registrado.
+              Selecciona el tipo y copia exactamente la autorización entregada por DGII.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="mb-5 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
-              <p className="font-semibold">
-                {hasActiveBlock
-                  ? 'Ya hay un bloque activo para este tipo: el nuevo quedará en espera.'
-                  : 'No hay un bloque activo para este tipo: el nuevo se activará de inmediato.'}
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                Copia exactamente el rango autorizado por DGII. El siguiente número puede ser
-                mayor que el inicio si ya lo utilizaste fuera del sistema. Los rangos nunca pueden
-                solaparse.
-              </p>
-            </div>
-
-            <form className="space-y-5" onSubmit={submit}>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-document-type">Tipo</Label>
-                  <select
-                    id="fiscal-document-type"
-                    value={form.documentType}
-                    onChange={(event) =>
-                      changeDocumentType(event.target.value as OperationalFiscalDocumentType)
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {fiscalDocumentTypes.map((type) => (
-                      <option key={type.value} value={type.value}>
-                        {type.label}
+            <form className="grid gap-4 md:grid-cols-3" onSubmit={submitSequence}>
+              <div className="space-y-2">
+                <Label htmlFor="registrationType">Tipo</Label>
+                <select
+                  id="registrationType"
+                  value={form.registrationType}
+                  onChange={(event) =>
+                    selectRegistrationType(event.target.value as RegistrationType)
+                  }
+                  className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+                >
+                  <optgroup label="Comprobantes electrónicos">
+                    {electronicTypes.map((type) => (
+                      <option key={type} value={`E${type}`}>
+                        E{type} · {electronicNames[type]}
                       </option>
                     ))}
-                  </select>
-                  <p className="text-xs leading-5 text-muted-foreground">{selectedType.description}</p>
-                </div>
-                <NumericField
-                  id="fiscal-start-number"
-                  label="Número desde"
-                  value={form.startNumber}
-                  onChange={(startNumber) => setForm((current) => ({ ...current, startNumber }))}
-                  hint={`Sugerido según el historial: ${suggestedStart}`}
-                />
-                <NumericField
-                  id="fiscal-end-number"
-                  label="Número hasta"
-                  value={form.endNumber}
-                  onChange={(endNumber) => setForm((current) => ({ ...current, endNumber }))}
-                />
-                <NumericField
-                  id="fiscal-next-number"
-                  label="Siguiente a utilizar"
-                  value={form.nextNumber}
-                  onChange={(nextNumber) => setForm((current) => ({ ...current, nextNumber }))}
-                  hint="Déjalo igual al inicio salvo que ya hayas usado números fuera del sistema."
-                />
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-issuer-document-type">Documento del emisor</Label>
-                  <select
-                    id="fiscal-issuer-document-type"
-                    value={form.issuerDocumentType}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        issuerDocumentType: event.target.value as 'RNC' | 'CEDULA',
-                        issuerDocumentNumber: '',
-                      }))
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="RNC">RNC</option>
-                    <option value="CEDULA">Cédula</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-issuer-document-number">
-                    {form.issuerDocumentType === 'RNC' ? 'RNC del emisor' : 'Cédula del emisor'}
-                  </Label>
-                  <Input
-                    id="fiscal-issuer-document-number"
-                    inputMode="numeric"
-                    value={form.issuerDocumentNumber}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        issuerDocumentNumber: event.target.value,
-                      }))
-                    }
-                    placeholder={form.issuerDocumentType === 'RNC' ? '1-01-00000-1' : '001-0000000-1'}
-                    required
-                  />
-                  {form.issuerDocumentNumber ? (
-                    <p
-                      className={
-                        validateDominicanDocument(
-                          form.issuerDocumentType,
-                          form.issuerDocumentNumber,
-                        )
-                          ? 'text-xs text-success'
-                          : 'text-xs text-danger'
-                      }
-                    >
-                      {validateDominicanDocument(
-                        form.issuerDocumentType,
-                        form.issuerDocumentNumber,
-                      )
-                        ? 'Documento válido.'
-                        : 'Verifica el dígito verificador dominicano.'}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-authorization">
-                    No. autorización DGII {selectedType.requiresRnc ? '' : '(si DGII la indica)'}
-                  </Label>
-                  <Input
-                    id="fiscal-authorization"
-                    value={form.authorizationNumber}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, authorizationNumber: event.target.value }))
-                    }
-                    required={selectedType.requiresRnc}
-                    maxLength={80}
-                    placeholder="Ej.: 6005410462"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="fiscal-valid-until">
-                    Válida hasta {selectedType.requiresRnc ? '' : '(si DGII la indica)'}
-                  </Label>
-                  <Input
-                    id="fiscal-valid-until"
-                    type="date"
-                    value={form.validUntil}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, validUntil: event.target.value }))
-                    }
-                    required={selectedType.requiresRnc}
-                  />
-                </div>
+                  </optgroup>
+                  <optgroup label="Comprobantes NCF">
+                    <option value="CONSUMER_02">B02 · Factura de consumo</option>
+                    <option value="FISCAL_CREDIT_01">B01 · Crédito fiscal</option>
+                  </optgroup>
+                </select>
               </div>
-
-              <p className="text-sm text-muted-foreground">
-                {selectedType.requiresRnc
-                  ? `${selectedType.prefix} requiere solicitar y registrar el RNC del cliente antes de facturar.`
-                  : `${selectedType.prefix} es para consumidor final; no requiere RNC ni permite sustentar crédito fiscal.`}
-              </p>
-              <Button type="submit" disabled={createMutation.isPending}>
-                {createMutation.isPending ? 'Guardando bloque...' : 'Agregar bloque autorizado'}
-              </Button>
+              <SequenceNumberInput
+                id="sequenceStart"
+                label="Número desde"
+                value={form.startNumber}
+                hint={
+                  suggestedStart === null
+                    ? undefined
+                    : `Sugerido según el historial: ${Number(suggestedStart).toLocaleString('es-DO')}`
+                }
+                onChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    startNumber: value,
+                    nextNumber:
+                      !current.nextNumber || current.nextNumber === current.startNumber
+                        ? value
+                        : current.nextNumber,
+                  }))
+                }
+              />
+              <SequenceNumberInput
+                id="sequenceEnd"
+                label="Número hasta"
+                value={form.endNumber}
+                onChange={(value) => setForm((current) => ({ ...current, endNumber: value }))}
+              />
+              <SequenceNumberInput
+                id="sequenceNext"
+                label="Siguiente a utilizar"
+                value={form.nextNumber}
+                hint="Déjalo igual al inicio salvo que ya hayas usado números fuera de RIVNU."
+                onChange={(value) => setForm((current) => ({ ...current, nextNumber: value }))}
+              />
+              <div className="space-y-2">
+                <Label htmlFor="sequenceAuthorization">No. autorización DGII</Label>
+                <Input
+                  id="sequenceAuthorization"
+                  value={form.authorizationNumber}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      authorizationNumber: event.target.value,
+                    }))
+                  }
+                  required
+                  maxLength={120}
+                />
+              </div>
+              {isElectronicRegistrationType(form.registrationType) ? (
+                <div className="space-y-2">
+                  <Label htmlFor="sequenceAuthorizedAt">Fecha autorización</Label>
+                  <Input
+                    id="sequenceAuthorizedAt"
+                    type="date"
+                    value={form.authorizedAt}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, authorizedAt: event.target.value }))
+                    }
+                  />
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="sequenceValidUntil">Válida hasta</Label>
+                <Input
+                  id="sequenceValidUntil"
+                  type="date"
+                  value={form.validUntil}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, validUntil: event.target.value }))
+                  }
+                  required={form.registrationType === 'FISCAL_CREDIT_01'}
+                />
+              </div>
+              <div className="md:col-span-3">
+                <Button type="submit" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? 'Registrando…' : 'Registrar bloque autorizado'}
+                </Button>
+              </div>
             </form>
           </CardContent>
         </Card>
-      ) : (
-        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
-          Solo los usuarios autorizados pueden agregar bloques fiscales. Puedes consultar el
-          historial y los bloques activos a continuación.
-        </div>
-      )}
+      ) : null}
 
       <Card>
         <CardHeader>
           <CardTitle>Bloques fiscales registrados</CardTitle>
           <CardDescription>
-            POS consume únicamente el bloque activo. Al agotarse, el siguiente bloque válido en
-            espera se activa automáticamente.
+            Disponibilidad y consumo de todas las secuencias NCF y e-NCF.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table wrapperClassName="overflow-auto rounded-md border border-border">
+          <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Tipo</TableHead>
@@ -376,7 +333,7 @@ export function FiscalSequencesView() {
                 <TableHead>Siguiente</TableHead>
                 <TableHead>Final</TableHead>
                 <TableHead>Restantes</TableHead>
-                <TableHead className="min-w-32">Progreso</TableHead>
+                <TableHead>Progreso</TableHead>
                 <TableHead>RNC/Cédula emisor</TableHead>
                 <TableHead>Autorización</TableHead>
                 <TableHead>Vigencia</TableHead>
@@ -384,55 +341,38 @@ export function FiscalSequencesView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sequences.map((sequence) => {
-                const total = sequence.endNumber - sequence.startNumber + 1;
-                const used = Math.min(Math.max(sequence.nextNumber - sequence.startNumber, 0), total);
-                const remaining = Math.max(sequence.endNumber - sequence.nextNumber + 1, 0);
-                const progress = total > 0 ? Math.round((used / total) * 100) : 0;
-
-                return (
-                  <TableRow key={sequence.id}>
-                    <TableCell className="whitespace-nowrap font-medium">
-                      {getFiscalTypeLabel(sequence.documentType)}
-                    </TableCell>
-                    <TableCell>{sequence.prefix}</TableCell>
-                    <TableCell className="font-medium">
-                      {formatFiscalNumber(sequence.prefix, sequence.nextNumber)}
-                    </TableCell>
-                    <TableCell>{formatFiscalNumber(sequence.prefix, sequence.endNumber)}</TableCell>
-                    <TableCell>{remaining}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <span className="text-xs text-muted-foreground">
-                          {used} usados · {progress}%
-                        </span>
-                        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
-                          <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {sequence.issuerDocumentNumber
-                        ? `${sequence.issuerDocumentType ?? 'RNC'} ${sequence.issuerDocumentNumber}`
-                        : '-'}
-                    </TableCell>
-                    <TableCell>{sequence.authorizationNumber ?? '-'}</TableCell>
-                    <TableCell>{sequence.validUntil ? formatDate(sequence.validUntil) : '-'}</TableCell>
-                    <TableCell>
-                      <Badge variant={getStatusVariant(sequence.status)}>
-                        {sequence.status === 'INACTIVE' ? 'En espera' : translateStatus(sequence.status)}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {!sequences.length ? (
+              {loading ? (
                 <TableRow>
                   <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
-                    Aún no hay bloques fiscales registrados.
+                    Cargando bloques fiscales…
                   </TableCell>
                 </TableRow>
-              ) : null}
+              ) : failed ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="py-8 text-center text-danger">
+                    No se pudieron cargar las secuencias fiscales.
+                  </TableCell>
+                </TableRow>
+              ) : empty ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
+                    Todavía no hay bloques fiscales registrados.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <>
+                  {(electronicRangesQuery.data ?? []).map((range) => (
+                    <ElectronicRangeRow
+                      key={`electronic-${range.id}`}
+                      range={range}
+                      retry={() => retryMutation.mutate(range.id)}
+                    />
+                  ))}
+                  {(sequencesQuery.data ?? []).map((sequence) => (
+                    <LocalSequenceRow key={`local-${sequence.id}`} sequence={sequence} />
+                  ))}
+                </>
+              )}
             </TableBody>
           </Table>
         </CardContent>
@@ -441,41 +381,194 @@ export function FiscalSequencesView() {
   );
 }
 
-function NumericField({
+function LocalSequenceRow({ sequence }: { sequence: FiscalSequence }) {
+  const remaining = Math.max(sequence.endNumber - sequence.nextNumber + 1, 0);
+  const total = Math.max(sequence.endNumber - sequence.startNumber + 1, 1);
+  const used = Math.min(Math.max(sequence.nextNumber - sequence.startNumber, 0), total);
+
+  return (
+    <TableRow className={sequence.status === 'INACTIVE' ? 'bg-amber-50/60' : undefined}>
+      <TableCell>{translateInvoiceDocumentType(sequence.documentType)}</TableCell>
+      <TableCell>{sequence.prefix}</TableCell>
+      <TableCell className="font-medium">
+        {formatFiscalNumber(sequence.prefix, sequence.nextNumber)}
+      </TableCell>
+      <TableCell>{formatFiscalNumber(sequence.prefix, sequence.endNumber)}</TableCell>
+      <TableCell>{remaining.toLocaleString('es-DO')}</TableCell>
+      <TableCell>
+        <SequenceProgress prefix={sequence.prefix} used={used} total={total} />
+      </TableCell>
+      <TableCell>{sequence.issuerTaxId ?? '-'}</TableCell>
+      <TableCell>{sequence.authorizationNumber ?? '-'}</TableCell>
+      <TableCell>{sequence.validUntil ? formatDateOnly(sequence.validUntil) : '-'}</TableCell>
+      <TableCell>
+        <Badge variant={getStatusVariant(sequence.status)}>
+          {sequence.status === 'INACTIVE' ? 'En espera' : translateStatus(sequence.status)}
+        </Badge>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ElectronicRangeRow({
+  range,
+  retry,
+}: {
+  range: ElectronicFiscalRange;
+  retry(): void;
+}) {
+  const start = Number(range.startNumber);
+  const end = Number(range.endNumber);
+  const next = Number(range.nextNumber ?? range.startNumber);
+  const total = Math.max(end - start + 1, 1);
+  const used = range.authoritative
+    ? Number(range.used ?? 0)
+    : Math.min(Math.max(next - start, 0), total);
+  const remaining = range.authoritative
+    ? Number(range.remaining ?? 0)
+    : Math.max(end - next + 1, 0);
+  const statusLabel = range.exhausted
+    ? 'Agotado'
+    : range.syncStatus === 'SYNCED'
+      ? 'Sincronizado'
+      : range.syncStatus === 'SYNCING'
+        ? 'Sincronizando'
+        : range.syncStatus === 'FAILED'
+          ? 'Fallido'
+          : 'Pendiente';
+
+  return (
+    <TableRow>
+      <TableCell>E{range.ecfType} · {electronicNames[range.ecfType]}</TableCell>
+      <TableCell>{range.prefix}</TableCell>
+      <TableCell className="font-medium">{formatFiscalNumber(range.prefix, next)}</TableCell>
+      <TableCell>{formatFiscalNumber(range.prefix, end)}</TableCell>
+      <TableCell>{remaining.toLocaleString('es-DO')}</TableCell>
+      <TableCell>
+        <SequenceProgress prefix={range.prefix} used={used} total={total} />
+      </TableCell>
+      <TableCell>{range.issuerTaxId}</TableCell>
+      <TableCell>{range.authorizationNumber}</TableCell>
+      <TableCell>{range.validUntil ? formatDateOnly(range.validUntil) : '-'}</TableCell>
+      <TableCell>
+        <div className="flex flex-col items-start gap-1">
+          <Badge
+            variant={
+              range.syncStatus === 'SYNCED'
+                ? 'success'
+                : range.syncStatus === 'FAILED'
+                  ? 'danger'
+                  : 'default'
+            }
+          >
+            {statusLabel}
+          </Badge>
+          {range.syncStatus === 'FAILED' ? (
+            <Button size="sm" variant="outline" onClick={retry}>
+              Reintentar
+            </Button>
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function SequenceNumberInput({
   id,
   label,
+  hint,
   value,
   onChange,
-  hint,
 }: {
   id: string;
   label: string;
+  hint?: string;
   value: string;
   onChange: (value: string) => void;
-  hint?: string;
 }) {
   return (
     <div className="space-y-2">
       <Label htmlFor={id}>{label}</Label>
       <Input
         id={id}
-        type="number"
-        min="1"
-        step="1"
+        inputMode="numeric"
+        pattern="[1-9][0-9]{0,9}"
+        maxLength={10}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 10))}
         required
       />
-      {hint ? <p className="text-xs leading-5 text-muted-foreground">{hint}</p> : null}
+      {hint ? <p className="text-xs leading-4 text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
 
-function getFiscalTypeLabel(documentType: string) {
-  return fiscalDocumentTypes.find((type) => type.value === documentType)?.label ?? documentType;
+function SequenceProgress({
+  prefix,
+  used,
+  total,
+}: {
+  prefix: string;
+  used: number;
+  total: number;
+}) {
+  const safeUsed = Math.min(Math.max(used, 0), total);
+  const exactPercent = (safeUsed / total) * 100;
+  const percent = safeUsed > 0 && exactPercent < 1 ? 1 : Math.round(exactPercent);
+  const percentLabel = safeUsed > 0 && exactPercent < 1 ? '<1%' : `${percent}%`;
+
+  return (
+    <div className="min-w-32 space-y-1.5">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span>{safeUsed.toLocaleString('es-DO')} usados</span>
+        <span className="text-muted-foreground">{percentLabel}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={`Uso del bloque ${prefix}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        className="h-2 overflow-hidden rounded-full bg-muted"
+      >
+        <div
+          className="h-full rounded-full bg-accent transition-[width]"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function getSuggestedRegistrationStart(
+  registrationType: RegistrationType,
+  sequences: FiscalSequence[],
+  electronicRanges: ElectronicFiscalRange[],
+) {
+  if (isElectronicRegistrationType(registrationType)) {
+    const type = electronicTypeNumber(registrationType);
+    const highestEnd = electronicRanges
+      .filter((range) => range.ecfType === type)
+      .reduce((highest, range) => Math.max(highest, Number(range.endNumber)), 0);
+    return highestEnd >= 9_999_999_999 ? null : String(highestEnd + 1);
+  }
+
+  const highestEnd = sequences
+    .filter((sequence) => sequence.documentType === registrationType)
+    .reduce((highest, sequence) => Math.max(highest, sequence.endNumber), 0);
+  return highestEnd >= 99_999_999 ? null : String(highestEnd + 1);
+}
+
+function isElectronicRegistrationType(value: RegistrationType): value is ElectronicRegistrationType {
+  return /^E(?:31|32|33|34|41|43|44|45|46|47)$/.test(value);
+}
+
+function electronicTypeNumber(value: ElectronicRegistrationType) {
+  return Number(value.slice(1)) as (typeof electronicTypes)[number];
 }
 
 function formatFiscalNumber(prefix: string, number: number) {
-  const digits = prefix === 'BA' ? 4 : prefix === 'B01' || prefix === 'B02' ? 8 : 10;
+  const digits = /^B\d{2}$/.test(prefix) ? 8 : prefix === 'BA' ? 4 : 10;
   return `${prefix}${String(number).padStart(digits, '0')}`;
 }

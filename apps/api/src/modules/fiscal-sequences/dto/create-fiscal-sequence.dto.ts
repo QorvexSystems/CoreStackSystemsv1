@@ -1,42 +1,28 @@
-import { DocumentType, InvoiceDocumentType } from '@qorvex/database';
+import { InvoiceDocumentType } from '@qorvex/database';
 import { Type } from 'class-transformer';
-import {
-  IsDateString,
-  IsEnum,
-  IsIn,
-  IsInt,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
-
-const supportedFiscalDocumentTypes = [
-  InvoiceDocumentType.FISCAL_CREDIT_01,
-  InvoiceDocumentType.CONSUMER_02,
-  InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
-  InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
-] as const;
+import { IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { LOCAL_NCF_DOCUMENT_TYPES } from '../fiscal-number';
 
 export class CreateFiscalSequenceDto {
-  @IsEnum(InvoiceDocumentType)
-  @IsIn(supportedFiscalDocumentTypes)
+  @IsIn(LOCAL_NCF_DOCUMENT_TYPES)
   documentType: InvoiceDocumentType;
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(99_999_999)
   startNumber: number;
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(99_999_999)
   endNumber: number;
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(99_999_999)
   nextNumber: number;
 
   @IsOptional()
@@ -45,15 +31,6 @@ export class CreateFiscalSequenceDto {
   authorizationNumber?: string;
 
   @IsOptional()
-  @IsDateString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
   validUntil?: string;
-
-  @IsEnum(DocumentType)
-  @IsIn([DocumentType.RNC, DocumentType.CEDULA])
-  issuerDocumentType: DocumentType;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(20)
-  issuerDocumentNumber: string;
 }

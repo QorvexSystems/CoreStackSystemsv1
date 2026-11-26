@@ -1,0 +1,73 @@
+name: corestack-preview-remote
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: corestack-preview-remote-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: corestack_preview_remote
+      POSTGRES_PASSWORD_FILE: /run/preview-admin-password
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    volumes:
+      - preview-remote-data:/var/lib/postgresql/data
+      - ./credentials/db-admin:/run/preview-admin-password:ro
+      - ./credentials/db-runtime:/run/preview-runtime-password:ro
+      - ./deploy/preview/remote-bootstrap.sql:/docker-entrypoint-initdb.d/fixture.sql:ro
+      - ./packages/fiscal/sql/001_sequence_registry.sql:/fixture/001.sql:ro
+      - ./packages/fiscal/sql/002_request_persistence.sql:/fixture/002.sql:ro
+      - ./packages/fiscal/sql/003_preparation_worker.sql:/fixture/003.sql:ro
+    networks: [data]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 100
+    security_opt: ['no-new-privileges:true']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d corestack_preview_remote']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: { driver: local, options: { max-size: 5m, max-file: '2' } }
+  service:
+    image: corestack/fiscal-preview-rehearsal:20260924
+    container_name: corestack-preview-remote-service
+    user: '1003:1004'
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=64m]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 100
+    entrypoint: [node, test/preview-remote-server.ts]
+    environment:
+      FISCAL_SYNTHETIC_PREVIEW: NO_FISCAL_VALIDITY
+    volumes:
+      - ./packages/fiscal/src:/app/fiscal/src:ro
+      - ./packages/fiscal/test:/app/fiscal/test:ro
+      - ./credentials/token:/run/preview/token:ro
+      - ./credentials/db-runtime:/run/preview/db-password:ro
+      - ./credentials/server.crt:/run/preview/server.crt:ro
+      - ./credentials/server.key:/run/preview/server.key:ro
+      - ./synthetic-state:/run/synthetic-state
+    ports: ['10.0.0.1:4082:8443']
+    networks: [data, edge]
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const h=require('node:https'),f=require('node:fs');h.get('https://127.0.0.1:8443/health/live',{ca:f.readFileSync('/run/preview/server.crt')},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1));",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: { driver: local, options: { max-size: 5m, max-file: '2' } }
+networks:
+  data: { internal: true }
+  edge: {}
+volumes:
+  preview-remote-data: {}

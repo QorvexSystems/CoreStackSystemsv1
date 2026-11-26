@@ -51,9 +51,11 @@ enum ProductStatus {
   DISCONTINUED
 }
 
-enum ProductInventoryDestination {
-  SALES_INVENTORY
-  WAREHOUSE
+// Explicit catalogue classification. Legacy nulls receive a deterministic
+// GOOD/SERVICE value only when frozen into a new order snapshot.
+enum FiscalItemKind {
+  GOOD
+  SERVICE
 }
 
 enum InventoryMovementType {
@@ -156,9 +158,50 @@ enum DocumentType {
   OTHER
 }
 
+enum DgiiRegistrySource {
+  DGII_OFFICIAL
+  TEST_FIXTURE
+}
+
+enum DgiiRegistryDatasetStatus {
+  IMPORTING
+  READY
+  ACTIVE
+  SUPERSEDED
+  FAILED
+}
+
+enum DgiiTaxpayerStatus {
+  ACTIVE
+  SUSPENDED
+  DEREGISTERED
+  TEMPORARY_CESSATION
+  ANNULLED
+  REJECTED
+  UNKNOWN
+}
+
+enum TaxIdentityContextType {
+  POS_ORDER
+  CUSTOMER
+  SUPPLIER
+  CUSTOMER_CREATE
+  SUPPLIER_CREATE
+}
+
+enum TaxIdentityApprovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
 enum InvoiceFiscalStatus {
   NOT_APPLICABLE
   PENDING_SEQUENCE
+  LOCAL_ISSUED
+  LEGACY_UNVERIFIED
   READY_TO_SEND
   PENDING_SIGNATURE
   SIGNED
@@ -170,12 +213,23 @@ enum InvoiceFiscalStatus {
 }
 
 enum InvoiceDocumentType {
-  FISCAL_CREDIT_01
+  LOCAL_SALE_NOTE
   CONSUMER_02
+  FISCAL_CREDIT_01
   CONSUMER_ELECTRONIC_32
   FISCAL_CREDIT_ELECTRONIC_31
   DEBIT_NOTE_ELECTRONIC_33
   CREDIT_NOTE_ELECTRONIC_34
+}
+
+enum FiscalDocumentPurpose {
+  CONSUMER
+  FISCAL_CREDIT
+}
+
+enum FiscalIssuanceMode {
+  LOCAL_NCF
+  ELECTRONIC_ECF
 }
 
 enum BarcodeType {
@@ -200,6 +254,7 @@ enum ProductUnit {
   GALLON
   LITER
   KILOGRAM
+  QUINTAL
   SERVICE
 }
 
@@ -277,6 +332,13 @@ enum FiscalSequenceStatus {
   EXHAUSTED
 }
 
+enum ElectronicFiscalRangeSyncStatus {
+  PENDING
+  SYNCING
+  SYNCED
+  FAILED
+}
+
 enum ImportType {
   PRODUCTS
   CATEGORIES
@@ -317,18 +379,6 @@ enum PurchaseOrderStatus {
   RECEIVED
   PAUSED
   CANCELLED
-}
-
-enum PurchaseOrderDestination {
-  SALES_INVENTORY
-  WAREHOUSE
-}
-
-enum WarehouseMovementType {
-  PURCHASE
-  SALE
-  ADJUSTMENT_IN
-  ADJUSTMENT_OUT
 }
 
 enum SupplierInvoiceStatus {
@@ -409,53 +459,115 @@ enum Currency {
   DOP
 }
 
+enum CertificationCaseStatus {
+  DRAFT
+  ACTIVE
+  WAITING_OPERATOR
+  BLOCKED
+  COMPLETED
+  CANCELLED
+}
+
+enum CertificationStepStatus {
+  LOCKED
+  READY
+  RUNNING
+  WAITING_OPERATOR
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum CertificationExecutionMode {
+  HUMAN
+  AUTOMATIC
+  MIXED
+  SYSTEM
+}
+
+enum CertificationJobStatus {
+  PENDING
+  RUNNING
+  RETRY
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum CertificationArtifactKind {
+  POSTULATION_UNSIGNED_XML
+  POSTULATION_SIGNED_XML
+  ECF_DATA_WORKBOOK
+  APPROVAL_DATA_WORKBOOK
+  SIGNED_ECF_SET
+  SIGNED_RFCE_SET
+  SIGNED_APPROVAL_SET
+  SIGNED_SIMULATION_SET
+  PRINTED_REPRESENTATION_ARCHIVE
+  SWORN_DECLARATION_UNSIGNED_XML
+  SWORN_DECLARATION_SIGNED_XML
+  PORTAL_EVIDENCE
+  TECHNICAL_REPORT
+  OTHER
+}
+
+enum CertificationEventActor {
+  USER
+  AGENT
+  SYSTEM
+}
+
 model Tenant {
-  id                         String                      @id @default(cuid())
-  name                       String
-  commercialName             String?
-  legalName                  String?
-  slug                       String                      @unique
-  rnc                        String?
-  email                      String?
-  phone                      String?
-  address                    String?
-  status                     TenantStatus                @default(ACTIVE)
-  createdAt                  DateTime                    @default(now())
-  updatedAt                  DateTime                    @updatedAt
-  branding                   CompanyBranding?
-  memberships                Membership[]
-  customers                  Customer[]
-  categories                 ProductCategory[]
-  products                   Product[]
-  inventoryMovements         InventoryMovement[]
-  warehouseStocks            WarehouseStock[]
-  warehouseMovements         WarehouseMovement[]
-  invoices                   Invoice[]
-  payments                   Payment[]
-  electronicDocuments        ElectronicDocument[]
-  auditLogs                  AuditLog[]
-  employeeProfiles           EmployeeProfile[]
-  cashRegisters              CashRegister[]
-  cashSessions               CashSession[]
-  cashMovements              CashMovement[]
-  employeeActivityLogs       EmployeeActivityLog[]
-  salesOrders                SalesOrder[]
-  returnRequests             ReturnRequest[]
-  fiscalSequences            FiscalSequence[]
-  importBatches              ImportBatch[]
-  suppliers                  Supplier[]
-  supplierProducts           SupplierProduct[]
-  purchaseOrders             PurchaseOrder[]
-  purchaseOrderItems         PurchaseOrderItem[]
-  purchaseOrderEvents        PurchaseOrderEvent[]
-  supplierInvoices           SupplierInvoice[]
-  supplierInvoiceItems       SupplierInvoiceItem[]
-  supplierInvoiceAttachments SupplierInvoiceAttachment[]
-  supplierPayments           SupplierPayment[]
-  goodsReceipts              GoodsReceipt[]
-  goodsReceiptItems          GoodsReceiptItem[]
-  creditSaleApprovals        CreditSaleApproval[]
-  mobileOcrCaptureSessions   MobileOcrCaptureSession[]
+  id                           String                        @id @default(cuid())
+  name                         String
+  commercialName               String?
+  legalName                    String?
+  slug                         String                        @unique
+  rnc                          String?
+  email                        String?
+  phone                        String?
+  address                      String?
+  fiscalIssuanceMode           FiscalIssuanceMode            @default(LOCAL_NCF)
+  status                       TenantStatus                  @default(ACTIVE)
+  createdAt                    DateTime                      @default(now())
+  updatedAt                    DateTime                      @updatedAt
+  branding                     CompanyBranding?
+  memberships                  Membership[]
+  customers                    Customer[]
+  categories                   ProductCategory[]
+  products                     Product[]
+  inventoryMovements           InventoryMovement[]
+  invoices                     Invoice[]
+  payments                     Payment[]
+  electronicDocuments          ElectronicDocument[]
+  auditLogs                    AuditLog[]
+  employeeProfiles             EmployeeProfile[]
+  cashRegisters                CashRegister[]
+  cashSessions                 CashSession[]
+  cashMovements                CashMovement[]
+  employeeActivityLogs         EmployeeActivityLog[]
+  salesOrders                  SalesOrder[]
+  returnRequests               ReturnRequest[]
+  fiscalSequences              FiscalSequence[]
+  localSaleSequence            LocalSaleSequence?
+  electronicFiscalRanges       ElectronicFiscalRange[]
+  importBatches                ImportBatch[]
+  suppliers                    Supplier[]
+  supplierProducts             SupplierProduct[]
+  purchaseOrders               PurchaseOrder[]
+  purchaseOrderItems           PurchaseOrderItem[]
+  purchaseOrderEvents          PurchaseOrderEvent[]
+  supplierInvoices             SupplierInvoice[]
+  supplierInvoiceItems         SupplierInvoiceItem[]
+  supplierInvoiceAttachments   SupplierInvoiceAttachment[]
+  supplierPayments             SupplierPayment[]
+  goodsReceipts                GoodsReceipt[]
+  goodsReceiptItems            GoodsReceiptItem[]
+  creditSaleApprovals          CreditSaleApproval[]
+  mobileOcrCaptureSessions     MobileOcrCaptureSession[]
+  taxIdentityOverrides         TaxIdentityOverride[]
+  taxIdentityApprovalRequests  TaxIdentityApprovalRequest[]
+  electronicCertificationCases ElectronicCertificationCase[]
 
   @@index([status])
   @@index([createdAt])
@@ -475,63 +587,70 @@ model CompanyBranding {
 }
 
 model User {
-  id                                  String                      @id @default(cuid())
-  email                               String                      @unique
-  name                                String
-  phone                               String?
-  passwordHash                        String?
-  status                              UserStatus                  @default(ACTIVE)
-  createdAt                           DateTime                    @default(now())
-  updatedAt                           DateTime                    @updatedAt
-  memberships                         Membership[]
-  auditLogs                           AuditLog[]
-  employeeProfiles                    EmployeeProfile[]
-  invoicesIssued                      Invoice[]                   @relation("InvoiceIssuedBy")
-  inventoryMovementsCreated           InventoryMovement[]         @relation("InventoryMovementCreatedBy")
-  warehouseMovementsCreated           WarehouseMovement[]         @relation("WarehouseMovementCreatedBy")
-  payments                            Payment[]
-  salesOrdersCreated                  SalesOrder[]                @relation("SalesOrderCreatedBy")
-  salesOrdersCompleted                SalesOrder[]                @relation("SalesOrderCompletedBy")
-  salesOrdersClaimed                  SalesOrder[]                @relation("SalesOrderClaimedBy")
-  cashSessionsOpened                  CashSession[]               @relation("CashSessionOpenedBy")
-  cashSessionsClosed                  CashSession[]               @relation("CashSessionClosedBy")
-  cashMovements                       CashMovement[]
-  employeeActivityLogs                EmployeeActivityLog[]
-  importBatches                       ImportBatch[]
-  returnRequestsRequested             ReturnRequest[]             @relation("ReturnRequestRequestedBy")
-  returnRequestsApproved              ReturnRequest[]             @relation("ReturnRequestApprovedBy")
-  returnRequestsRejected              ReturnRequest[]             @relation("ReturnRequestRejectedBy")
-  customersCreditEnabled              Customer[]                  @relation("CustomerCreditEnabledBy")
-  suppliersCreated                    Supplier[]                  @relation("SupplierCreatedBy")
-  suppliersUpdated                    Supplier[]                  @relation("SupplierUpdatedBy")
-  suppliersDeactivated                Supplier[]                  @relation("SupplierDeactivatedBy")
-  supplierProductsCreated             SupplierProduct[]           @relation("SupplierProductCreatedBy")
-  supplierProductsUpdated             SupplierProduct[]           @relation("SupplierProductUpdatedBy")
-  purchaseOrdersCreated               PurchaseOrder[]             @relation("PurchaseOrderCreatedBy")
-  purchaseOrdersRequested             PurchaseOrder[]             @relation("PurchaseOrderRequestedBy")
-  purchaseOrdersReviewed              PurchaseOrder[]             @relation("PurchaseOrderReviewedBy")
-  purchaseOrdersApproved              PurchaseOrder[]             @relation("PurchaseOrderApprovedBy")
-  purchaseOrdersIssued                PurchaseOrder[]             @relation("PurchaseOrderIssuedBy")
-  purchaseOrdersPaused                PurchaseOrder[]             @relation("PurchaseOrderPausedBy")
-  purchaseOrdersCancelled             PurchaseOrder[]             @relation("PurchaseOrderCancelledBy")
-  purchaseOrderEvents                 PurchaseOrderEvent[]
-  supplierInvoicesCreated             SupplierInvoice[]           @relation("SupplierInvoiceCreatedBy")
-  supplierInvoicesUpdated             SupplierInvoice[]           @relation("SupplierInvoiceUpdatedBy")
-  supplierInvoicesCancelled           SupplierInvoice[]           @relation("SupplierInvoiceCancelledBy")
-  supplierInvoiceAttachmentsUploaded  SupplierInvoiceAttachment[] @relation("SupplierInvoiceAttachmentUploadedBy")
-  supplierInvoiceAttachmentsConfirmed SupplierInvoiceAttachment[] @relation("SupplierInvoiceAttachmentConfirmedBy")
-  supplierPaymentsCreated             SupplierPayment[]           @relation("SupplierPaymentCreatedBy")
-  supplierPaymentsCancelled           SupplierPayment[]           @relation("SupplierPaymentCancelledBy")
-  goodsReceiptsCreated                GoodsReceipt[]              @relation("GoodsReceiptCreatedBy")
-  goodsReceiptsConfirmed              GoodsReceipt[]              @relation("GoodsReceiptConfirmedBy")
-  goodsReceiptsReversed               GoodsReceipt[]              @relation("GoodsReceiptReversedBy")
-  goodsReceiptsCancelled              GoodsReceipt[]              @relation("GoodsReceiptCancelledBy")
-  creditSaleApprovalsRequested        CreditSaleApproval[]        @relation("CreditSaleApprovalRequestedBy")
-  creditSaleApprovalsApproved         CreditSaleApproval[]        @relation("CreditSaleApprovalApprovedBy")
-  creditSaleApprovalsRejected         CreditSaleApproval[]        @relation("CreditSaleApprovalRejectedBy")
-  creditSaleApprovalsCancelled        CreditSaleApproval[]        @relation("CreditSaleApprovalCancelledBy")
-  paymentsCancelled                   Payment[]                   @relation("PaymentCancelledBy")
-  mobileOcrCaptureSessionsCreated     MobileOcrCaptureSession[]   @relation("MobileOcrCaptureCreatedBy")
+  id                                       String                            @id @default(cuid())
+  email                                    String                            @unique
+  name                                     String
+  phone                                    String?
+  passwordHash                             String?
+  status                                   UserStatus                        @default(ACTIVE)
+  createdAt                                DateTime                          @default(now())
+  updatedAt                                DateTime                          @updatedAt
+  memberships                              Membership[]
+  auditLogs                                AuditLog[]
+  employeeProfiles                         EmployeeProfile[]
+  invoicesIssued                           Invoice[]                         @relation("InvoiceIssuedBy")
+  inventoryMovementsCreated                InventoryMovement[]               @relation("InventoryMovementCreatedBy")
+  payments                                 Payment[]
+  salesOrdersCreated                       SalesOrder[]                      @relation("SalesOrderCreatedBy")
+  salesOrdersCompleted                     SalesOrder[]                      @relation("SalesOrderCompletedBy")
+  salesOrdersClaimed                       SalesOrder[]                      @relation("SalesOrderClaimedBy")
+  cashSessionsOpened                       CashSession[]                     @relation("CashSessionOpenedBy")
+  cashSessionsClosed                       CashSession[]                     @relation("CashSessionClosedBy")
+  cashMovements                            CashMovement[]
+  employeeActivityLogs                     EmployeeActivityLog[]
+  importBatches                            ImportBatch[]
+  returnRequestsRequested                  ReturnRequest[]                   @relation("ReturnRequestRequestedBy")
+  returnRequestsApproved                   ReturnRequest[]                   @relation("ReturnRequestApprovedBy")
+  returnRequestsRejected                   ReturnRequest[]                   @relation("ReturnRequestRejectedBy")
+  customersCreditEnabled                   Customer[]                        @relation("CustomerCreditEnabledBy")
+  suppliersCreated                         Supplier[]                        @relation("SupplierCreatedBy")
+  suppliersUpdated                         Supplier[]                        @relation("SupplierUpdatedBy")
+  suppliersDeactivated                     Supplier[]                        @relation("SupplierDeactivatedBy")
+  supplierProductsCreated                  SupplierProduct[]                 @relation("SupplierProductCreatedBy")
+  supplierProductsUpdated                  SupplierProduct[]                 @relation("SupplierProductUpdatedBy")
+  purchaseOrdersCreated                    PurchaseOrder[]                   @relation("PurchaseOrderCreatedBy")
+  purchaseOrdersRequested                  PurchaseOrder[]                   @relation("PurchaseOrderRequestedBy")
+  purchaseOrdersReviewed                   PurchaseOrder[]                   @relation("PurchaseOrderReviewedBy")
+  purchaseOrdersApproved                   PurchaseOrder[]                   @relation("PurchaseOrderApprovedBy")
+  purchaseOrdersIssued                     PurchaseOrder[]                   @relation("PurchaseOrderIssuedBy")
+  purchaseOrdersPaused                     PurchaseOrder[]                   @relation("PurchaseOrderPausedBy")
+  purchaseOrdersCancelled                  PurchaseOrder[]                   @relation("PurchaseOrderCancelledBy")
+  purchaseOrderEvents                      PurchaseOrderEvent[]
+  supplierInvoicesCreated                  SupplierInvoice[]                 @relation("SupplierInvoiceCreatedBy")
+  supplierInvoicesUpdated                  SupplierInvoice[]                 @relation("SupplierInvoiceUpdatedBy")
+  supplierInvoicesCancelled                SupplierInvoice[]                 @relation("SupplierInvoiceCancelledBy")
+  supplierInvoiceAttachmentsUploaded       SupplierInvoiceAttachment[]       @relation("SupplierInvoiceAttachmentUploadedBy")
+  supplierInvoiceAttachmentsConfirmed      SupplierInvoiceAttachment[]       @relation("SupplierInvoiceAttachmentConfirmedBy")
+  supplierPaymentsCreated                  SupplierPayment[]                 @relation("SupplierPaymentCreatedBy")
+  supplierPaymentsCancelled                SupplierPayment[]                 @relation("SupplierPaymentCancelledBy")
+  goodsReceiptsCreated                     GoodsReceipt[]                    @relation("GoodsReceiptCreatedBy")
+  goodsReceiptsConfirmed                   GoodsReceipt[]                    @relation("GoodsReceiptConfirmedBy")
+  goodsReceiptsReversed                    GoodsReceipt[]                    @relation("GoodsReceiptReversedBy")
+  goodsReceiptsCancelled                   GoodsReceipt[]                    @relation("GoodsReceiptCancelledBy")
+  creditSaleApprovalsRequested             CreditSaleApproval[]              @relation("CreditSaleApprovalRequestedBy")
+  creditSaleApprovalsApproved              CreditSaleApproval[]              @relation("CreditSaleApprovalApprovedBy")
+  creditSaleApprovalsRejected              CreditSaleApproval[]              @relation("CreditSaleApprovalRejectedBy")
+  creditSaleApprovalsCancelled             CreditSaleApproval[]              @relation("CreditSaleApprovalCancelledBy")
+  paymentsCancelled                        Payment[]                         @relation("PaymentCancelledBy")
+  mobileOcrCaptureSessionsCreated          MobileOcrCaptureSession[]         @relation("MobileOcrCaptureCreatedBy")
+  taxIdentityOverridesRequested            TaxIdentityOverride[]             @relation("TaxIdentityOverrideRequestedBy")
+  taxIdentityOverridesApproved             TaxIdentityOverride[]             @relation("TaxIdentityOverrideApprovedBy")
+  taxIdentityApprovalRequestsCreated       TaxIdentityApprovalRequest[]      @relation("TaxIdentityApprovalRequestCreatedBy")
+  taxIdentityApprovalRequestsDecided       TaxIdentityApprovalRequest[]      @relation("TaxIdentityApprovalRequestDecidedBy")
+  electronicFiscalRangesCreated            ElectronicFiscalRange[]           @relation("ElectronicFiscalRangeCreatedBy")
+  electronicCertificationCasesCreated      ElectronicCertificationCase[]     @relation("ElectronicCertificationCaseCreatedBy")
+  electronicCertificationStepsCompleted    ElectronicCertificationStep[]     @relation("ElectronicCertificationStepCompletedBy")
+  electronicCertificationArtifactsUploaded ElectronicCertificationArtifact[] @relation("ElectronicCertificationArtifactUploadedBy")
 
   @@index([status])
   @@index([createdAt])
@@ -568,34 +687,35 @@ model Membership {
 }
 
 model Customer {
-  id                  String               @id @default(cuid())
-  tenantId            String
-  name                String
-  documentType        DocumentType
-  documentNumber      String?
-  email               String?
-  phone               String?
-  address             String?
-  status              CustomerStatus       @default(ACTIVE)
-  creditEnabled       Boolean              @default(false)
-  creditLimit         Decimal              @default(0) @db.Decimal(14, 2)
-  creditBalance       Decimal              @default(0) @db.Decimal(14, 2)
-  creditTermDays      Int                  @default(30)
-  creditStatus        CustomerCreditStatus @default(BLOCKED)
-  creditEnabledAt     DateTime?
-  creditEnabledById   String?
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  creditEnabledBy     User?                @relation("CustomerCreditEnabledBy", fields: [creditEnabledById], references: [id], onDelete: SetNull)
-  invoices            Invoice[]
-  salesOrders         SalesOrder[]
-  creditSaleApprovals CreditSaleApproval[]
+  id                      String               @id @default(cuid())
+  tenantId                String
+  name                    String
+  documentType            DocumentType
+  documentNumber          String?
+  email                   String?
+  phone                   String?
+  address                 String?
+  status                  CustomerStatus       @default(ACTIVE)
+  creditEnabled           Boolean              @default(false)
+  creditLimit             Decimal              @default(0) @db.Decimal(14, 2)
+  creditBalance           Decimal              @default(0) @db.Decimal(14, 2)
+  creditTermDays          Int                  @default(30)
+  creditStatus            CustomerCreditStatus @default(BLOCKED)
+  creditEnabledAt         DateTime?
+  creditEnabledById       String?
+  taxIdentityVerification Json?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  tenant                  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creditEnabledBy         User?                @relation("CustomerCreditEnabledBy", fields: [creditEnabledById], references: [id], onDelete: SetNull)
+  invoices                Invoice[]
+  salesOrders             SalesOrder[]
+  creditSaleApprovals     CreditSaleApproval[]
 
+  @@unique([tenantId, documentType, documentNumber])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, creditEnabled, creditStatus])
-  @@unique([tenantId, documentType, documentNumber])
   @@index([creditEnabledById])
   @@index([createdAt])
 }
@@ -639,9 +759,9 @@ model Product {
   costWithTax            Decimal?              @db.Decimal(14, 2)
   margin                 Decimal?              @db.Decimal(8, 4)
   taxCategory            TaxCategory           @default(ITBIS_18)
+  fiscalItemKind         FiscalItemKind?
   taxRate                Decimal               @default(0.18) @db.Decimal(5, 4)
   trackInventory         Boolean               @default(true)
-  inventoryDestination   ProductInventoryDestination @default(SALES_INVENTORY)
   stock                  Float                 @default(0)
   reservedStock          Float                 @default(0)
   minStock               Float                 @default(0)
@@ -651,8 +771,6 @@ model Product {
   tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   category               ProductCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   inventoryMovements     InventoryMovement[]
-  warehouseStocks        WarehouseStock[]
-  warehouseMovements     WarehouseMovement[]
   invoiceItems           InvoiceItem[]
   salesOrderItems        SalesOrderItem[]
   returnRequestItems     ReturnRequestItem[]
@@ -666,7 +784,6 @@ model Product {
   @@unique([tenantId, barcode])
   @@index([tenantId])
   @@index([tenantId, status])
-  @@index([tenantId, inventoryDestination, status])
   @@index([tenantId, sku])
   @@index([tenantId, stock])
   @@index([createdAt])
@@ -705,96 +822,60 @@ model InventoryMovement {
   @@index([createdById])
 }
 
-model WarehouseStock {
-  id        String   @id @default(cuid())
-  tenantId  String
-  productId String
-  quantity  Float    @default(0)
-  unitCost  Decimal? @db.Decimal(12, 2)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, productId])
-  @@index([tenantId])
-  @@index([productId])
-  @@index([tenantId, quantity])
-}
-
-model WarehouseMovement {
-  id                String                @id @default(cuid())
-  tenantId          String
-  productId         String
-  type              WarehouseMovementType
-  quantity          Float
-  previousQuantity  Float?
-  newQuantity       Float?
-  unitCost          Decimal?              @db.Decimal(12, 2)
-  reason            String?
-  reference         String?
-  supplierInvoiceId String?
-  goodsReceiptId    String?
-  createdById       String?
-  createdAt         DateTime              @default(now())
-  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product           Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdBy         User?                 @relation("WarehouseMovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-
-  @@index([tenantId])
-  @@index([tenantId, type])
-  @@index([tenantId, createdAt])
-  @@index([productId])
-  @@index([goodsReceiptId])
-  @@index([createdById])
-}
-
 model Invoice {
-  id                   String                @id @default(cuid())
-  tenantId             String
-  customerId           String?
-  documentType         InvoiceDocumentType   @default(CONSUMER_02)
-  invoiceNumber        String
-  ncf                  String?
-  eNcf                 String?
-  status               InvoiceStatus         @default(DRAFT)
-  fiscalStatus         InvoiceFiscalStatus   @default(NOT_APPLICABLE)
-  subtotal             Decimal               @default(0) @db.Decimal(12, 2)
-  taxTotal             Decimal               @default(0) @db.Decimal(12, 2)
-  discountTotal        Decimal               @default(0) @db.Decimal(12, 2)
-  total                Decimal               @default(0) @db.Decimal(12, 2)
-  paidAmount           Decimal               @default(0) @db.Decimal(12, 2)
-  amountReceived       Decimal               @default(0) @db.Decimal(12, 2)
-  changeAmount         Decimal               @default(0) @db.Decimal(12, 2)
-  balance              Decimal               @default(0) @db.Decimal(12, 2)
-  paymentMode          SalePaymentMode       @default(CASH)
-  paymentMethod        PaymentMethod?
-  issuedById           String?
-  cashSessionId        String?
-  issuedAt             DateTime?
-  dueDate              DateTime?
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  issuedBy             User?                 @relation("InvoiceIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
-  cashSession          CashSession?          @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
-  items                InvoiceItem[]
-  payments             Payment[]
-  electronicDocument   ElectronicDocument?
-  inventoryMovements   InventoryMovement[]
-  cashMovements        CashMovement[]
-  employeeActivityLogs EmployeeActivityLog[]
-  salesOrder           SalesOrder?
-  returnRequests       ReturnRequest[]
+  id                        String                @id @default(cuid())
+  tenantId                  String
+  customerId                String?
+  documentType              InvoiceDocumentType   @default(CONSUMER_02)
+  invoiceNumber             String
+  ncf                       String?
+  eNcf                      String?
+  fiscalSequenceId          String?
+  fiscalAuthorizationNumber String?
+  fiscalValidUntil          DateTime?             @db.Date
+  fiscalIssuerSnapshot      Json?
+  fiscalCustomerSnapshot    Json?
+  status                    InvoiceStatus         @default(DRAFT)
+  fiscalStatus              InvoiceFiscalStatus   @default(NOT_APPLICABLE)
+  subtotal                  Decimal               @default(0) @db.Decimal(12, 2)
+  taxTotal                  Decimal               @default(0) @db.Decimal(12, 2)
+  discountTotal             Decimal               @default(0) @db.Decimal(12, 2)
+  total                     Decimal               @default(0) @db.Decimal(12, 2)
+  paidAmount                Decimal               @default(0) @db.Decimal(12, 2)
+  amountReceived            Decimal               @default(0) @db.Decimal(12, 2)
+  changeAmount              Decimal               @default(0) @db.Decimal(12, 2)
+  balance                   Decimal               @default(0) @db.Decimal(12, 2)
+  paymentMode               SalePaymentMode       @default(CASH)
+  paymentMethod             PaymentMethod?
+  issuedById                String?
+  cashSessionId             String?
+  issuedAt                  DateTime?
+  dueDate                   DateTime?
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+  tenant                    Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer                  Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  issuedBy                  User?                 @relation("InvoiceIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  cashSession               CashSession?          @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  fiscalSequence            FiscalSequence?       @relation(fields: [tenantId, fiscalSequenceId], references: [tenantId, id], onDelete: Restrict)
+  items                     InvoiceItem[]
+  payments                  Payment[]
+  electronicDocument        ElectronicDocument?
+  inventoryMovements        InventoryMovement[]
+  cashMovements             CashMovement[]
+  employeeActivityLogs      EmployeeActivityLog[]
+  salesOrder                SalesOrder?
+  returnRequests            ReturnRequest[]
 
   @@unique([tenantId, invoiceNumber])
+  @@unique([tenantId, ncf])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, paymentMode, dueDate])
   @@index([tenantId, createdAt])
   @@index([issuedById])
   @@index([cashSessionId])
+  @@index([fiscalSequenceId])
 }
 
 model InvoiceItem {
@@ -805,8 +886,12 @@ model InvoiceItem {
   barcode            String?
   description        String
   quantity           Decimal             @db.Decimal(12, 2)
+  unit               ProductUnit         @default(UNIT)
   unitPrice          Decimal             @db.Decimal(12, 2)
+  originalUnitPrice  Decimal?            @db.Decimal(14, 4)
+  fiscalItemKind     FiscalItemKind?
   discountTotal      Decimal             @default(0) @db.Decimal(12, 2)
+  taxCategory        TaxCategory         @default(ITBIS_18)
   taxRate            Decimal             @db.Decimal(5, 4)
   taxTotal           Decimal             @default(0) @db.Decimal(12, 2)
   subtotal           Decimal             @db.Decimal(12, 2)
@@ -820,62 +905,62 @@ model InvoiceItem {
 }
 
 model SalesOrder {
-  id                      String                @id @default(cuid())
-  tenantId                String
-  customerId              String?
-  destination             SalesOrderDestination @default(CASH_SALE)
-  inventorySource         ProductInventoryDestination @default(SALES_INVENTORY)
-  clientName              String?
-    quotationDocumentType   DocumentType?
-    quotationDocumentNumber String?
-    electronicInvoiceRequested Boolean             @default(false)
-    ecfRecipientEmail        String?
-    orderNumber             String
-  status                  SalesOrderStatus      @default(SENT_TO_CASHIER)
-  priceLevel              SalesOrderPriceLevel  @default(REGULAR)
-  discountRate            Decimal               @default(0) @db.Decimal(5, 4)
-  subtotal                Decimal               @default(0) @db.Decimal(12, 2)
-  taxTotal                Decimal               @default(0) @db.Decimal(12, 2)
-  discountTotal           Decimal               @default(0) @db.Decimal(12, 2)
-  total                   Decimal               @default(0) @db.Decimal(12, 2)
-  paymentMode             SalePaymentMode       @default(CASH)
-  initialPaymentOption    InitialPaymentOption?
-  initialPaymentRate      Decimal               @default(0) @db.Decimal(5, 4)
-  initialPaymentAmount    Decimal               @default(0) @db.Decimal(14, 2)
-  creditTermOption        CreditTermOption?
-  creditTermDays          Int?
-  dueDate                 DateTime?
-  creditRequestNote       String?
-  notes                   String?
-  createdById             String
-  completedById           String?
-  claimedById             String?
-  claimedCashSessionId    String?
-  invoiceId               String?               @unique
-  sentToCashierAt         DateTime?
-  claimedAt               DateTime?
-  claimExpiresAt          DateTime?
-  releasedAt              DateTime?
-  completedAt             DateTime?
-  cancelledAt             DateTime?
-  cancelReason            String?
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
-  tenant                  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer                Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  createdBy               User                  @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  completedBy             User?                 @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
-  claimedBy               User?                 @relation("SalesOrderClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  claimedCashSession      CashSession?          @relation("SalesOrderClaimedCashSession", fields: [claimedCashSessionId], references: [id], onDelete: SetNull)
-  invoice                 Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  items                   SalesOrderItem[]
-  creditApproval          CreditSaleApproval?
+  id                         String                @id @default(cuid())
+  tenantId                   String
+  customerId                 String?
+  destination                SalesOrderDestination @default(CASH_SALE)
+  fiscalPurpose              FiscalDocumentPurpose @default(CONSUMER)
+  fiscalDocumentTypeSnapshot InvoiceDocumentType   @default(CONSUMER_02)
+  fiscalCustomerSnapshot     Json?
+  clientName                 String?
+  quotationDocumentType      DocumentType?
+  quotationDocumentNumber    String?
+  orderNumber                String
+  status                     SalesOrderStatus      @default(SENT_TO_CASHIER)
+  priceLevel                 SalesOrderPriceLevel  @default(REGULAR)
+  discountRate               Decimal               @default(0) @db.Decimal(5, 4)
+  subtotal                   Decimal               @default(0) @db.Decimal(12, 2)
+  taxTotal                   Decimal               @default(0) @db.Decimal(12, 2)
+  discountTotal              Decimal               @default(0) @db.Decimal(12, 2)
+  total                      Decimal               @default(0) @db.Decimal(12, 2)
+  paymentMode                SalePaymentMode       @default(CASH)
+  initialPaymentOption       InitialPaymentOption?
+  initialPaymentRate         Decimal               @default(0) @db.Decimal(5, 4)
+  initialPaymentAmount       Decimal               @default(0) @db.Decimal(14, 2)
+  creditTermOption           CreditTermOption?
+  creditTermDays             Int?
+  dueDate                    DateTime?
+  creditRequestNote          String?
+  notes                      String?
+  createdById                String
+  completedById              String?
+  claimedById                String?
+  claimedCashSessionId       String?
+  invoiceId                  String?               @unique
+  sentToCashierAt            DateTime?
+  claimedAt                  DateTime?
+  claimExpiresAt             DateTime?
+  releasedAt                 DateTime?
+  completedAt                DateTime?
+  cancelledAt                DateTime?
+  cancelReason               String?
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+  tenant                     Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer                   Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy                  User                  @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy                User?                 @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  claimedBy                  User?                 @relation("SalesOrderClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedCashSession         CashSession?          @relation("SalesOrderClaimedCashSession", fields: [claimedCashSessionId], references: [id], onDelete: SetNull)
+  invoice                    Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  items                      SalesOrderItem[]
+  creditApproval             CreditSaleApproval?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId])
   @@index([tenantId, status])
-  @@index([tenantId, inventorySource, status])
   @@index([tenantId, paymentMode, dueDate])
+  @@index([tenantId, fiscalDocumentTypeSnapshot, status])
   @@index([tenantId, createdAt])
   @@index([createdById])
   @@index([completedById])
@@ -885,58 +970,63 @@ model SalesOrder {
 }
 
 model SalesOrderItem {
-  id               String     @id @default(cuid())
-  salesOrderId     String
-  productId        String?
-  sku              String?
-  barcode          String?
-  description      String
-  quantity         Decimal    @db.Decimal(12, 2)
-  reservedQuantity Float      @default(0)
-  unitPrice        Decimal    @db.Decimal(12, 2)
-  discountTotal    Decimal    @default(0) @db.Decimal(12, 2)
-  taxRate          Decimal    @db.Decimal(5, 4)
-  taxTotal         Decimal    @default(0) @db.Decimal(12, 2)
-  subtotal         Decimal    @db.Decimal(12, 2)
-  total            Decimal    @db.Decimal(12, 2)
-  salesOrder       SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  product          Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  id                String          @id @default(cuid())
+  salesOrderId      String
+  productId         String?
+  sku               String?
+  barcode           String?
+  description       String
+  quantity          Decimal         @db.Decimal(12, 2)
+  unit              ProductUnit     @default(UNIT)
+  reservedQuantity  Float           @default(0)
+  unitPrice         Decimal         @db.Decimal(12, 2)
+  originalUnitPrice Decimal?        @db.Decimal(14, 4)
+  fiscalItemKind    FiscalItemKind?
+  discountTotal     Decimal         @default(0) @db.Decimal(12, 2)
+  taxCategory       TaxCategory     @default(ITBIS_18)
+  taxRate           Decimal         @db.Decimal(5, 4)
+  taxTotal          Decimal         @default(0) @db.Decimal(12, 2)
+  subtotal          Decimal         @db.Decimal(12, 2)
+  total             Decimal         @db.Decimal(12, 2)
+  salesOrder        SalesOrder      @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product           Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([salesOrderId])
   @@index([productId])
 }
 
 model Supplier {
-  id              String            @id @default(cuid())
-  tenantId        String
-  commercialName  String
-  legalName       String?
-  documentType    DocumentType
-  documentNumber  String
-  phone           String?
-  email           String?
-  contactName     String?
-  contactPhone    String?
-  contactEmail    String?
-  address         String?
-  paymentTerms    String?
-  creditDays      Int               @default(0)
-  notes           String?
-  status          SupplierStatus    @default(ACTIVE)
-  createdById     String
-  updatedById     String?
-  deactivatedById String?
-  deactivatedAt   DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy       User              @relation("SupplierCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy       User?             @relation("SupplierUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  deactivatedBy   User?             @relation("SupplierDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
-  products        SupplierProduct[]
-  purchaseOrders  PurchaseOrder[]
-  invoices        SupplierInvoice[]
-  goodsReceipts   GoodsReceipt[]
+  id                      String            @id @default(cuid())
+  tenantId                String
+  commercialName          String
+  legalName               String?
+  documentType            DocumentType
+  documentNumber          String
+  phone                   String?
+  email                   String?
+  contactName             String?
+  contactPhone            String?
+  contactEmail            String?
+  address                 String?
+  paymentTerms            String?
+  creditDays              Int               @default(0)
+  notes                   String?
+  status                  SupplierStatus    @default(ACTIVE)
+  createdById             String
+  updatedById             String?
+  deactivatedById         String?
+  deactivatedAt           DateTime?
+  taxIdentityVerification Json?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  tenant                  Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy               User              @relation("SupplierCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy               User?             @relation("SupplierUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deactivatedBy           User?             @relation("SupplierDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
+  products                SupplierProduct[]
+  purchaseOrders          PurchaseOrder[]
+  invoices                SupplierInvoice[]
+  goodsReceipts           GoodsReceipt[]
 
   @@unique([tenantId, documentType, documentNumber])
   @@index([tenantId])
@@ -984,7 +1074,6 @@ model PurchaseOrder {
   supplierId                     String
   orderNumber                    String
   status                         PurchaseOrderStatus  @default(DRAFT)
-  destination                    PurchaseOrderDestination @default(SALES_INVENTORY)
   currency                       Currency             @default(DOP)
   requestDate                    DateTime?
   expectedDeliveryDate           DateTime?
@@ -1166,7 +1255,7 @@ model SupplierInvoiceItem {
   descriptionSnapshot String
   unitSnapshot        ProductUnit
   quantity            Decimal            @db.Decimal(14, 3)
-  unitCostNet         Decimal            @db.Decimal(14, 2)
+  unitCostNet         Decimal            @db.Decimal(18, 6)
   unitCostWithTax     Decimal            @db.Decimal(14, 2)
   discountTotal       Decimal            @default(0) @db.Decimal(14, 2)
   taxRate             Decimal            @db.Decimal(5, 4)
@@ -1422,10 +1511,10 @@ model ReturnRequest {
   reason              String
   adminNote           String?
   refundMethod        PaymentMethod?
-  refundReference     String?             @db.VarChar(120)
   refundAmount        Decimal             @default(0) @db.Decimal(12, 2)
   creditAppliedAmount Decimal             @default(0) @db.Decimal(12, 2)
   cashRefundAmount    Decimal             @default(0) @db.Decimal(12, 2)
+  refundReference     String?             @db.VarChar(120)
   debtBefore          Decimal?            @db.Decimal(12, 2)
   debtAfter           Decimal?            @db.Decimal(12, 2)
   paidAmountBefore    Decimal?            @db.Decimal(12, 2)
@@ -1655,24 +1744,187 @@ model EmployeeActivityLog {
 }
 
 model FiscalSequence {
-  id           String               @id @default(cuid())
-  tenantId     String
-  documentType InvoiceDocumentType
-  prefix       String
-  startNumber  Int
-  endNumber    Int
-  nextNumber   Int
+  id                  String               @id @default(cuid())
+  tenantId            String
+  documentType        InvoiceDocumentType
+  prefix              String
+  startNumber         Int
+  endNumber           Int
+  nextNumber          Int
   authorizationNumber String?
-  issuerDocumentType DocumentType?
-  issuerDocumentNumber String?
-  validUntil   DateTime?
-  status       FiscalSequenceStatus @default(ACTIVE)
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
-  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  issuerTaxId         String?
+  validUntil          DateTime?            @db.Date
+  status              FiscalSequenceStatus @default(ACTIVE)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices            Invoice[]
 
+  @@unique([tenantId, id])
   @@index([tenantId])
   @@index([tenantId, documentType, status])
+}
+
+/// Tenant-scoped, non-fiscal numbering used only for local consumer sales
+/// that must not consume or imitate a DGII NCF/e-NCF.
+model LocalSaleSequence {
+  tenantId   String   @id
+  nextNumber BigInt   @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// DGII-authorized e-NCF range submitted by a tenant administrator. This is
+/// the ERP-side durable registration/outbox; allocation remains exclusively in
+/// the isolated fiscal core after a confirmed synchronization.
+model ElectronicFiscalRange {
+  id                  String                          @id @default(cuid())
+  tenantId            String
+  issuerTaxId         String
+  ecfType             Int
+  prefix              String
+  startNumber         BigInt
+  endNumber           BigInt
+  nextNumber          BigInt
+  authorizationNumber String
+  authorizedAt        DateTime?                       @db.Date
+  validUntil          DateTime?                       @db.Date
+  syncStatus          ElectronicFiscalRangeSyncStatus @default(PENDING)
+  syncAttempts        Int                             @default(0)
+  nextSyncAt          DateTime                        @default(now())
+  lastErrorCode       String?
+  remoteRangeId       String?
+  syncedAt            DateTime?
+  createdById         String
+  createdAt           DateTime                        @default(now())
+  updatedAt           DateTime                        @updatedAt
+  tenant              Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdBy           User                            @relation("ElectronicFiscalRangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, issuerTaxId, ecfType, startNumber])
+  @@index([tenantId, createdAt])
+  @@index([syncStatus, nextSyncAt])
+}
+
+/// Tenant-isolated DGII electronic invoicing certification dossier. Secrets,
+/// portal credentials and private keys are deliberately never stored here.
+model ElectronicCertificationCase {
+  id                     String                            @id @default(cuid())
+  tenantId               String
+  issuerRnc              String
+  legalName              String
+  commercialName         String
+  representativeName     String
+  representativeDocument String
+  softwareName           String
+  softwareVersion        String
+  receptionUrl           String
+  approvalUrl            String
+  authenticationUrl      String
+  certificateSha256      String?
+  portalReference        String?
+  status                 CertificationCaseStatus           @default(DRAFT)
+  currentStep            Int                               @default(1)
+  agentEnabled           Boolean                           @default(true)
+  lastErrorCode          String?
+  startedAt              DateTime?
+  completedAt            DateTime?
+  cancelledAt            DateTime?
+  createdById            String
+  createdAt              DateTime                          @default(now())
+  updatedAt              DateTime                          @updatedAt
+  tenant                 Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdBy              User                              @relation("ElectronicCertificationCaseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  steps                  ElectronicCertificationStep[]
+  jobs                   ElectronicCertificationJob[]
+  artifacts              ElectronicCertificationArtifact[]
+  events                 ElectronicCertificationEvent[]
+
+  @@index([tenantId, createdAt])
+  @@index([status, updatedAt])
+}
+
+model ElectronicCertificationStep {
+  id                  String                            @id @default(cuid())
+  caseId              String
+  stepNumber          Int
+  title               String
+  executionMode       CertificationExecutionMode
+  status              CertificationStepStatus           @default(LOCKED)
+  operatorInstruction String
+  attempts            Int                               @default(0)
+  lastErrorCode       String?
+  result              Json?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  completedById       String?
+  createdAt           DateTime                          @default(now())
+  updatedAt           DateTime                          @updatedAt
+  certificationCase   ElectronicCertificationCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  completedBy         User?                             @relation("ElectronicCertificationStepCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  jobs                ElectronicCertificationJob[]
+  artifacts           ElectronicCertificationArtifact[]
+
+  @@unique([caseId, stepNumber])
+  @@index([caseId, status])
+}
+
+model ElectronicCertificationJob {
+  id                String                       @id @default(cuid())
+  caseId            String
+  stepId            String?
+  type              String
+  idempotencyKey    String                       @unique
+  status            CertificationJobStatus       @default(PENDING)
+  payload           Json?
+  attempts          Int                          @default(0)
+  nextRunAt         DateTime                     @default(now())
+  leaseUntil        DateTime?
+  lastErrorCode     String?
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+  completedAt       DateTime?
+  certificationCase ElectronicCertificationCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  step              ElectronicCertificationStep? @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRunAt])
+  @@index([caseId, createdAt])
+}
+
+model ElectronicCertificationArtifact {
+  id                String                       @id @default(cuid())
+  caseId            String
+  stepId            String?
+  kind              CertificationArtifactKind
+  originalName      String
+  mediaType         String
+  sizeBytes         BigInt
+  sha256            String
+  storageReference  String
+  uploadedById      String
+  createdAt         DateTime                     @default(now())
+  certificationCase ElectronicCertificationCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  step              ElectronicCertificationStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+  uploadedBy        User                         @relation("ElectronicCertificationArtifactUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([caseId, sha256, kind])
+  @@index([caseId, stepId, createdAt])
+}
+
+model ElectronicCertificationEvent {
+  id                String                      @id @default(cuid())
+  caseId            String
+  stepNumber        Int?
+  actor             CertificationEventActor
+  actorId           String?
+  eventType         String
+  summary           String
+  metadata          Json?
+  createdAt         DateTime                    @default(now())
+  certificationCase ElectronicCertificationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
 }
 
 model ImportBatch {
@@ -1745,4 +1997,117 @@ model AuditLog {
   @@index([userId])
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+/// One immutable import attempt of the official DGII taxpayer registry.
+/// Records are loaded while IMPORTING and only become visible after an atomic
+/// status switch to ACTIVE. At most one ACTIVE dataset is enforced in SQL.
+model DgiiRegistryDataset {
+  id                 String                    @id @default(cuid())
+  version            String                    @unique
+  source             DgiiRegistrySource
+  status             DgiiRegistryDatasetStatus @default(IMPORTING)
+  filename           String?
+  checksumSha256     String?                   @unique
+  sourceUpdatedAt    DateTime
+  startedAt          DateTime                  @default(now())
+  importedAt         DateTime?
+  activatedAt        DateTime?
+  deactivatedAt      DateTime?
+  recordCount        Int                       @default(0)
+  invalidRecordCount Int                       @default(0)
+  failureCode        String?
+  records            DgiiTaxpayerRecord[]
+
+  @@index([status])
+  @@index([source, sourceUpdatedAt])
+  @@index([activatedAt])
+}
+
+/// Taxpayer data is deliberately limited to the fields needed for identity
+/// validation. Raw DGII rows and reserved columns are never persisted.
+model DgiiTaxpayerRecord {
+  datasetId      String
+  documentType   DocumentType
+  documentNumber String
+  fiscalName     String
+  registryStatus String
+  status         DgiiTaxpayerStatus
+  dataset        DgiiRegistryDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@id([datasetId, documentType, documentNumber])
+  @@index([datasetId, status])
+}
+
+/// A short-lived administrative authorization for an identity that cannot be
+/// verified against a fresh DGII dataset. The document is bound by HMAC; only
+/// its last four digits are retained for support/audit display.
+model TaxIdentityOverride {
+  id               String                       @id @default(cuid())
+  tenantId         String
+  contextType      TaxIdentityContextType
+  contextId        String
+  documentType     DocumentType
+  documentHash     String                       @db.VarChar(64)
+  documentLast4    String                       @db.VarChar(4)
+  fiscalName       String
+  reason           String
+  requestedById    String
+  approvedById     String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  usedAt           DateTime?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+  tenant           Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedBy      User                         @relation("TaxIdentityOverrideRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy       User                         @relation("TaxIdentityOverrideApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  approvalRequests TaxIdentityApprovalRequest[]
+
+  @@index([tenantId, contextType, contextId, documentHash, expiresAt])
+  @@index([requestedById])
+  @@index([approvedById])
+  @@index([expiresAt])
+  @@index([usedAt])
+}
+
+/// A cashier/user request for an administrator to authorize a fiscal identity
+/// that could not be verified against the current DGII registry. Only the
+/// normalized fields needed for the decision are stored; no raw DGII response
+/// is persisted.
+model TaxIdentityApprovalRequest {
+  id                      String                           @id @default(cuid())
+  tenantId                String
+  contextType             TaxIdentityContextType
+  contextId               String
+  documentType            DocumentType
+  documentNumber          String                           @db.VarChar(11)
+  documentHash            String                           @db.VarChar(64)
+  documentLast4           String                           @db.VarChar(4)
+  fiscalName              String
+  reason                  String?
+  registryOutcome         String                           @db.VarChar(32)
+  registrySource          DgiiRegistrySource?
+  registryCheckedAt       DateTime
+  registrySourceUpdatedAt DateTime?
+  status                  TaxIdentityApprovalRequestStatus @default(PENDING)
+  requestedById           String
+  decidedById             String?
+  overrideId              String?
+  requestedAt             DateTime                         @default(now())
+  expiresAt               DateTime
+  decidedAt               DateTime?
+  decisionNote            String?
+  updatedAt               DateTime                         @updatedAt
+  tenant                  Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedBy             User                             @relation("TaxIdentityApprovalRequestCreatedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy               User?                            @relation("TaxIdentityApprovalRequestDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  override                TaxIdentityOverride?             @relation(fields: [overrideId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, requestedAt])
+  @@index([tenantId, contextType, contextId, documentHash], map: "TaxIdentityApprovalRequest_context_document_idx")
+  @@index([requestedById, status])
+  @@index([decidedById])
+  @@index([overrideId])
+  @@index([expiresAt])
 }

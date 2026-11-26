@@ -15,4 +15,14 @@ coverage
 .DS_Store
 .vscode/
 Qorvex_RIVNU_Plantilla_Importacion_Product*.xlsx
+/40220429126-*.xlsx
 packages/database/generated
+.docs/
+
+# Local migration notes and private OCR source material.
+/CORESTACK_MIGRACION_RIVNU.txt
+/docs/factura test.jpeg
+
+# Host-specific fiscal receiver configuration; keep private on VM2.
+/deploy/env/fiscal-receiver.env
+/deploy/env/fiscal-receiver.rivnu-certification.json

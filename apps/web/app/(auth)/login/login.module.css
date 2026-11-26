@@ -1,0 +1,115 @@
+.gridPattern {
+  background-image:
+    linear-gradient(rgb(15 76 160 / 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(15 76 160 / 0.11) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: radial-gradient(circle at center, black 0%, transparent 72%);
+}
+
+.ambientOne {
+  animation: ambient-drift-one 9s ease-in-out infinite alternate;
+}
+
+.ambientTwo {
+  animation: ambient-drift-two 11s ease-in-out infinite alternate;
+}
+
+.coreStackWordmark {
+  animation: wordmark-reveal 760ms ease-out 680ms both;
+}
+
+.cardEntrance {
+  animation: card-reveal 720ms cubic-bezier(0.2, 0.8, 0.2, 1) 90ms both;
+}
+
+.loginCard::after {
+  animation: card-glint 950ms ease-out 520ms both;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgb(255 255 255 / 0.32) 48%,
+    transparent 76%
+  );
+  content: '';
+  inset: -30% auto -30% -42%;
+  pointer-events: none;
+  position: absolute;
+  transform: skewX(-16deg);
+  width: 32%;
+  z-index: 20;
+}
+
+@keyframes card-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.975);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes card-glint {
+  from {
+    opacity: 0;
+    transform: translateX(0) skewX(-16deg);
+  }
+
+  35% {
+    opacity: 0.8;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(520%) skewX(-16deg);
+  }
+}
+
+@keyframes ambient-drift-one {
+  from {
+    opacity: 0.42;
+    transform: translate3d(0, 0, 0) scale(0.96);
+  }
+
+  to {
+    opacity: 0.72;
+    transform: translate3d(32px, 18px, 0) scale(1.08);
+  }
+}
+
+@keyframes ambient-drift-two {
+  from {
+    opacity: 0.52;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  to {
+    opacity: 0.76;
+    transform: translate3d(-28px, -16px, 0) scale(1.06);
+  }
+}
+
+@keyframes wordmark-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambientOne,
+  .ambientTwo,
+  .coreStackWordmark,
+  .cardEntrance,
+  .loginCard::after {
+    animation: none !important;
+    transform: none !important;
+  }
+}

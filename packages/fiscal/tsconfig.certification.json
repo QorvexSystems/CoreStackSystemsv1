@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/certification-automation.ts",
+    "src/certification-runner-main.ts",
+    "src/prepare-certification-simulation.ts",
+    "test/certification-automation.test.ts",
+    "test/certification-runner-http.test.ts"
+  ]
+}

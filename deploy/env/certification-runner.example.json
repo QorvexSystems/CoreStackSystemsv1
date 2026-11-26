@@ -1,0 +1,24 @@
+{
+  "scope": {
+    "tenantId": "REPLACE_WITH_NEW_CLIENT_TENANT",
+    "issuerRnc": "000000000",
+    "environment": "certification"
+  },
+  "signer": {
+    "p12Path": "/run/secrets/certificate.p12",
+    "passwordPath": "/run/secrets/certificate.password",
+    "rootCertificatePath": "/run/trust/signing-root.crt",
+    "subordinateCertificatePath": "/run/trust/signing-subordinate.crt",
+    "crlPath": "/run/trust/signing-subordinate.crl.pem",
+    "expectedCertificateSha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS",
+    "workRoot": "/tmp/fiscal-signer"
+  },
+  "inputRoot": "/input",
+  "evidenceRoot": "/evidence",
+  "tokenFile": "/run/secrets/service-token",
+  "tlsCertificateFile": "/run/config/runner-tls.crt",
+  "tlsKeyFile": "/run/secrets/runner-tls.key",
+  "listenHost": "0.0.0.0",
+  "listenPort": 8445,
+  "approvedCases": []
+}

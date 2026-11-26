@@ -1,0 +1,38 @@
+name: corestack-fiscal-production
+services:
+  fiscal-production:
+    image: ${FISCAL_PRODUCTION_IMAGE:?Set reviewed production image}
+    user: "10004:4101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    cpus: 0.75
+    mem_limit: 384m
+    memswap_limit: 384m
+    pids_limit: 64
+    ulimits:
+      core: { soft: 0, hard: 0 }
+      nofile: { soft: 512, hard: 512 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+      - /run/signing-work:rw,noexec,nosuid,nodev,size=32m,mode=0700,uid=10004,gid=4101
+    volumes:
+      - /opt/corestack/fe/config/fiscal-production.json:/run/config/fiscal-production.json:ro
+      - /opt/corestack/fe/config/fiscal-production-activation.json:/run/config/fiscal-production-activation.json:ro
+      - /opt/corestack/fe/config/internal-root-2026.crt:/run/secrets/postgresql-ca.crt:ro
+      - /opt/corestack/secrets/rivnu-fiscal-production/postgresql.password:/run/secrets/postgresql-password:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/certificate.p12:/run/secrets/signing/certificate.p12:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/certificate.password:/run/secrets/signing/password:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/root.crt:/run/trust/digifirma/root.crt:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/subordinate.crt:/run/trust/digifirma/subordinate.crt:ro
+      - /opt/corestack/secrets/rivnu-signer-runtime/subordinate.crl.pem:/run/trust/digifirma/subordinate.crl.pem:ro
+    networks: [fiscal-network]
+    logging:
+      driver: local
+      options: { max-size: "10m", max-file: "5" }
+networks:
+  fiscal-network:
+    external: true

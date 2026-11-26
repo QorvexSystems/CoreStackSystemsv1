@@ -1,0 +1,31 @@
+FROM node:22-bookworm-slim AS dependencies
+RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/fiscal/package.json ./packages/fiscal/package.json
+RUN pnpm install --filter @corestack/fiscal --frozen-lockfile --ignore-scripts
+
+FROM dependencies AS test
+RUN apt-get update && apt-get install --no-install-recommends --yes libxml2-utils \
+    && rm -rf /var/lib/apt/lists/*
+COPY tsconfig.base.json ./
+COPY packages/fiscal ./packages/fiscal
+WORKDIR /app/packages/fiscal
+USER node
+CMD ["node", "--experimental-strip-types", "--test", "test/preparation-worker.test.ts"]
+
+FROM dependencies AS production-dependencies
+RUN pnpm --filter @corestack/fiscal --prod deploy /runtime
+
+FROM node:22-bookworm-slim AS runtime
+RUN apt-get update && apt-get install --no-install-recommends --yes libxml2-utils \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/fiscal
+COPY --from=production-dependencies --chown=node:node /runtime/node_modules ./node_modules
+COPY --chown=node:node packages/fiscal/package.json ./
+COPY --chown=node:node packages/fiscal/src ./src
+COPY --chown=node:node packages/fiscal/schemas ./schemas
+USER node
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+  CMD node -e "const fs=require('node:fs');const h=JSON.parse(fs.readFileSync('/tmp/fiscal-worker-health.json','utf8'));if(Date.now()-h.checkedAt>60000)process.exit(1)"
+CMD ["node", "--experimental-strip-types", "src/worker-main.ts"]

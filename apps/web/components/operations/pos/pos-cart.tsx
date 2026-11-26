@@ -12,6 +12,8 @@ type PosCartProps = {
   items: CartItem[];
   onUpdateQuantity: (productId: string, quantity: number) => void;
   onClear: () => void;
+  onDiscard?: () => void;
+  isBusy?: boolean;
   readOnly?: boolean;
   emptyMessage?: string;
 };
@@ -20,6 +22,8 @@ export function PosCart({
   items,
   onUpdateQuantity,
   onClear,
+  onDiscard,
+  isBusy = false,
   readOnly = false,
   emptyMessage = 'Agrega productos desde la izquierda o escanea un codigo para empezar.',
 }: PosCartProps) {
@@ -30,11 +34,19 @@ export function PosCart({
           <h2 className="text-base font-semibold text-zinc-950">Carrito</h2>
           <p className="text-xs text-muted-foreground">{items.length} linea(s) agregada(s)</p>
         </div>
-        {!readOnly ? (
-          <Button type="button" variant="outline" size="sm" onClick={onClear} disabled={!items.length}>
-            Limpiar
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          {!readOnly ? (
+            <Button type="button" variant="outline" size="sm" onClick={onClear} disabled={!items.length || isBusy}>
+              Limpiar
+            </Button>
+          ) : null}
+          {onDiscard ? (
+            <Button type="button" variant="outline" size="sm" className="text-danger" onClick={onDiscard} disabled={!items.length || isBusy}>
+              <Trash2 className="h-4 w-4" />
+              Eliminar factura
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <div className="surface-scrollbar max-h-[26rem] space-y-2 overflow-y-auto p-3">

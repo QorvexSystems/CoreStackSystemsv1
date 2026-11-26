@@ -1,0 +1,56 @@
+ARG RIVNU_COMPILED_IMAGE=corestack/rivnu-api:fiscal-receipt-clean-20261102
+FROM ${RIVNU_COMPILED_IMAGE} AS build
+
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_APP_URL
+
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NODE_ENV=production
+WORKDIR /app
+
+USER root
+COPY --chown=node:node \
+    apps/api/src/common/utils/fiscal-tax-allocation.ts \
+    /app/apps/api/src/common/utils/fiscal-tax-allocation.ts
+COPY --chown=node:node \
+    apps/api/src/modules/fiscal-documents/erp-sales-projection.ts \
+    /app/apps/api/src/modules/fiscal-documents/erp-sales-projection.ts
+COPY --chown=node:node \
+    apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts \
+    /app/apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts
+COPY --chown=node:node \
+    apps/api/src/modules/orders/orders.service.ts \
+    /app/apps/api/src/modules/orders/orders.service.ts
+COPY --chown=node:node \
+    apps/api/src/modules/pos/pos.service.ts \
+    /app/apps/api/src/modules/pos/pos.service.ts
+COPY --chown=node:node \
+    apps/web/components/operations/invoice-detail.tsx \
+    /app/apps/web/components/operations/invoice-detail.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/invoices-view.tsx \
+    /app/apps/web/components/operations/invoices-view.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/fiscal-sequences-view.tsx \
+    /app/apps/web/components/operations/fiscal-sequences-view.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/pos/pos-payment-panel.tsx \
+    /app/apps/web/components/operations/pos/pos-payment-panel.tsx
+
+USER node
+RUN rm -rf apps/api/dist apps/web/.next \
+    && cd apps/api \
+    && ./node_modules/.bin/tsc --noEmit \
+    && ./node_modules/.bin/nest build \
+    && cd ../web \
+    && ./node_modules/.bin/next build \
+    && ./node_modules/.bin/tsc --noEmit
+
+FROM build AS api
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

@@ -1,11 +1,27 @@
 'use client';
 
-import { ReceiptText } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { LoaderCircle, ReceiptText, Search, ShieldCheck } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Customer } from '@/lib/api';
-import { formatCurrency } from '@/lib/utils';
+import type {
+  CustomerDocumentType,
+  FiscalDocumentPurpose,
+  InvoiceDocumentType,
+  PosPaymentMethod,
+  SalesOrder,
+  TaxIdentityLookup,
+} from '@/lib/api';
+import { lookupTaxIdentity, updatePosOrderFiscalDetails } from '@/lib/api';
+import {
+  formatDominicanDocument,
+  normalizeDominicanDocument,
+  validateDominicanDocument,
+} from '@/lib/dominican-documents';
+import { cn, formatCurrency } from '@/lib/utils';
 import {
   formatCurrencyInput,
   formatCurrencyInputFromNumber,
@@ -13,201 +29,831 @@ import {
 } from './currency-input';
 import { PaymentCalculator } from './payment-calculator';
 import type { PosTotals } from './types';
+import { TaxIdentityApprovalRequestPanel } from '../tax-identity-approval-request';
 
 type PosPaymentPanelProps = {
-  customers: Customer[];
-  customerId: string;
-  documentType: string;
-  electronicInvoiceRequested: boolean;
-  requiresE32Recipient: boolean;
-  fiscalDocumentType: 'RNC' | 'CEDULA';
-  fiscalDocumentNumber: string;
-  fiscalDocumentValid: boolean;
-  fiscalCustomerName?: string | null;
-  paymentMethod: string;
+  tenantId: string;
+  accessToken: string;
+  order: SalesOrder | null;
+  fiscalPurpose: FiscalDocumentPurpose;
+  paymentMethod: PosPaymentMethod;
   salePaymentMode: 'CASH' | 'CREDIT';
   dueDate?: string | null;
-  customerLocked?: boolean;
   amountReceived: string;
   totals: PosTotals;
   message: string | null;
   canCompleteSale: boolean;
   isCompleting: boolean;
-  onCustomerChange: (value: string) => void;
-  onDocumentTypeChange: (value: string) => void;
-  onFiscalDocumentTypeChange: (value: 'RNC' | 'CEDULA') => void;
-  onFiscalDocumentNumberChange: (value: string) => void;
-  onPaymentMethodChange: (value: string) => void;
+  onPaymentMethodChange: (value: PosPaymentMethod) => void;
   onAmountReceivedChange: (value: string) => void;
+  onFiscalOrderUpdated: (order: SalesOrder) => void;
   onCompleteSale: () => void;
 };
 
+type FiscalIdentityDocumentType = Extract<CustomerDocumentType, 'RNC' | 'CEDULA'>;
+type CheckoutInvoiceDocumentType = Exclude<
+  InvoiceDocumentType,
+  'DEBIT_NOTE_ELECTRONIC_33' | 'CREDIT_NOTE_ELECTRONIC_34'
+>;
+type UsableTaxIdentityLookup = TaxIdentityLookup & {
+  overrideId?: string;
+  expiresAt?: string;
+};
+type TaxIdentityLookupRequest = {
+  orderId: string;
+  documentType: FiscalIdentityDocumentType;
+  documentNumber: string;
+};
+
 export function PosPaymentPanel({
-  customers,
-  customerId,
-  documentType,
-  electronicInvoiceRequested,
-  requiresE32Recipient,
-  fiscalDocumentType,
-  fiscalDocumentNumber,
-  fiscalDocumentValid,
-  fiscalCustomerName,
+  tenantId,
+  accessToken,
+  order,
+  fiscalPurpose,
   paymentMethod,
   salePaymentMode,
   dueDate,
-  customerLocked = false,
   amountReceived,
   totals,
   message,
   canCompleteSale,
   isCompleting,
-  onCustomerChange,
-  onDocumentTypeChange,
-  onFiscalDocumentTypeChange,
-  onFiscalDocumentNumberChange,
   onPaymentMethodChange,
   onAmountReceivedChange,
+  onFiscalOrderUpdated,
   onCompleteSale,
 }: PosPaymentPanelProps) {
+  const queryClient = useQueryClient();
+  const [draftPurpose, setDraftPurpose] = useState<FiscalDocumentPurpose>(fiscalPurpose);
+  const [localSaleNoteSelected, setLocalSaleNoteSelected] = useState(
+    order?.fiscalDocumentTypeSnapshot === 'LOCAL_SALE_NOTE',
+  );
+  const [draftDocumentType, setDraftDocumentType] = useState<FiscalIdentityDocumentType>('RNC');
+  const [draftDocumentNumber, setDraftDocumentNumber] = useState('');
+  const [overrideClockMs, setOverrideClockMs] = useState(() => Date.now());
+  const activeOrderIdRef = useRef(order?.id);
+  const lastAutomaticLookupKeyRef = useRef<string | null>(null);
+  const lastAutomaticSaveKeyRef = useRef<string | null>(null);
+  const [taxIdentityLookup, setTaxIdentityLookup] = useState<{
+    orderId: string;
+    documentType: FiscalIdentityDocumentType;
+    documentNumber: string;
+    result: UsableTaxIdentityLookup;
+  } | null>(null);
+
+  activeOrderIdRef.current = order?.id;
+
+  useEffect(() => {
+    const persistedIdentity = getPersistedFiscalIdentity(order);
+    setDraftPurpose(fiscalPurpose);
+    setLocalSaleNoteSelected(order?.fiscalDocumentTypeSnapshot === 'LOCAL_SALE_NOTE');
+    setDraftDocumentType(persistedIdentity?.documentType ?? 'RNC');
+    setDraftDocumentNumber(persistedIdentity?.documentNumber ?? '');
+  }, [
+    fiscalPurpose,
+    order?.fiscalCustomerSnapshot?.documentNumber,
+    order?.fiscalCustomerSnapshot?.documentType,
+    order?.fiscalDocumentTypeSnapshot,
+    order?.id,
+  ]);
+
+  useEffect(() => {
+    if (!order) return;
+
+    if (paymentMethod === 'CARD' && localSaleNoteSelected) {
+      setDraftPurpose('CONSUMER');
+      setLocalSaleNoteSelected(false);
+      return;
+    }
+
+    if (
+      paymentMethod === 'CASH' &&
+      draftPurpose === 'CONSUMER' &&
+      !localSaleNoteSelected
+    ) {
+      setLocalSaleNoteSelected(true);
+    }
+  }, [draftPurpose, localSaleNoteSelected, order, paymentMethod]);
+
   const cashInsufficient =
     paymentMethod === 'CASH' &&
     totals.requiredPayment > 0 &&
     totals.received < totals.requiredPayment;
   const cashPayment = paymentMethod === 'CASH';
   const creditSale = salePaymentMode === 'CREDIT';
-  const requiresFiscalDocument = ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(
-    documentType,
+  const draftFiscalDocumentType: CheckoutInvoiceDocumentType = localSaleNoteSelected
+    ? 'LOCAL_SALE_NOTE'
+    : getDraftFiscalDocumentType(draftPurpose, order);
+  const fiscalDocument = getFiscalDocumentDisplay(draftPurpose, draftFiscalDocumentType);
+  const operationalCustomerName = getOrderOperationalName(order);
+  const persistedIdentity = getPersistedFiscalIdentity(order);
+  const normalizedDraftDocumentNumber = normalizeDominicanDocument(draftDocumentNumber);
+  const inlineIdentityRequired =
+    draftPurpose === 'FISCAL_CREDIT' ||
+    ((draftFiscalDocumentType === 'CONSUMER_02' ||
+      draftFiscalDocumentType === 'CONSUMER_ELECTRONIC_32') &&
+      totals.subtotal >= 250_000);
+  const electronic =
+    draftFiscalDocumentType === 'CONSUMER_ELECTRONIC_32' ||
+    draftFiscalDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31';
+  const operationalNameMissing = inlineIdentityRequired && !operationalCustomerName;
+  const fiscalDocumentInvalid =
+    inlineIdentityRequired &&
+    !validateDominicanDocument(draftDocumentType, normalizedDraftDocumentNumber);
+  const matchingLocalTaxIdentityLookup =
+    taxIdentityLookup !== null &&
+    taxIdentityLookup.orderId === order?.id &&
+    taxIdentityLookup.documentType === draftDocumentType &&
+    taxIdentityLookup.documentNumber === normalizedDraftDocumentNumber
+      ? taxIdentityLookup
+      : null;
+  const localTaxIdentityLookup = matchingLocalTaxIdentityLookup?.result ?? null;
+  const localOverrideExpiresAtMs =
+    localTaxIdentityLookup?.source === 'MANUAL_OVERRIDE'
+      ? parseTimestamp(localTaxIdentityLookup.expiresAt)
+      : null;
+  const localOverrideExpired = Boolean(
+    localTaxIdentityLookup?.source === 'MANUAL_OVERRIDE' &&
+    (localOverrideExpiresAtMs === null || localOverrideExpiresAtMs <= overrideClockMs),
   );
-  const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
-  const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
-  const fiscalLabel = requiresRnc ? 'E31' : requiresE32Recipient ? 'E32' : 'B01';
+  const persistedTaxIdentityLookup = getPersistedTaxIdentityLookup(order);
+  const currentTaxIdentityLookup = matchingLocalTaxIdentityLookup
+    ? localOverrideExpired
+      ? null
+      : localTaxIdentityLookup
+    : persistedTaxIdentityLookup?.documentType === draftDocumentType &&
+        normalizeDominicanDocument(persistedTaxIdentityLookup.documentNumber) ===
+          normalizedDraftDocumentNumber
+      ? persistedTaxIdentityLookup
+      : null;
+  const fiscalIdentityVerified =
+    !inlineIdentityRequired ||
+    (currentTaxIdentityLookup?.outcome === 'VERIFIED' &&
+      currentTaxIdentityLookup.documentType === draftDocumentType &&
+      normalizeDominicanDocument(currentTaxIdentityLookup.documentNumber) ===
+        normalizedDraftDocumentNumber &&
+      Boolean(currentTaxIdentityLookup.fiscalName?.trim()));
+  const fiscalIdentityVerificationMissing = inlineIdentityRequired && !fiscalIdentityVerified;
+  const persistedDocumentNumber = persistedIdentity
+    ? normalizeDominicanDocument(persistedIdentity.documentNumber)
+    : '';
+  const fiscalIdentityDirty = inlineIdentityRequired
+    ? persistedIdentity?.documentType !== draftDocumentType ||
+      persistedDocumentNumber !== normalizedDraftDocumentNumber
+    : false;
+  const canonicalFiscalNameDirty =
+    inlineIdentityRequired &&
+    fiscalIdentityVerified &&
+    normalizeComparableName(order?.fiscalCustomerSnapshot?.name) !==
+      normalizeComparableName(currentTaxIdentityLookup?.fiscalName);
+  const fiscalDetailsDirty =
+    draftPurpose !== fiscalPurpose ||
+    draftFiscalDocumentType !== order?.fiscalDocumentTypeSnapshot ||
+    fiscalIdentityDirty ||
+    canonicalFiscalNameDirty;
+  const taxIdentityLookupKey =
+    order && inlineIdentityRequired && !fiscalDocumentInvalid
+      ? createTaxIdentityLookupKey(order.id, draftDocumentType, normalizedDraftDocumentNumber)
+      : null;
+
+  const verifyTaxIdentityMutation = useMutation({
+    onMutate: () => {
+      setTaxIdentityLookup(null);
+    },
+    mutationFn: (request: TaxIdentityLookupRequest) => {
+      if (!validateDominicanDocument(request.documentType, request.documentNumber)) {
+        throw new Error(
+          request.documentType === 'RNC'
+            ? 'El RNC digitado no es válido.'
+            : 'La cédula digitada no es válida.',
+        );
+      }
+
+      return lookupTaxIdentity(tenantId, accessToken, {
+        documentType: request.documentType,
+        documentNumber: request.documentNumber,
+      });
+    },
+    onSuccess: (result, request) => {
+      if (activeOrderIdRef.current !== request.orderId) {
+        return;
+      }
+
+      setTaxIdentityLookup({
+        orderId: request.orderId,
+        documentType: request.documentType,
+        documentNumber: request.documentNumber,
+        result,
+      });
+
+      if (result.outcome === 'VERIFIED' && result.fiscalName?.trim()) {
+        toast.success('Identidad fiscal verificada', {
+          description: result.fiscalName.trim(),
+        });
+      }
+    },
+    onError: (error, request) => {
+      if (activeOrderIdRef.current !== request.orderId) {
+        return;
+      }
+
+      setTaxIdentityLookup(null);
+      toast.error(
+        error instanceof Error ? error.message : 'No se pudo consultar el padrón de DGII.',
+      );
+    },
+  });
+
+  const saveFiscalDetailsMutation = useMutation({
+    mutationFn: () => {
+      if (!order) {
+        throw new Error('Carga una orden antes de guardar sus datos fiscales.');
+      }
+
+      if (operationalNameMissing) {
+        throw new Error('La orden no tiene el nombre operativo requerido para facturar.');
+      }
+
+      if (fiscalDocumentInvalid) {
+        throw new Error(
+          draftDocumentType === 'RNC'
+            ? 'El RNC digitado no es válido.'
+            : 'La cédula digitada no es válida.',
+        );
+      }
+
+      if (!fiscalIdentityVerified) {
+        throw new Error(
+          'Verifica el RNC o la cédula con DGII o consigue autorización administrativa antes de facturar.',
+        );
+      }
+
+      return updatePosOrderFiscalDetails(tenantId, accessToken, order.id, {
+        fiscalPurpose: draftPurpose,
+        invoiceDocumentType: draftFiscalDocumentType,
+        ...(inlineIdentityRequired
+          ? {
+              documentType: draftDocumentType,
+              documentNumber: normalizedDraftDocumentNumber,
+              ...(currentTaxIdentityLookup?.overrideId
+                ? { taxIdentityOverrideId: currentTaxIdentityLookup.overrideId }
+                : {}),
+            }
+          : {}),
+      });
+    },
+    onSuccess: async (updatedOrder) => {
+      onFiscalOrderUpdated(updatedOrder);
+      setTaxIdentityLookup(null);
+      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : 'No se pudieron guardar los datos fiscales.',
+      );
+    },
+  });
+
+  useEffect(() => {
+    setTaxIdentityLookup(null);
+    setOverrideClockMs(Date.now());
+    lastAutomaticLookupKeyRef.current = null;
+    lastAutomaticSaveKeyRef.current = null;
+    verifyTaxIdentityMutation.reset();
+    saveFiscalDetailsMutation.reset();
+    // React Query exposes stable reset callbacks; this effect intentionally follows persisted order identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    fiscalPurpose,
+    order?.fiscalCustomerSnapshot?.documentNumber,
+    order?.fiscalCustomerSnapshot?.documentType,
+    order?.id,
+  ]);
+
+  useEffect(() => {
+    if (localOverrideExpiresAtMs === null || localOverrideExpired) {
+      return;
+    }
+
+    const updateClock = () => setOverrideClockMs(Date.now());
+    const intervalId = window.setInterval(updateClock, 1_000);
+    const expirationId = window.setTimeout(
+      updateClock,
+      Math.max(0, localOverrideExpiresAtMs - Date.now()) + 25,
+    );
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.clearTimeout(expirationId);
+    };
+  }, [localOverrideExpiresAtMs, localOverrideExpired]);
+
+  useEffect(() => {
+    if (
+      !order?.id ||
+      !taxIdentityLookupKey ||
+      fiscalIdentityVerified ||
+      localOverrideExpired ||
+      lastAutomaticLookupKeyRef.current === taxIdentityLookupKey
+    ) {
+      return;
+    }
+
+    const request: TaxIdentityLookupRequest = {
+      orderId: order.id,
+      documentType: draftDocumentType,
+      documentNumber: normalizedDraftDocumentNumber,
+    };
+    const timeoutId = window.setTimeout(() => {
+      if (lastAutomaticLookupKeyRef.current === taxIdentityLookupKey) {
+        return;
+      }
+
+      lastAutomaticLookupKeyRef.current = taxIdentityLookupKey;
+      saveFiscalDetailsMutation.reset();
+      verifyTaxIdentityMutation.mutate(request);
+    }, 650);
+
+    return () => window.clearTimeout(timeoutId);
+    // The request is intentionally keyed by the normalized fiscal identity rather than hook objects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fiscalIdentityVerified, localOverrideExpired, taxIdentityLookupKey]);
+
+  function invalidateFiscalIdentityVerification() {
+    setTaxIdentityLookup(null);
+    setOverrideClockMs(Date.now());
+    lastAutomaticLookupKeyRef.current = null;
+    lastAutomaticSaveKeyRef.current = null;
+    verifyTaxIdentityMutation.reset();
+    saveFiscalDetailsMutation.reset();
+  }
+
+  function requestTaxIdentityLookup() {
+    if (!order || !taxIdentityLookupKey) {
+      return;
+    }
+
+    lastAutomaticLookupKeyRef.current = taxIdentityLookupKey;
+    saveFiscalDetailsMutation.reset();
+    verifyTaxIdentityMutation.mutate({
+      orderId: order.id,
+      documentType: draftDocumentType,
+      documentNumber: normalizedDraftDocumentNumber,
+    });
+  }
+
+  const fiscalDetailsInvalid =
+    operationalNameMissing || fiscalDocumentInvalid || fiscalIdentityVerificationMissing;
+  const fiscalDetailsSaving = saveFiscalDetailsMutation.isPending;
+  const fiscalIdentityChecking = verifyTaxIdentityMutation.isPending;
+  const fiscalDetailsBlockPayment =
+    fiscalDetailsDirty || fiscalDetailsInvalid || fiscalDetailsSaving || fiscalIdentityChecking;
+  const taxIdentityDisplay = getTaxIdentityOutcomeDisplay(currentTaxIdentityLookup?.outcome);
+  const manualIdentityAuthorized = currentTaxIdentityLookup?.source === 'MANUAL_OVERRIDE';
+  const taxIdentityHeading = getTaxIdentityHeading(
+    currentTaxIdentityLookup,
+    fiscalIdentityChecking,
+  );
+  const overrideRemainingMs =
+    manualIdentityAuthorized && localOverrideExpiresAtMs !== null
+      ? Math.max(0, localOverrideExpiresAtMs - overrideClockMs)
+      : null;
+  const lookupAttemptedForCurrentDocument = Boolean(
+    taxIdentityLookupKey &&
+    (lastAutomaticLookupKeyRef.current === taxIdentityLookupKey ||
+      currentTaxIdentityLookup ||
+      verifyTaxIdentityMutation.isError),
+  );
+  const lookupButtonLabel = fiscalIdentityChecking
+    ? 'Consultando DGII...'
+    : currentTaxIdentityLookup?.outcome === 'VERIFIED'
+      ? 'Verificar nuevamente'
+      : lookupAttemptedForCurrentDocument
+        ? 'Reintentar'
+        : 'Verificar ahora';
+  const canRequestManualApproval = Boolean(
+    order &&
+    !fiscalDocumentInvalid &&
+    !fiscalIdentityVerified &&
+    !fiscalIdentityChecking &&
+    (localOverrideExpired ||
+      (currentTaxIdentityLookup && currentTaxIdentityLookup.outcome !== 'VERIFIED') ||
+      verifyTaxIdentityMutation.isError),
+  );
+  const automaticSaveKey = order
+    ? [
+        order.id,
+        draftPurpose,
+        draftFiscalDocumentType,
+        draftDocumentType,
+        normalizedDraftDocumentNumber,
+        currentTaxIdentityLookup?.overrideId ?? '',
+      ].join(':')
+    : null;
+
+  useEffect(() => {
+    if (
+      !automaticSaveKey ||
+      !fiscalDetailsDirty ||
+      fiscalDetailsInvalid ||
+      fiscalDetailsSaving ||
+      fiscalIdentityChecking ||
+      lastAutomaticSaveKeyRef.current === automaticSaveKey
+    ) {
+      return;
+    }
+
+    lastAutomaticSaveKeyRef.current = automaticSaveKey;
+    saveFiscalDetailsMutation.mutate();
+    // The mutation reads the complete validated draft represented by automaticSaveKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    automaticSaveKey,
+    fiscalDetailsDirty,
+    fiscalDetailsInvalid,
+    fiscalDetailsSaving,
+    fiscalIdentityChecking,
+  ]);
 
   return (
     <div className="space-y-3">
       <div className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="customer">Cliente</Label>
-            <select
-              id="customer"
-              value={customerId}
-              disabled={customerLocked}
-              onChange={(event) => onCustomerChange(event.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
-            >
-              <option value="">Consumidor final</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-            {requiresRecipientDocument ? (
-              <p className="text-xs text-muted-foreground">
-                {requiresE32Recipient
-                  ? 'Por superar RD$250,000, E32 requiere identificar y registrar al comprador.'
-                  : 'Requiere un cliente registrado para sustentar el crédito fiscal.'}
+        <div className="space-y-4">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+            <div>
+              <p className="text-sm font-semibold">Confirmación fiscal</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {draftFiscalDocumentType === 'LOCAL_SALE_NOTE'
+                  ? 'Se emitirá una venta local con referencia interna y sin consumir secuencia fiscal.'
+                  : draftPurpose === 'FISCAL_CREDIT'
+                    ? electronic
+                      ? 'El crédito fiscal se emite como E31 y se reporta a DGII.'
+                      : 'El crédito fiscal se emite con B01 y consume su secuencia NCF.'
+                    : electronic
+                      ? 'La factura de consumo se emite como E32 y se reporta a DGII.'
+                      : 'La factura de consumo se emite con B02 y consume su secuencia NCF.'}
               </p>
-            ) : null}
+            </div>
+            <span
+              className={cn(
+                'w-fit shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold',
+                fiscalDetailsInvalid
+                  ? 'bg-amber-100 text-amber-900'
+                  : fiscalDetailsDirty || fiscalDetailsSaving
+                    ? 'bg-sky-100 text-sky-900'
+                  : 'bg-success/10 text-success',
+              )}
+              aria-live="polite"
+            >
+              {fiscalDetailsInvalid
+                ? 'Requiere corrección'
+                : fiscalDetailsDirty || fiscalDetailsSaving
+                  ? 'Guardando...'
+                  : 'Confirmado'}
+            </span>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="documentType">Comprobante</Label>
-            <select
-              id="documentType"
-              value={documentType}
-              onChange={(event) => onDocumentTypeChange(event.target.value)}
-              className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {electronicInvoiceRequested ? (
-                <>
-                  <option value="CONSUMER_ELECTRONIC_32">Factura de consumo electrónica E32</option>
-                  <option value="FISCAL_CREDIT_ELECTRONIC_31">
-                    Factura de crédito fiscal electrónica E31
-                  </option>
-                </>
-              ) : (
-                <>
-                  <option value="CONSUMER_02">Factura de consumo B02</option>
-                  <option value="FISCAL_CREDIT_01">Factura de crédito fiscal B01</option>
-                </>
+          <fieldset
+            className="space-y-2"
+            disabled={!order || fiscalDetailsSaving || fiscalIdentityChecking || isCompleting}
+          >
+            <legend className="text-sm font-medium">Tipo de comprobante</legend>
+            <div
+              className={cn(
+                'grid gap-2',
+                paymentMethod === 'TRANSFER' ? 'sm:grid-cols-3' : 'sm:grid-cols-2',
               )}
-            </select>
-            {electronicInvoiceRequested ? (
-              <p className="text-xs text-muted-foreground">
-                Esta orden solicita e-CF; la copia se enviará al correo configurado cuando Resend
-                esté activo.
+            >
+              {paymentMethod !== 'CARD' ? <button
+                type="button"
+                aria-pressed={draftFiscalDocumentType === 'LOCAL_SALE_NOTE'}
+                onClick={() => {
+                  setDraftPurpose('CONSUMER');
+                  setLocalSaleNoteSelected(true);
+                  invalidateFiscalIdentityVerification();
+                }}
+                className={cn(
+                  'rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
+                  draftFiscalDocumentType === 'LOCAL_SALE_NOTE'
+                    ? 'border-[#f36c10] bg-[#f36c10]/10 ring-1 ring-[#f36c10]/20'
+                    : 'border-zinc-200 bg-white hover:bg-zinc-50',
+                )}
+              >
+                <span className="block text-sm font-semibold">Nota de venta</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Referencia interna; no consume E31 ni E32.
+                </span>
+              </button> : null}
+              {paymentMethod !== 'CASH' ? <button
+                type="button"
+                aria-pressed={
+                  draftPurpose === 'CONSUMER' && draftFiscalDocumentType !== 'LOCAL_SALE_NOTE'
+                }
+                onClick={() => {
+                  setDraftPurpose('CONSUMER');
+                  setLocalSaleNoteSelected(false);
+                  invalidateFiscalIdentityVerification();
+                }}
+                className={cn(
+                  'rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
+                  draftPurpose === 'CONSUMER' && draftFiscalDocumentType !== 'LOCAL_SALE_NOTE'
+                    ? 'border-[#f36c10] bg-[#f36c10]/10 ring-1 ring-[#f36c10]/20'
+                    : 'border-zinc-200 bg-white hover:bg-zinc-50',
+                )}
+              >
+                <span className="block text-sm font-semibold">Consumo · E32</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Venta normal. Es la opción predeterminada.
+                </span>
+              </button> : null}
+              <button
+                type="button"
+                aria-pressed={draftPurpose === 'FISCAL_CREDIT'}
+                onClick={() => {
+                  setDraftPurpose('FISCAL_CREDIT');
+                  setLocalSaleNoteSelected(false);
+                  invalidateFiscalIdentityVerification();
+                }}
+                className={cn(
+                  'rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
+                  draftPurpose === 'FISCAL_CREDIT'
+                    ? 'border-[#f36c10] bg-[#f36c10]/10 ring-1 ring-[#f36c10]/20'
+                    : 'border-zinc-200 bg-white hover:bg-zinc-50',
+                )}
+              >
+                <span className="block text-sm font-semibold">Crédito fiscal · E31</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Requiere razón social y RNC o cédula válida.
+                </span>
+              </button>
+            </div>
+          </fieldset>
+
+          {inlineIdentityRequired ? (
+            <div className="space-y-3 rounded-lg border border-[#f36c10]/30 bg-[#f36c10]/5 p-3">
+              <div>
+                <p className="text-sm font-semibold">
+                  {draftPurpose === 'FISCAL_CREDIT'
+                    ? `Datos para la factura ${electronic ? 'E31' : 'B01'}`
+                    : `Identificación requerida para esta ${electronic ? 'E32' : 'B02'}`}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Estos datos se guardan únicamente en la orden y la factura. No se creará un
+                  cliente en el módulo Clientes.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="posFiscalCustomerName">Nombre operativo de la orden</Label>
+                <Input
+                  id="posFiscalCustomerName"
+                  value={operationalCustomerName}
+                  readOnly
+                  aria-readonly="true"
+                  className="bg-zinc-100"
+                  placeholder="Nombre recibido desde la toma de orden"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Proviene de Toma de órdenes y se conserva como referencia. Para la factura se
+                  usará la identidad fiscal verificada o autorizada.
+                </p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                <div className="space-y-2">
+                  <Label htmlFor="posFiscalDocumentType">Tipo de documento</Label>
+                  <select
+                    id="posFiscalDocumentType"
+                    value={draftDocumentType}
+                    disabled={
+                      !order || fiscalDetailsSaving || fiscalIdentityChecking || isCompleting
+                    }
+                    onChange={(event) => {
+                      setDraftDocumentType(event.target.value as FiscalIdentityDocumentType);
+                      setDraftDocumentNumber('');
+                      invalidateFiscalIdentityVerification();
+                    }}
+                    className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-zinc-100"
+                  >
+                    <option value="RNC">RNC</option>
+                    <option value="CEDULA">Cédula</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="posFiscalDocumentNumber">
+                    {draftDocumentType === 'RNC' ? 'Número de RNC' : 'Número de cédula'}
+                  </Label>
+                  <Input
+                    id="posFiscalDocumentNumber"
+                    value={draftDocumentNumber}
+                    disabled={
+                      !order || fiscalDetailsSaving || fiscalIdentityChecking || isCompleting
+                    }
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder={draftDocumentType === 'RNC' ? '1-01-00000-1' : '001-0000000-1'}
+                    onChange={(event) => {
+                      setDraftDocumentNumber(event.target.value);
+                      invalidateFiscalIdentityVerification();
+                    }}
+                    onBlur={() => {
+                      if (normalizedDraftDocumentNumber) {
+                        setDraftDocumentNumber(
+                          formatDominicanDocument(draftDocumentType, normalizedDraftDocumentNumber),
+                        );
+                      }
+                    }}
+                    aria-invalid={fiscalDocumentInvalid}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-muted-foreground">
+                  La consulta no crea ni modifica registros en el módulo Clientes.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    !order ||
+                    fiscalDocumentInvalid ||
+                    fiscalIdentityChecking ||
+                    fiscalDetailsSaving ||
+                    isCompleting
+                  }
+                  onClick={requestTaxIdentityLookup}
+                  aria-label={`${lookupAttemptedForCurrentDocument ? 'Reintentar la consulta de' : 'Verificar'} ${
+                    draftDocumentType === 'RNC' ? 'RNC' : 'cédula'
+                  } en el padrón de DGII`}
+                >
+                  {fiscalIdentityChecking ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Search className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {lookupButtonLabel}
+                </Button>
+              </div>
+
+              <div
+                className={cn('rounded-md border px-3 py-3', taxIdentityDisplay.containerClassName)}
+                role={
+                  currentTaxIdentityLookup && currentTaxIdentityLookup.outcome !== 'VERIFIED'
+                    ? 'alert'
+                    : 'status'
+                }
+                aria-live="polite"
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <p className="text-xs font-semibold uppercase tracking-wide">
+                        {taxIdentityHeading}
+                      </p>
+                    </div>
+                    <p className="mt-1 break-words text-sm font-semibold">
+                      {fiscalIdentityChecking
+                        ? 'Consultando el padrón oficial...'
+                        : currentTaxIdentityLookup?.fiscalName?.trim() ||
+                          taxIdentityDisplay.message}
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      'w-fit shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold',
+                      taxIdentityDisplay.badgeClassName,
+                    )}
+                  >
+                    {fiscalIdentityChecking
+                      ? 'Consultando'
+                      : manualIdentityAuthorized
+                        ? 'Autorizado'
+                        : taxIdentityDisplay.badgeLabel}
+                  </span>
+                </div>
+
+                {currentTaxIdentityLookup ? (
+                  <dl
+                    className={cn(
+                      'mt-3 grid gap-2 border-t border-current/15 pt-3 text-xs',
+                      overrideRemainingMs === null ? 'sm:grid-cols-3' : 'sm:grid-cols-4',
+                    )}
+                  >
+                    <div>
+                      <dt className="font-medium opacity-70">Estado en padrón</dt>
+                      <dd className="mt-0.5 font-semibold">
+                        {formatRegistryStatus(currentTaxIdentityLookup.registryStatus)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-medium opacity-70">Fuente / actualización</dt>
+                      <dd className="mt-0.5 font-semibold">
+                        {formatTaxIdentitySource(currentTaxIdentityLookup.source)} ·{' '}
+                        {formatLookupDate(currentTaxIdentityLookup.sourceUpdatedAt)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-medium opacity-70">Consultado</dt>
+                      <dd className="mt-0.5 font-semibold">
+                        {formatLookupDate(currentTaxIdentityLookup.checkedAt)}
+                      </dd>
+                    </div>
+                    {overrideRemainingMs !== null ? (
+                      <div>
+                        <dt className="font-medium opacity-70">Autorización vigente</dt>
+                        <dd className="mt-0.5 font-semibold">
+                          {formatOverrideRemainingTime(overrideRemainingMs)}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                ) : null}
+              </div>
+
+              {localOverrideExpired ? (
+                <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+                  La validación manual venció. Envía una nueva solicitud al administrador antes de
+                  facturar.
+                </p>
+              ) : null}
+
+              {verifyTaxIdentityMutation.isError ? (
+                <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+                  {verifyTaxIdentityMutation.error instanceof Error
+                    ? verifyTaxIdentityMutation.error.message
+                    : 'No se pudo consultar el padrón de DGII.'}
+                </p>
+              ) : null}
+
+              {canRequestManualApproval && order ? (
+                <TaxIdentityApprovalRequestPanel
+                  tenantId={tenantId}
+                  accessToken={accessToken}
+                  contextType="POS_ORDER"
+                  contextId={order.id}
+                  documentType={draftDocumentType}
+                  documentNumber={normalizedDraftDocumentNumber}
+                  suggestedFiscalName={operationalCustomerName}
+                  registryOutcome={currentTaxIdentityLookup?.outcome ?? null}
+                  disabled={fiscalDetailsSaving || isCompleting}
+                  onApproved={(result) => {
+                    setOverrideClockMs(Date.now());
+                    verifyTaxIdentityMutation.reset();
+                    saveFiscalDetailsMutation.reset();
+                    setTaxIdentityLookup({
+                      orderId: order.id,
+                      documentType: draftDocumentType,
+                      documentNumber: normalizedDraftDocumentNumber,
+                      result,
+                    });
+                  }}
+                />
+              ) : null}
+
+              {operationalNameMissing ? (
+                <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+                  La orden no tiene nombre. Corrige la orden antes de emitir este comprobante.
+                </p>
+              ) : fiscalDocumentInvalid ? (
+                <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+                  Digita un {draftDocumentType === 'RNC' ? 'RNC' : 'número de cédula'} válido.
+                </p>
+              ) : currentTaxIdentityLookup && !fiscalIdentityVerified ? (
+                <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-950" role="alert">
+                  No se puede usar este comprobante con el resultado actual. Verifica los datos
+                  o envía una solicitud de validación al administrador.
+                </p>
+              ) : null}
+
+              <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+                {electronic
+                  ? `RIVNU comprobará que exista una secuencia ${fiscalDocument.code} disponible. El e-NCF se reservará solo al facturar.`
+                  : 'RIVNU asignará únicamente una referencia interna al facturar.'}
               </p>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
+
+          {saveFiscalDetailsMutation.isError ? (
+            <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+              {saveFiscalDetailsMutation.error instanceof Error
+                ? saveFiscalDetailsMutation.error.message
+                : 'No se pudieron guardar los datos fiscales.'}
+            </p>
+          ) : null}
+
         </div>
 
-        {requiresRecipientDocument ? (
-          <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-3">
-            <div className="mb-3">
-              <p className="font-semibold text-zinc-950">Datos fiscales para {fiscalLabel}</p>
-              <p className="text-xs text-muted-foreground">
-                {requiresRnc
-                  ? 'E31 requiere el RNC del cliente. Se valida antes de facturar.'
-                  : requiresE32Recipient
-                    ? 'E32 igual o superior a RD$250,000 requiere el RNC o la cédula y el nombre del comprador.'
-                    : 'Indica el RNC o la cédula del cliente. El documento se valida antes de facturar.'}
-              </p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
-              <div className="space-y-2">
-                <Label htmlFor="fiscalDocumentType">Documento</Label>
-                <select
-                  id="fiscalDocumentType"
-                  value={fiscalDocumentType}
-                  disabled={requiresRnc}
-                  onChange={(event) =>
-                    onFiscalDocumentTypeChange(event.target.value as 'RNC' | 'CEDULA')
-                  }
-                  className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="RNC">RNC</option>
-                  <option value="CEDULA">Cédula</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="fiscalDocumentNumber">
-                  {fiscalDocumentType === 'RNC' ? 'RNC del cliente' : 'Cédula del cliente'}
-                </Label>
-                <Input
-                  id="fiscalDocumentNumber"
-                  inputMode="numeric"
-                  value={fiscalDocumentNumber}
-                  onChange={(event) => onFiscalDocumentNumberChange(event.target.value)}
-                  placeholder={fiscalDocumentType === 'RNC' ? '000-00000-0' : '000-0000000-0'}
-                />
-              </div>
-            </div>
-            {fiscalDocumentNumber ? (
-              <p
-                className={
-                  fiscalDocumentValid && fiscalCustomerName
-                    ? 'mt-2 text-xs text-success'
-                    : 'mt-2 text-xs text-danger'
-                }
-              >
-                {fiscalDocumentValid
-                  ? fiscalCustomerName
-                    ? `Documento válido. Cliente: ${fiscalCustomerName}.`
-                    : 'Documento válido, pero no hay un cliente activo registrado con ese dato.'
-                  : `Verifica el ${fiscalDocumentType === 'RNC' ? 'RNC' : 'número de cédula'}.`}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="mt-3 grid gap-3">
+        <div className="mt-4 grid gap-3 border-t border-zinc-200 pt-4">
           <div className="space-y-2">
             <Label htmlFor="paymentMethod">Metodo de pago</Label>
             <select
               id="paymentMethod"
               value={paymentMethod}
-              onChange={(event) => onPaymentMethodChange(event.target.value)}
+              onChange={(event) => onPaymentMethodChange(event.target.value as PosPaymentMethod)}
               className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="CASH">Efectivo</option>
@@ -227,7 +873,7 @@ export function PosPaymentPanel({
         ) : null}
       </div>
 
-      <div className="rounded-md border-2 border-primary/40 bg-white p-4 shadow-sm">
+      <div className="rounded-md border-2 border-[#f36c10]/40 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3">
           <div className="flex-1 space-y-2">
             <Label htmlFor="amountReceived">
@@ -275,18 +921,49 @@ export function PosPaymentPanel({
             </p>
           ) : null}
 
+          {fiscalIdentityChecking ? (
+            <p className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-950" role="status">
+              Consultando la identidad fiscal en el padrón de DGII...
+            </p>
+          ) : fiscalIdentityVerificationMissing && !fiscalDocumentInvalid ? (
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+              Verifica el RNC o la cédula con DGII o consigue autorización administrativa para
+              habilitar la facturación.
+            </p>
+          ) : fiscalDetailsDirty ? (
+            <p className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-950" role="status">
+              Guardando el tipo de comprobante seleccionado...
+            </p>
+          ) : fiscalDetailsInvalid ? (
+            <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
+              Corrige los datos fiscales indicados arriba antes de facturar.
+            </p>
+          ) : fiscalDetailsSaving ? (
+            <p className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-950" role="status">
+              Guardando los datos fiscales de la orden...
+            </p>
+          ) : null}
+
           <Button
             type="button"
-            className="h-16 w-full text-lg font-bold"
-            disabled={!canCompleteSale || cashInsufficient || isCompleting}
+            className="h-16 w-full bg-[#f36c10] text-lg font-bold text-white hover:bg-[#d85f0e]"
+            disabled={
+              !canCompleteSale || cashInsufficient || fiscalDetailsBlockPayment || isCompleting
+            }
             onClick={onCompleteSale}
           >
             <ReceiptText className="h-5 w-5" />
-            {isCompleting ? 'Facturando...' : 'Facturar e imprimir'}
+            {isCompleting
+              ? 'Facturando...'
+              : electronic
+                ? 'Cobrar y emitir e-CF'
+                : 'Facturar e imprimir'}
           </Button>
 
           <p className="text-center text-xs text-muted-foreground">
-            Al confirmar, se emite la factura y se abre el recibo para imprimir automaticamente.
+            {electronic
+              ? 'Al confirmar, se cobra la venta y comienza automáticamente la numeración, firma y envío del e-CF a DGII.'
+              : 'Al confirmar, se emite la factura y se abre el recibo para imprimir automáticamente.'}
           </p>
         </div>
         {!cashPayment ? (
@@ -342,5 +1019,278 @@ export function PosPaymentPanel({
         {message ? <p className="mt-3 text-sm text-muted-foreground">{message}</p> : null}
       </div>
     </div>
+  );
+}
+
+function createTaxIdentityLookupKey(
+  orderId: string,
+  documentType: FiscalIdentityDocumentType,
+  documentNumber: string,
+) {
+  return `${orderId}:${documentType}:${documentNumber}`;
+}
+
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function getTaxIdentityHeading(lookup: UsableTaxIdentityLookup | null, checking: boolean) {
+  if (checking) {
+    return 'Consulta de identidad fiscal en curso';
+  }
+
+  if (lookup?.source === 'MANUAL_OVERRIDE') {
+    return 'Nombre fiscal autorizado por administrador';
+  }
+
+  if (lookup?.outcome === 'VERIFIED') {
+    return lookup.source === 'TEST_FIXTURE'
+      ? 'Identidad verificada en el padrón de prueba'
+      : 'Razón social verificada por DGII';
+  }
+
+  return 'Consulta de identidad fiscal';
+}
+
+function formatTaxIdentitySource(value: string | null | undefined) {
+  switch (value) {
+    case 'DGII_OFFICIAL':
+      return 'Padrón oficial DGII';
+    case 'TEST_FIXTURE':
+      return 'Padrón de prueba';
+    case 'MANUAL_OVERRIDE':
+      return 'Autorización administrativa';
+    case null:
+    case undefined:
+    case '':
+      return 'Fuente no indicada';
+    default:
+      return value
+        .replace(/_/g, ' ')
+        .toLocaleLowerCase('es-DO')
+        .replace(/^./, (character) => character.toLocaleUpperCase('es-DO'));
+  }
+}
+
+function formatOverrideRemainingTime(value: number) {
+  const totalSeconds = Math.max(0, Math.ceil(value / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds} s restantes`;
+  }
+
+  return `${minutes} min ${seconds.toString().padStart(2, '0')} s`;
+}
+
+function getOrderOperationalName(order: SalesOrder | null) {
+  return order?.clientName?.trim() || '';
+}
+
+function normalizeComparableName(value: string | null | undefined) {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleUpperCase('es-DO');
+}
+
+function formatLookupDate(value: string | null | undefined) {
+  if (!value) {
+    return 'No indicada';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'No indicada';
+  }
+
+  return new Intl.DateTimeFormat('es-DO', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function formatRegistryStatus(value: string | null | undefined) {
+  if (!value) {
+    return 'No informado';
+  }
+
+  if (value === 'MANUAL_OVERRIDE') {
+    return 'Validación manual';
+  }
+
+  return value
+    .replace(/_/g, ' ')
+    .toLocaleLowerCase('es-DO')
+    .replace(/^./, (character) => character.toLocaleUpperCase('es-DO'));
+}
+
+function getTaxIdentityOutcomeDisplay(outcome: TaxIdentityLookup['outcome'] | undefined) {
+  const displays: Record<
+    TaxIdentityLookup['outcome'],
+    {
+      badgeLabel: string;
+      message: string;
+      containerClassName: string;
+      badgeClassName: string;
+    }
+  > = {
+    VERIFIED: {
+      badgeLabel: 'Verificado',
+      message: 'Identidad fiscal verificada.',
+      containerClassName: 'border-emerald-200 bg-emerald-50 text-emerald-950',
+      badgeClassName: 'bg-emerald-100 text-emerald-900',
+    },
+    NOT_FOUND: {
+      badgeLabel: 'No encontrado',
+      message: 'El documento no aparece en el padrón local sincronizado de DGII.',
+      containerClassName: 'border-amber-200 bg-amber-50 text-amber-950',
+      badgeClassName: 'bg-amber-100 text-amber-900',
+    },
+    NON_ACTIVE: {
+      badgeLabel: 'No activo',
+      message: 'El contribuyente aparece con un estado no activo en DGII.',
+      containerClassName: 'border-red-200 bg-red-50 text-red-950',
+      badgeClassName: 'bg-red-100 text-red-900',
+    },
+    REGISTRY_STALE: {
+      badgeLabel: 'Padrón desactualizado',
+      message: 'La copia local del padrón requiere sincronización antes de validar.',
+      containerClassName: 'border-amber-200 bg-amber-50 text-amber-950',
+      badgeClassName: 'bg-amber-100 text-amber-900',
+    },
+    UNAVAILABLE: {
+      badgeLabel: 'No disponible',
+      message: 'La validación fiscal no está disponible en este momento.',
+      containerClassName: 'border-red-200 bg-red-50 text-red-950',
+      badgeClassName: 'bg-red-100 text-red-900',
+    },
+  };
+
+  return outcome
+    ? displays[outcome]
+    : {
+        badgeLabel: 'Pendiente',
+        message: 'Digita un documento válido para consultarlo automáticamente en DGII.',
+        containerClassName: 'border-zinc-200 bg-white text-zinc-800',
+        badgeClassName: 'bg-zinc-100 text-zinc-700',
+      };
+}
+
+function getPersistedFiscalIdentity(order: SalesOrder | null): {
+  documentType: FiscalIdentityDocumentType;
+  documentNumber: string;
+} | null {
+  const snapshot = order?.fiscalCustomerSnapshot;
+  if (
+    !snapshot?.documentNumber ||
+    (snapshot.documentType !== 'RNC' && snapshot.documentType !== 'CEDULA')
+  ) {
+    return null;
+  }
+
+  return {
+    documentType: snapshot.documentType,
+    documentNumber: snapshot.documentNumber,
+  };
+}
+
+function getPersistedTaxIdentityLookup(order: SalesOrder | null): UsableTaxIdentityLookup | null {
+  const snapshot = order?.fiscalCustomerSnapshot;
+  const verification = snapshot?.verification;
+  if (
+    !snapshot ||
+    !verification ||
+    (snapshot.documentType !== 'RNC' && snapshot.documentType !== 'CEDULA') ||
+    !snapshot.documentNumber ||
+    !snapshot.name
+  ) {
+    return null;
+  }
+
+  return {
+    outcome: 'VERIFIED',
+    documentType: snapshot.documentType,
+    documentNumber: snapshot.documentNumber,
+    fiscalName: snapshot.name,
+    registryStatus: verification.registryStatus,
+    source: verification.source,
+    sourceUpdatedAt: verification.sourceUpdatedAt,
+    checkedAt: verification.verifiedAt,
+  };
+}
+
+function getDraftFiscalDocumentType(
+  purpose: FiscalDocumentPurpose,
+  _order: SalesOrder | null,
+): CheckoutInvoiceDocumentType {
+  return purpose === 'FISCAL_CREDIT' ? 'FISCAL_CREDIT_ELECTRONIC_31' : 'CONSUMER_ELECTRONIC_32';
+}
+
+function getOrderFiscalPurpose(order: SalesOrder): FiscalDocumentPurpose {
+  if (order.fiscalPurpose) {
+    return order.fiscalPurpose;
+  }
+
+  return order.fiscalDocumentTypeSnapshot === 'FISCAL_CREDIT_01' ||
+    order.fiscalDocumentTypeSnapshot === 'FISCAL_CREDIT_ELECTRONIC_31'
+    ? 'FISCAL_CREDIT'
+    : 'CONSUMER';
+}
+
+function getOrderFiscalDocumentType(order: SalesOrder): InvoiceDocumentType {
+  if (order.fiscalDocumentTypeSnapshot) {
+    return order.fiscalDocumentTypeSnapshot;
+  }
+
+  return getOrderFiscalPurpose(order) === 'FISCAL_CREDIT' ? 'FISCAL_CREDIT_01' : 'CONSUMER_02';
+}
+
+function getFiscalDocumentDisplay(
+  purpose: FiscalDocumentPurpose,
+  documentType: InvoiceDocumentType,
+) {
+  const documents: Partial<
+    Record<InvoiceDocumentType, { purposeLabel: string; code: string; description: string }>
+  > = {
+    CONSUMER_02: {
+      purposeLabel: 'Consumo',
+      code: 'B02',
+      description: 'Factura de consumo local resuelta por el sistema.',
+    },
+    LOCAL_SALE_NOTE: {
+      purposeLabel: 'Consumo',
+      code: 'Local',
+      description: 'Venta local con referencia interna.',
+    },
+    FISCAL_CREDIT_01: {
+      purposeLabel: 'Crédito fiscal',
+      code: 'B01',
+      description: 'Factura de crédito fiscal local resuelta por el sistema.',
+    },
+    CONSUMER_ELECTRONIC_32: {
+      purposeLabel: 'Consumo',
+      code: 'E32',
+      description: 'Factura de consumo electrónica resuelta por el sistema.',
+    },
+    FISCAL_CREDIT_ELECTRONIC_31: {
+      purposeLabel: 'Crédito fiscal',
+      code: 'E31',
+      description: 'Factura de crédito fiscal electrónica resuelta por el sistema.',
+    },
+  };
+
+  return (
+    documents[documentType] ??
+    (purpose === 'FISCAL_CREDIT' ? documents.FISCAL_CREDIT_01! : documents.CONSUMER_02!)
   );
 }

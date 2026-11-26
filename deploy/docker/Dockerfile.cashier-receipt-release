@@ -1,0 +1,13 @@
+FROM corestack/rivnu-web:fiscal-speed-20261124 AS web
+
+ENV NEXT_PUBLIC_API_URL=https://rivnu-api.corestack-systems.com
+ENV NEXT_PUBLIC_APP_URL=https://rivnu.corestack-systems.com
+USER root
+COPY --chown=node:node apps/web/components/operations/pos-view.tsx /app/apps/web/components/operations/pos-view.tsx
+COPY --chown=node:node apps/web/components/operations/invoice-detail.tsx /app/apps/web/components/operations/invoice-detail.tsx
+COPY --chown=node:node apps/web/app/(dashboard)/pos/receipts /app/apps/web/app/(dashboard)/pos/receipts
+USER node
+WORKDIR /app
+RUN cd apps/web && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

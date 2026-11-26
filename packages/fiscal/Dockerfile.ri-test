@@ -1,0 +1,6 @@
+# Isolated visual/PDF verification. Not a fiscal production image.
+FROM corestack/fiscal-signing-test:local
+USER root
+RUN apt-get update && apt-get install --no-install-recommends --yes chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+USER node

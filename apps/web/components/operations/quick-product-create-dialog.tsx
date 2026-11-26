@@ -7,8 +7,18 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { addSupplierProduct, createProduct, type Product } from '@/lib/api';
+import {
+  addSupplierProduct,
+  createProduct,
+  type Product,
+  type ProductTaxCategory,
+  type ProductUnit,
+} from '@/lib/api';
 import type { AuthSession } from '@/lib/auth-session';
+import {
+  convertInvoiceUnit,
+  invoiceUnitToProductUnit,
+} from '@/lib/supplier-invoice-product-matching';
 import { selectClassName } from './procurement-ui';
 import { SupplierInvoiceDialog } from './supplier-invoice-dialog';
 
@@ -21,6 +31,10 @@ export type QuickProductCreatePrefill = {
   costNet?: number;
   /** Tasa decimal, por ejemplo 0.18 para 18 %. */
   taxRate?: number;
+  /** Unidad de inventario conocida; una presentación desconocida exige elegirla. */
+  unit?: ProductUnit;
+  invoiceUnit?: string;
+  invoiceQuantity?: number;
 };
 
 type QuickProductCreateDialogProps = {
@@ -37,7 +51,7 @@ type QuickProductCreateDialogProps = {
   supplierId?: string;
   supplierName?: string;
   linkSupplierByDefault?: boolean;
-  onCreated: (product: Product) => void | Promise<void>;
+  onCreated: (product: Product, conversion?: { invoiceUnitFactor: number }) => void | Promise<void>;
   /** Permite a la pantalla que invoca reutilizar una coincidencia en vez de duplicarla. */
   onSelectExisting?: (product: Product) => void | Promise<void>;
 };
@@ -47,11 +61,12 @@ type ProductForm = {
   sku: string;
   barcode: string;
   supplierSku: string;
-  unit: string;
+  unit: ProductUnit | '';
   cost: string;
   salePrice: string;
   taxPercent: string;
   linkToSupplier: boolean;
+  invoiceUnitFactor: string;
 };
 
 type DuplicateMatch = {
@@ -72,6 +87,7 @@ const productUnits = [
   ['GALLON', 'Galón'],
   ['LITER', 'Litro'],
   ['KILOGRAM', 'Kilogramo'],
+  ['QUINTAL', 'Quintal'],
 ] as const;
 
 /**
@@ -99,7 +115,9 @@ export function QuickProductCreateDialog({
   const accessToken = session?.accessToken ?? accessTokenProp ?? '';
   const wasOpen = useRef(false);
   const [selectingExistingId, setSelectingExistingId] = useState<string | null>(null);
-  const [form, setForm] = useState<ProductForm>(() => createInitialForm(prefill, supplierId, linkSupplierByDefault));
+  const [form, setForm] = useState<ProductForm>(() =>
+    createInitialForm(prefill, supplierId, linkSupplierByDefault),
+  );
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -115,22 +133,56 @@ export function QuickProductCreateDialog({
   );
   const hasDuplicate = duplicateMatches.length > 0;
   const canCreate = hasSessionCredentials(tenantId, accessToken);
+  const requiresUnitConversion = Boolean(
+    prefill?.invoiceUnit &&
+    form.unit &&
+    invoiceUnitToProductUnit(prefill.invoiceUnit) !== form.unit,
+  );
 
   const createMutation = useMutation({
     mutationFn: async () => {
       const validationError = validateForm(form);
       if (validationError) throw new Error(validationError);
-      if (!tenantId || !accessToken) throw new Error('La sesión activa es requerida para crear el producto.');
+      const invoiceUnitFactor = Number(form.invoiceUnitFactor);
+      if (
+        requiresUnitConversion &&
+        (!Number.isFinite(invoiceUnitFactor) || invoiceUnitFactor <= 0)
+      ) {
+        throw new Error(
+          'Indica cuántas unidades de inventario contiene la presentación de la factura.',
+        );
+      }
+      if (
+        requiresUnitConversion &&
+        prefill?.costNet !== undefined &&
+        prefill.invoiceQuantity !== undefined
+      ) {
+        convertInvoiceUnit(
+          {
+            key: 'conversion-preview',
+            productId: '',
+            quantity: String(prefill.invoiceQuantity),
+            unitCostNet: String(prefill.costNet),
+            taxPercent: '',
+            discountTotal: '0',
+          },
+          invoiceUnitFactor,
+        );
+      }
+      if (!tenantId || !accessToken)
+        throw new Error('La sesión activa es requerida para crear el producto.');
 
       const cost = Number(form.cost);
       const taxRate = Number(form.taxPercent) / 100;
+      const taxCategory = getTaxCategory(form.taxPercent);
       const product = await createProduct(tenantId, accessToken, {
         name: form.name.trim(),
         sku: optional(form.sku),
         barcode: optional(form.barcode),
-        unit: form.unit,
+        unit: form.unit as ProductUnit,
         price: Number(form.salePrice),
         cost,
+        taxCategory,
         taxRate,
         stock: 0,
         minStock: 0,
@@ -152,9 +204,18 @@ export function QuickProductCreateDialog({
         }
       }
 
-      return { product, supplierLinkError };
+      return {
+        product,
+        supplierLinkError,
+        conversion:
+          requiresUnitConversion &&
+          prefill?.costNet !== undefined &&
+          prefill.invoiceQuantity !== undefined
+            ? { invoiceUnitFactor }
+            : undefined,
+      };
     },
-    onSuccess: async ({ product, supplierLinkError }) => {
+    onSuccess: async ({ product, supplierLinkError, conversion }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['products'] }),
         queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
@@ -162,7 +223,7 @@ export function QuickProductCreateDialog({
       ]);
 
       try {
-        await onCreated(product);
+        await onCreated(product, conversion);
       } catch (error) {
         toast.error('El producto fue creado, pero no se pudo aplicarlo automáticamente.', {
           description: toError(error).message,
@@ -175,7 +236,8 @@ export function QuickProductCreateDialog({
         });
       } else {
         toast.success('Producto creado correctamente.', {
-          description: supplierId && form.linkToSupplier ? 'También quedó vinculado al suplidor.' : undefined,
+          description:
+            supplierId && form.linkToSupplier ? 'También quedó vinculado al suplidor.' : undefined,
         });
       }
       onOpenChange(false);
@@ -207,7 +269,9 @@ export function QuickProductCreateDialog({
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (hasDuplicate) {
-      toast.error('Ya existe una coincidencia exacta. Selecciónala o corrige los datos antes de crear otro producto.');
+      toast.error(
+        'Ya existe una coincidencia exacta. Selecciónala o corrige los datos antes de crear otro producto.',
+      );
       return;
     }
     createMutation.mutate();
@@ -228,7 +292,8 @@ export function QuickProductCreateDialog({
     >
       {!canCreate ? (
         <div className="rounded-xl border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-          No hay una sesión válida para crear el producto. Cierra esta ventana e inicia sesión nuevamente.
+          No hay una sesión válida para crear el producto. Cierra esta ventana e inicia sesión
+          nuevamente.
         </div>
       ) : (
         <form className="space-y-5" onSubmit={submit}>
@@ -240,12 +305,17 @@ export function QuickProductCreateDialog({
           {hasDuplicate ? (
             <div className="rounded-xl border border-warning/40 bg-warning/10 p-4" role="alert">
               <div className="flex gap-3">
-                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
+                <AlertTriangle
+                  className="mt-0.5 h-5 w-5 shrink-0 text-warning"
+                  aria-hidden="true"
+                />
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-foreground">Ya existe un producto que coincide exactamente.</p>
+                  <p className="font-semibold text-foreground">
+                    Ya existe un producto que coincide exactamente.
+                  </p>
                   <p className="mt-1 text-sm leading-5 text-muted-foreground">
-                    Para conservar un catálogo limpio, reutiliza la coincidencia o modifica los datos antes de
-                    crear uno nuevo.
+                    Para conservar un catálogo limpio, reutiliza la coincidencia o modifica los
+                    datos antes de crear uno nuevo.
                   </p>
                   <div className="mt-3 space-y-2">
                     {duplicateMatches.map(({ product, reasons }) => (
@@ -256,7 +326,8 @@ export function QuickProductCreateDialog({
                         <div className="min-w-0">
                           <p className="truncate font-medium text-foreground">{product.name}</p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {duplicateReasonLabel(reasons)} · SKU {product.sku ?? '—'} · Código {product.barcode ?? '—'}
+                            {duplicateReasonLabel(reasons)} · SKU {product.sku ?? '—'} · Código{' '}
+                            {product.barcode ?? '—'}
                           </p>
                         </div>
                         {onSelectExisting ? (
@@ -265,14 +336,16 @@ export function QuickProductCreateDialog({
                             variant="outline"
                             size="sm"
                             onClick={() => void selectExisting(product)}
-                            disabled={Boolean(selectingExistingId)}
+                            disabled={Boolean(selectingExistingId) || product.status !== 'ACTIVE'}
                           >
                             {selectingExistingId === product.id ? (
                               <LoaderCircle className="h-4 w-4 animate-spin" />
                             ) : (
                               <CheckCircle2 className="h-4 w-4" />
                             )}
-                            Usar existente
+                            {product.status === 'ACTIVE'
+                              ? 'Usar existente'
+                              : 'Inactivo: reactívalo en Productos'}
                           </Button>
                         ) : null}
                       </div>
@@ -313,16 +386,67 @@ export function QuickProductCreateDialog({
             <Field label="Unidad" required>
               <select
                 value={form.unit}
-                onChange={(event) => updateField('unit', event.target.value)}
+                onChange={(event) => {
+                  const unit = event.target.value as ProductUnit;
+                  setForm((current) => {
+                    if (!prefill?.invoiceUnit) return { ...current, unit };
+                    const sameUnit = invoiceUnitToProductUnit(prefill.invoiceUnit) === unit;
+                    return {
+                      ...current,
+                      unit,
+                      invoiceUnitFactor: sameUnit ? '1' : '',
+                      cost: sameUnit ? toDecimalInput(prefill.costNet) : '',
+                    };
+                  });
+                }}
                 className={selectClassName}
+                required
               >
+                <option value="" disabled>
+                  Selecciona la unidad de inventario
+                </option>
                 {productUnits.map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
               </select>
+              {prefill?.invoiceUnit ? (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  La factura indica {prefill.invoiceUnit}. Si eliges otra presentación, confirma la
+                  conversión en la línea de factura antes de guardar.
+                </p>
+              ) : null}
             </Field>
+            {requiresUnitConversion ? (
+              <Field
+                label={`Unidades de inventario por cada ${prefill?.invoiceUnit}`}
+                required
+                hint="Ejemplo: si una docena contiene 12 unidades, indica 12. Calcularemos el costo de una unidad y convertiremos la cantidad facturada."
+              >
+                <Input
+                  type="number"
+                  min="0.000001"
+                  step="any"
+                  inputMode="decimal"
+                  required
+                  value={form.invoiceUnitFactor}
+                  placeholder="Cantidad por presentación"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    const factor = Number(value);
+                    setForm((current) => ({
+                      ...current,
+                      invoiceUnitFactor: value,
+                      cost:
+                        Number.isFinite(factor) && factor > 0 && prefill?.costNet !== undefined
+                          ? toDecimalInput(prefill.costNet / factor)
+                          : '',
+                    }));
+                  }}
+                />
+              </Field>
+            ) : null}
             <Field label="Costo unitario sin ITBIS (RD$)" required>
               <Input
                 type="number"
@@ -335,18 +459,17 @@ export function QuickProductCreateDialog({
                 required
               />
             </Field>
-            <Field label="ITBIS (%)" required hint="Ejemplo: 18 para ITBIS de 18 %; 0 si es exento.">
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                inputMode="decimal"
+            <Field label="Tratamiento de ITBIS" required>
+              <select
                 value={form.taxPercent}
                 onChange={(event) => updateField('taxPercent', event.target.value)}
-                placeholder="18"
+                className={selectClassName}
                 required
-              />
+              >
+                <option value="18">Gravado con ITBIS 18%</option>
+                <option value="16">Gravado con ITBIS 16%</option>
+                <option value="0">Exento de ITBIS</option>
+              </select>
             </Field>
             <Field
               label="Precio de venta (RD$)"
@@ -369,7 +492,10 @@ export function QuickProductCreateDialog({
           {supplierId ? (
             <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-4">
               <div className="flex items-start gap-3">
-                <Link2 className="mt-0.5 h-5 w-5 shrink-0 text-accent-foreground" aria-hidden="true" />
+                <Link2
+                  className="mt-0.5 h-5 w-5 shrink-0 text-accent-foreground"
+                  aria-hidden="true"
+                />
                 <div className="min-w-0 flex-1">
                   <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
                     <input
@@ -380,8 +506,8 @@ export function QuickProductCreateDialog({
                     Vincular al suplidor{supplierName ? `: ${supplierName}` : ''}
                   </label>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Guarda el código y el último costo que aparecen en esta factura para que el próximo OCR pueda
-                    reconocerlo mejor.
+                    Guarda el código y el último costo que aparecen en esta factura para que el
+                    próximo OCR pueda reconocerlo mejor.
                   </p>
                   {form.linkToSupplier ? (
                     <div className="mt-3">
@@ -411,7 +537,11 @@ export function QuickProductCreateDialog({
               Cancelar
             </Button>
             <Button type="submit" disabled={createMutation.isPending || hasDuplicate}>
-              {createMutation.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <PackagePlus className="h-4 w-4" />}
+              {createMutation.isPending ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <PackagePlus className="h-4 w-4" />
+              )}
               {createMutation.isPending ? 'Creando...' : 'Crear producto'}
             </Button>
           </div>
@@ -456,15 +586,19 @@ function createInitialForm(
     sku: '',
     barcode: '',
     supplierSku: prefill?.supplierSku?.trim() ?? '',
-    unit: 'UNIT',
+    unit: prefill?.unit ?? (prefill?.invoiceUnit ? '' : 'UNIT'),
     cost: toDecimalInput(prefill?.costNet),
     salePrice: '',
     taxPercent: toTaxPercentInput(prefill?.taxRate),
     linkToSupplier: Boolean(supplierId && linkSupplierByDefault),
+    invoiceUnitFactor: prefill?.unit ? '1' : '',
   };
 }
 
-function findDuplicateMatches(products: Product[], form: Pick<ProductForm, 'name' | 'sku' | 'barcode'>) {
+function findDuplicateMatches(
+  products: Product[],
+  form: Pick<ProductForm, 'name' | 'sku' | 'barcode'>,
+) {
   const name = normalizeText(form.name);
   const sku = normalizeCode(form.sku);
   const barcode = normalizeCode(form.barcode);
@@ -483,14 +617,16 @@ function findDuplicateMatches(products: Product[], form: Pick<ProductForm, 'name
 
 function validateForm(form: ProductForm) {
   if (!form.name.trim()) return 'Indica la descripción del producto.';
+  if (!form.unit) return 'Selecciona la unidad de inventario del producto.';
   if (form.name.trim().length > 160) return 'La descripción no puede exceder 160 caracteres.';
   const cost = Number(form.cost);
-  if (!Number.isFinite(cost) || cost < 0) return 'Indica un costo unitario válido.';
+  if (!form.cost.trim() || !Number.isFinite(cost) || cost < 0)
+    return 'Indica un costo unitario válido.';
   const salePrice = Number(form.salePrice);
   if (!Number.isFinite(salePrice) || salePrice < 0.01) return 'Indica un precio de venta válido.';
   const taxPercent = Number(form.taxPercent);
-  if (!Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100) {
-    return 'Indica una tasa de ITBIS entre 0 y 100.';
+  if (![0, 16, 18].includes(taxPercent)) {
+    return 'Selecciona ITBIS 18%, ITBIS 16% o Exento.';
   }
   return null;
 }
@@ -531,7 +667,14 @@ function toDecimalInput(value: number | undefined) {
 
 function toTaxPercentInput(value: number | undefined) {
   if (value === undefined || !Number.isFinite(value)) return '18';
-  return String(roundCurrency(value <= 1 ? value * 100 : value));
+  const percent = roundCurrency(value <= 1 ? value * 100 : value);
+  return [0, 16, 18].includes(percent) ? String(percent) : '18';
+}
+
+function getTaxCategory(taxPercent: string): ProductTaxCategory {
+  if (taxPercent === '0') return 'EXEMPT';
+  if (taxPercent === '16') return 'ITBIS_16';
+  return 'ITBIS_18';
 }
 
 function optional(value: string) {

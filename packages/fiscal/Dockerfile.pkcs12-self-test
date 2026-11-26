@@ -1,0 +1,8 @@
+# One-shot certificate verification image. It is not a signer service.
+FROM corestack/fiscal-preview-rehearsal:20260924
+USER root
+WORKDIR /self-test/packages/fiscal
+COPY packages/fiscal/src/catalog.ts src/catalog.ts
+COPY packages/fiscal/src/pkcs12-signer.ts src/pkcs12-signer.ts
+COPY packages/fiscal/test/rivnu-pkcs12-self-test.ts test/rivnu-pkcs12-self-test.ts
+ENTRYPOINT ["node", "--experimental-strip-types", "test/rivnu-pkcs12-self-test.ts"]

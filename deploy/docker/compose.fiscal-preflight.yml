@@ -1,0 +1,45 @@
+# Proposed VM4 deployment. Does NOT deploy the ERP, DB, signer or public receiver.
+# Review VM4 first; never run automatically against production.
+name: corestack-fiscal-preflight
+services:
+  fiscal-preflight:
+    image: ${FISCAL_PREFLIGHT_IMAGE:?Provide a reviewed image tag or digest}
+    init: true
+    restart: unless-stopped
+    user: '1000:1000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 64
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+    tmpfs:
+      - /tmp:size=32m,mode=1777,noexec,nosuid
+    volumes:
+      - type: bind
+        source: /opt/corestack/fe/config/preflight.json
+        target: /run/fiscal/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/corestack/secrets/fiscal-preflight.token
+        target: /run/secrets/fiscal_preflight_token
+        read_only: true
+        bind:
+          create_host_path: false
+    # Loopback by default: no public port and no VM1/Nginx route yet.
+    ports:
+      - '127.0.0.1:4080:8080'
+    networks: [fiscal-network]
+    logging:
+      driver: local
+      options:
+        max-size: '10m'
+        max-file: '3'
+    stop_grace_period: 15s
+networks:
+  fiscal-network:
+    external: true
+    name: fiscal-network

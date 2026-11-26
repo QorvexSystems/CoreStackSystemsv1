@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getEmployee } from '@/lib/api';
-import { brand } from '@/lib/brand';
 import { getStatusVariant, translateRole, translateStatus } from '@/lib/display-labels';
 import { ModuleHeader } from './module-header';
 import { SessionRequired, useCurrentSession } from './session-required';
@@ -28,7 +27,7 @@ export function EmployeeDetail({ employeeId }: { employeeId: string }) {
 
   return (
     <div className="space-y-6">
-      <ModuleHeader title="Empleado" description={`Detalle operativo y permisos del usuario en ${brand.name}.`} />
+      <ModuleHeader title="Empleado" description="Detalle operativo y permisos del usuario en Ferreteria RIVNU." />
 
       <Card>
         <CardHeader>

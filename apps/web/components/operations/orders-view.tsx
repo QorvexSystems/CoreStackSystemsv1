@@ -64,7 +64,6 @@ type WindowWithBarcodeDetector = Window &
   typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor };
 
 type OrderDestination = 'CASH_SALE' | 'QUOTATION';
-type InventorySource = 'SALES_INVENTORY' | 'WAREHOUSE';
 const finalDiscountCustomerId = '__FINAL_DISCOUNT_10__';
 const finalPreferredCustomerId = '__FINAL_PREFERRED_18__';
 
@@ -171,8 +170,6 @@ export function OrdersView() {
   const editToastShownRef = useRef<string | null>(null);
 
   const [destination, setDestination] = useState<OrderDestination>('CASH_SALE');
-  const [inventorySource, setInventorySource] = useState<InventorySource>('SALES_INVENTORY');
-  const [electronicInvoiceRequested, setElectronicInvoiceRequested] = useState(false);
   const [clientName, setClientName] = useState('');
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
   const [quotationDocumentType, setQuotationDocumentType] = useState<'RNC' | 'CEDULA'>('CEDULA');
@@ -209,14 +206,9 @@ export function OrdersView() {
     enabled: canUseOrderTaking,
   });
   const productsQuery = useQuery({
-    queryKey: ['order-products-search', session?.tenantId, search, inventorySource],
+    queryKey: ['order-products-search', session?.tenantId, search],
     queryFn: () =>
-      searchOrderProducts(
-        session?.tenantId ?? '',
-        session?.accessToken ?? '',
-        search || 'RIV',
-        inventorySource,
-      ),
+      searchOrderProducts(session?.tenantId ?? '', session?.accessToken ?? '', search || 'RIV'),
     enabled: canUseOrderTaking,
   });
   const pendingOrdersQuery = useQuery({
@@ -286,8 +278,6 @@ export function OrdersView() {
 
         // Cargar datos
         setDestination('QUOTATION');
-        setInventorySource(order.inventorySource ?? 'SALES_INVENTORY');
-        setElectronicInvoiceRequested(order.electronicInvoiceRequested);
         setClientName(order.clientName || '');
         setCustomerId(order.customerId || getSpecialCustomerValue(order.priceLevel));
         setPriceLevel(order.priceLevel ?? 'REGULAR');
@@ -373,7 +363,8 @@ export function OrdersView() {
           return leftStartsWithSearch ? -1 : 1;
         }
 
-        const balanceDifference = Number(right.creditBalance ?? 0) - Number(left.creditBalance ?? 0);
+        const balanceDifference =
+          Number(right.creditBalance ?? 0) - Number(left.creditBalance ?? 0);
         if (balanceDifference) return balanceDifference;
         return left.name.localeCompare(right.name, 'es');
       })
@@ -440,12 +431,7 @@ export function OrdersView() {
         throw new Error('Sesion requerida.');
       }
 
-      return getOrderProductByBarcode(
-        session.tenantId,
-        session.accessToken,
-        code,
-        inventorySource,
-      );
+      return getOrderProductByBarcode(session.tenantId, session.accessToken, code);
     },
     onSuccess: (product) => {
       const added = addProduct(product);
@@ -507,13 +493,11 @@ export function OrdersView() {
 
       const payload = {
         destination,
-        inventorySource,
-        electronicInvoiceRequested:
-          destination === 'CASH_SALE' ? electronicInvoiceRequested : false,
         clientName: trimmedClientName,
         customerId: getRegisteredCustomerId(customerId) || undefined,
         priceLevel,
         paymentMode,
+        fiscalIssuanceMode: 'ELECTRONIC_ECF' as const,
         initialPaymentOption: paymentMode === 'CREDIT' ? initialPaymentOption : undefined,
         creditTermOption: paymentMode === 'CREDIT' ? creditTermOption : undefined,
         customDueDate:
@@ -553,8 +537,6 @@ export function OrdersView() {
             : `Ticket pendiente ${order.orderNumber} enviado a caja. No es una factura fiscal.`;
       setMessage(successMessage);
       setCart([]);
-      setInventorySource('SALES_INVENTORY');
-      setElectronicInvoiceRequested(false);
       setNotes('');
       setCustomerId('');
       setPriceLevel('REGULAR');
@@ -724,9 +706,30 @@ export function OrdersView() {
     }
   }
 
+  function toggleSpecialCustomerSelection(
+    nextCustomerId: typeof finalDiscountCustomerId | typeof finalPreferredCustomerId,
+  ) {
+    if (customerId !== nextCustomerId) {
+      handleCustomerSelection(nextCustomerId);
+      return;
+    }
+
+    setCustomerId('');
+    setPriceLevel('REGULAR');
+
+    // Drafts created by older versions could use the discount label as the
+    // customer name. Clear only that legacy placeholder; preserve any real
+    // name entered for the order when the discount is removed.
+    if (specialCustomerLabels.includes(clientName.trim())) {
+      setClientName('');
+    }
+  }
+
   function handleClientNameChange(nextClientName: string) {
     const registeredCustomerId = getRegisteredCustomerId(customerId);
-    const currentCustomer = activeCustomers.find((customer) => customer.id === registeredCustomerId);
+    const currentCustomer = activeCustomers.find(
+      (customer) => customer.id === registeredCustomerId,
+    );
 
     // Al cambiar manualmente el texto, se desasocia el cliente seleccionado
     // para nunca adjudicar una orden a otra persona por coincidencia parcial.
@@ -767,19 +770,6 @@ export function OrdersView() {
         setClientName('');
       }
     }
-  }
-
-  function handleInventorySourceChange(nextInventorySource: InventorySource) {
-    if (nextInventorySource === inventorySource) return;
-    setInventorySource(nextInventorySource);
-    setCart([]);
-    setCategoryFilter('ALL');
-    setBrandFilter('ALL');
-    setMessage(
-      nextInventorySource === 'WAREHOUSE'
-        ? 'Catálogo B2B de almacén seleccionado.'
-        : 'Catálogo de inventario de ventas seleccionado.',
-    );
   }
 
   function enableScanner() {
@@ -990,7 +980,6 @@ export function OrdersView() {
             <PosProductGrid
               products={filteredProducts}
               quantitiesByProduct={quantitiesByProduct}
-              inventorySource={inventorySource}
               isLoading={productsQuery.isLoading}
               onAddProduct={addProduct}
             />
@@ -1035,7 +1024,6 @@ export function OrdersView() {
                     className="text-danger hover:bg-danger/5 hover:text-danger"
                     onClick={() => {
                       setCart([]);
-                      setElectronicInvoiceRequested(false);
                       setNotes('');
                       setCustomerId('');
                       setPriceLevel('REGULAR');
@@ -1073,7 +1061,7 @@ export function OrdersView() {
                       type="button"
                       className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         destination === 'CASH_SALE'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          ? 'bg-[#f36c10] text-white shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
                       }`}
                       onClick={() => setDestination('CASH_SALE')}
@@ -1084,7 +1072,7 @@ export function OrdersView() {
                       type="button"
                       className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                         destination === 'QUOTATION'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          ? 'bg-[#f36c10] text-white shadow-sm'
                           : 'text-zinc-600 hover:bg-zinc-50'
                       }`}
                       onClick={() => setDestination('QUOTATION')}
@@ -1093,58 +1081,6 @@ export function OrdersView() {
                     </button>
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <Label>Origen de la venta</Label>
-                  <div className="grid grid-cols-2 gap-2 rounded-md border border-zinc-200 bg-white p-1">
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'SALES_INVENTORY'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('SALES_INVENTORY')}
-                    >
-                      Inventario
-                    </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                        inventorySource === 'WAREHOUSE'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('WAREHOUSE')}
-                    >
-                      Almacén B2B
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {inventorySource === 'WAREHOUSE'
-                      ? 'La venta descontará únicamente las existencias del almacén.'
-                      : 'La venta descontará únicamente el inventario de ventas.'}
-                  </p>
-                </div>
-
-                {destination === 'CASH_SALE' ? (
-                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
-                    <input
-                      type="checkbox"
-                      checked={electronicInvoiceRequested}
-                      onChange={(event) => setElectronicInvoiceRequested(event.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border-input accent-primary"
-                    />
-                    <span>
-                      <span className="block text-sm font-semibold">Factura electrónica (e-CF)</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Caja usará E31/E32 y la copia quedará dirigida al correo configurado de ALLPA.
-                      </span>
-                    </span>
-                  </label>
-                ) : null}
 
                 <div className="space-y-2">
                   <Label htmlFor="orderPaymentMode">Modalidad de pago</Label>
@@ -1167,8 +1103,18 @@ export function OrdersView() {
                   </p>
                 </div>
 
+                <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2">
+                  <p className="text-sm font-medium text-orange-950">
+                    Comprobante decidido en Caja
+                  </p>
+                  <p className="mt-1 text-xs text-orange-900">
+                    La orden llega preparada para Caja. Al cobrar se elegirá Nota de venta, E32 o
+                    E31. Todos los productos activos son válidos.
+                  </p>
+                </div>
+
                 {destination === 'QUOTATION' ? (
-                  <div className="space-y-1 border-l-2 border-primary pl-3">
+                  <div className="space-y-1 border-l-2 border-[#f36c10] pl-3">
                     <p className="text-sm font-semibold text-foreground">Datos de cotización</p>
                     <p className="text-xs text-muted-foreground">
                       El nombre del cliente es obligatorio. La cédula o el RNC son opcionales.
@@ -1270,9 +1216,7 @@ export function OrdersView() {
                                       : 'bg-success/10 text-success',
                                   )}
                                 >
-                                  {balance > 0
-                                    ? `Debe ${formatCurrency(balance)}`
-                                    : 'Al dia'}
+                                  {balance > 0 ? `Debe ${formatCurrency(balance)}` : 'Al dia'}
                                 </span>
                               </button>
                             );
@@ -1341,31 +1285,16 @@ export function OrdersView() {
                           id="quotationDocumentNumber"
                           value={quotationDocumentNumber}
                           onChange={(event) => setQuotationDocumentNumber(event.target.value)}
-                          placeholder={quotationDocumentType === 'RNC' ? '123456789' : '00123456789'}
+                          placeholder={
+                            quotationDocumentType === 'RNC' ? '123456789' : '00123456789'
+                          }
                           inputMode="numeric"
                         />
                       </div>
-                      {quotationDocumentNumber ? (
-                        <p
-                          className={
-                            (quotationDocumentType === 'RNC'
-                              ? validateDominicanRnc(quotationDocumentNumber)
-                              : validateDominicanCedula(quotationDocumentNumber))
-                              ? 'text-xs text-success'
-                              : 'text-xs text-danger'
-                          }
-                        >
-                          {(quotationDocumentType === 'RNC'
-                            ? validateDominicanRnc(quotationDocumentNumber)
-                            : validateDominicanCedula(quotationDocumentNumber))
-                            ? 'Documento válido.'
-                            : 'Verifica el dígito verificador dominicano.'}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          Puedes dejarlo vacío. Si lo indicas, validaremos la cédula o el RNC antes de guardar.
-                        </p>
-                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Puedes dejarlo vacío. Si lo indicas, validaremos la cédula o el RNC antes de
+                        guardar.
+                      </p>
                     </div>
                   </>
                 ) : null}
@@ -1434,30 +1363,32 @@ export function OrdersView() {
                       <Button
                         type="button"
                         size="sm"
-                        variant={
-                          customerId === finalDiscountCustomerId ? 'default' : 'outline'
-                        }
-                        onClick={() => handleCustomerSelection(finalDiscountCustomerId)}
+                        variant={customerId === finalDiscountCustomerId ? 'default' : 'outline'}
+                        aria-pressed={customerId === finalDiscountCustomerId}
+                        onClick={() => toggleSpecialCustomerSelection(finalDiscountCustomerId)}
                       >
                         Descuento 5%
                       </Button>
                       <Button
                         type="button"
                         size="sm"
-                        variant={
-                          customerId === finalPreferredCustomerId ? 'default' : 'outline'
-                        }
-                        onClick={() => handleCustomerSelection(finalPreferredCustomerId)}
+                        variant={customerId === finalPreferredCustomerId ? 'default' : 'outline'}
+                        aria-pressed={customerId === finalPreferredCustomerId}
+                        onClick={() => toggleSpecialCustomerSelection(finalPreferredCustomerId)}
                       >
                         Cliente preferencial 10%
                       </Button>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Pulsa nuevamente la opción activa para quitar el descuento.
+                    </p>
                   </div>
                 ) : null}
                 {priceLevel !== 'REGULAR' ? (
                   <p className="text-xs font-medium text-emerald-700">
-                    Se aplicara un descuento de {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}%
-                    {' '}a los productos de esta orden.
+                    Se aplicara un descuento de{' '}
+                    {Math.round(getPriceLevelDiscountRate(priceLevel) * 100)}% a los productos de
+                    esta orden.
                   </p>
                 ) : null}
 
@@ -1614,7 +1545,7 @@ export function OrdersView() {
 
                 <Button
                   type="submit"
-                  className="h-14 w-full text-base"
+                  className="h-14 w-full bg-[#f36c10] text-base text-white hover:bg-[#d85f0e]"
                   disabled={!cart.length || createOrderMutation.isPending}
                 >
                   {editOrderId ? (
@@ -1726,7 +1657,7 @@ export function OrdersView() {
             </Button>
             <Button
               type="button"
-              className="h-11 px-4"
+              className="h-11 bg-[#f36c10] px-4 text-white hover:bg-[#d85f0e]"
               onClick={() => setMobileSection('order')}
             >
               Revisar
@@ -1769,11 +1700,14 @@ function PendingOrdersPanel({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-semibold text-zinc-950">{order.orderNumber}</p>
+                    <Badge variant="outline">
+                      {order.fiscalDocumentTypeSnapshot === 'CONSUMER_ELECTRONIC_32' ||
+                      order.fiscalDocumentTypeSnapshot === 'FISCAL_CREDIT_ELECTRONIC_31'
+                        ? 'e-CF · pendiente'
+                        : 'NCF'}
+                    </Badge>
                     <Badge variant={getStatusVariant(order.status)}>
                       {translateStatus(order.status)}
-                    </Badge>
-                    <Badge variant="outline">
-                      {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
                     </Badge>
                     {order.paymentMode === 'CREDIT' ? (
                       <Badge variant="outline">

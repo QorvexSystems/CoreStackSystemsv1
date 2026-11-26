@@ -1,0 +1,5 @@
+# Preview only: never select this image for the real fiscal services.
+FROM corestack/fiscal-registration:dev-20260922
+USER root
+RUN apt-get update && apt-get install --no-install-recommends -y xmlsec1 openssl && rm -rf /var/lib/apt/lists/*
+USER 1003:1004

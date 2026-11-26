@@ -1,0 +1,19 @@
+# Isolated rehearsal image. Never used by the production Compose project.
+FROM corestack/rivnu-api:a388b1aeba4a AS build
+USER root
+RUN apt-get update && apt-get install --no-install-recommends -y libxml2-utils && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY apps/api/src ./apps/api/src
+COPY apps/web ./apps/web
+COPY packages/database/prisma ./packages/database/prisma
+COPY packages/fiscal ./packages/fiscal
+RUN cd packages/database && node_modules/.bin/prisma generate \
+ && cp -a generated/client/. /app/apps/api/node_modules/@qorvex/database/generated/client/ \
+ && cd /app/apps/api && node_modules/.bin/tsc -p tsconfig.build.json
+ENV NEXT_PUBLIC_API_URL=http://127.0.0.1:4101
+ENV NEXT_PUBLIC_APP_URL=http://127.0.0.1:3101
+ENV NEXT_PUBLIC_SYNTHETIC_ECF=true
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN cd apps/web && node_modules/.bin/next build
+USER node
+CMD ["node", "apps/api/dist/main.js"]

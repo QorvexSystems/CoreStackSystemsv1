@@ -1,0 +1,20 @@
+# CSR profile only. Not a CA or an issued certificate. No private key is stored here.
+# The CA must independently validate and authorize these SANs and extensions.
+[req]
+prompt = no
+default_md = sha256
+distinguished_name = server_identity
+req_extensions = server_extensions
+
+[server_identity]
+CN = VM3-SQLDB
+
+[server_extensions]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @server_names
+
+[server_names]
+DNS.1 = VM3-SQLDB
+IP.1 = 10.0.0.4

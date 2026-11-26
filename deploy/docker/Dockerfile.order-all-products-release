@@ -1,0 +1,62 @@
+ARG RIVNU_COMPILED_IMAGE=corestack/rivnu-api:product-lifecycle-ecf-20261102
+FROM ${RIVNU_COMPILED_IMAGE} AS build
+
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_APP_URL
+
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Reuse the previously validated release and replace only the source files
+# involved in making every active product usable and moving the final
+# Local/E32/E31 decision exclusively to Caja.
+USER root
+COPY --chown=node:node \
+    apps/api/src/modules/fiscal-documents/fiscal-item-kind.ts \
+    /app/apps/api/src/modules/fiscal-documents/fiscal-item-kind.ts
+COPY --chown=node:node \
+    packages/database/prisma/migrations/20261102143500_allow_local_sale_note_in_cashier \
+    /app/packages/database/prisma/migrations/20261102143500_allow_local_sale_note_in_cashier
+COPY --chown=node:node \
+    apps/api/src/modules/orders/orders.service.ts \
+    /app/apps/api/src/modules/orders/orders.service.ts
+COPY --chown=node:node \
+    apps/api/src/modules/pos/pos.service.ts \
+    /app/apps/api/src/modules/pos/pos.service.ts
+COPY --chown=node:node \
+    apps/api/src/modules/pos/dto/update-pos-fiscal-details.dto.ts \
+    /app/apps/api/src/modules/pos/dto/update-pos-fiscal-details.dto.ts
+COPY --chown=node:node \
+    apps/api/src/modules/products/products.service.ts \
+    /app/apps/api/src/modules/products/products.service.ts
+COPY --chown=node:node \
+    apps/web/components/operations/orders-view.tsx \
+    /app/apps/web/components/operations/orders-view.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/pos/pos-payment-panel.tsx \
+    /app/apps/web/components/operations/pos/pos-payment-panel.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/product-form.tsx \
+    /app/apps/web/components/operations/product-form.tsx
+COPY --chown=node:node \
+    apps/web/components/operations/invoice-detail.tsx \
+    /app/apps/web/components/operations/invoice-detail.tsx
+
+USER node
+RUN rm -rf apps/api/dist apps/web/.next \
+    && cd apps/api \
+    && ./node_modules/.bin/tsc --noEmit \
+    && ./node_modules/.bin/nest build \
+    && cd ../web \
+    && ./node_modules/.bin/next build \
+    && ./node_modules/.bin/tsc --noEmit
+
+FROM build AS api
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

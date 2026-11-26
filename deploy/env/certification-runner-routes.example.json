@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "tenantId": "REPLACE_WITH_NEW_CLIENT_TENANT",
+      "issuerRnc": "000000000",
+      "origin": "https://certification-runner.internal:8445",
+      "tokenFile": "/run/secrets/certification-runner/service-token",
+      "caFile": "/run/secrets/certification-runner/internal-root.crt"
+    }
+  ]
+}

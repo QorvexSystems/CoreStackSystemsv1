@@ -14,6 +14,9 @@ import {
 import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { printElectronicDraft } from '@/lib/electronic-draft-print';
+import { fiscalPrintFailure } from '@/lib/dgii-qr-capacity';
+import { printSyntheticRehearsal } from '@/lib/synthetic-rehearsal-print';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,25 +25,28 @@ import { Label } from '@/components/ui/label';
 import {
   closeCashSession,
   completePosSale,
+  cancelSalesOrder,
+  syntheticOrderPreparation,
+  syntheticOrderRehearsal,
   claimSalesOrder,
   getCashRegisters,
   getCashSessions,
   getCurrentCashSession,
-  getCustomers,
   getPosProductByBarcode,
   getSalesOrders,
   openCashSession,
   releaseSalesOrder,
   searchPosProducts,
+  type FiscalDocumentPurpose,
+  type InvoiceDocumentType,
+  type PosPaymentMethod,
   type Product,
   type SalesOrder,
 } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/utils';
-import { brand } from '@/lib/brand';
 import { isAdminSession } from '@/lib/authorization';
 import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
-import { normalizeDominicanDocument, validateDominicanDocument } from '@/lib/dominican-documents';
 import { ModuleHeader } from './module-header';
 import { BarcodeInput } from './pos/barcode-input';
 import {
@@ -75,6 +81,43 @@ type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => Barc
 type WindowWithBarcodeDetector = Window &
   typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor };
 
+type NonCashPaymentConfirmation = {
+  method: Extract<PosPaymentMethod, 'CARD' | 'TRANSFER'>;
+  amount: number;
+};
+
+function getOrderFiscalPurpose(order?: SalesOrder | null): FiscalDocumentPurpose {
+  if (order?.fiscalPurpose) {
+    return order.fiscalPurpose;
+  }
+
+  return order?.fiscalDocumentTypeSnapshot === 'FISCAL_CREDIT_01' ||
+    order?.fiscalDocumentTypeSnapshot === 'FISCAL_CREDIT_ELECTRONIC_31'
+    ? 'FISCAL_CREDIT'
+    : 'CONSUMER';
+}
+
+function getOrderFiscalDocumentType(order?: SalesOrder | null): InvoiceDocumentType {
+  if (order?.fiscalDocumentTypeSnapshot) {
+    return order.fiscalDocumentTypeSnapshot;
+  }
+
+  return getOrderFiscalPurpose(order) === 'FISCAL_CREDIT' ? 'FISCAL_CREDIT_01' : 'CONSUMER_02';
+}
+
+function getOrderFiscalLabel(order: SalesOrder) {
+  const documentType = getOrderFiscalDocumentType(order);
+  const labels: Partial<Record<InvoiceDocumentType, string>> = {
+    CONSUMER_02: 'Consumo · B02',
+    LOCAL_SALE_NOTE: 'Nota de venta',
+    FISCAL_CREDIT_01: 'Crédito fiscal · B01',
+    CONSUMER_ELECTRONIC_32: 'Consumo · E32',
+    FISCAL_CREDIT_ELECTRONIC_31: 'Crédito fiscal · E31',
+  };
+
+  return labels[documentType] ?? documentType;
+}
+
 export function PosView() {
   const session = useCurrentSession();
   const queryClient = useQueryClient();
@@ -84,11 +127,7 @@ export function PosView() {
   const streamRef = useRef<MediaStream | null>(null);
   const scanFrameRef = useRef<number | null>(null);
 
-  const [customerId, setCustomerId] = useState('');
-  const [documentType, setDocumentType] = useState('CONSUMER_02');
-  const [fiscalDocumentType, setFiscalDocumentType] = useState<'RNC' | 'CEDULA'>('RNC');
-  const [fiscalDocumentNumber, setFiscalDocumentNumber] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('CASH');
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('CASH');
   const [amountReceived, setAmountReceived] = useState(clearCurrencyInput());
   const [barcode, setBarcode] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
@@ -105,12 +144,12 @@ export function PosView() {
   const [message, setMessage] = useState<string | null>(null);
   const [loadedOrder, setLoadedOrder] = useState<SalesOrder | null>(null);
   const [zeroClosingWarningOpen, setZeroClosingWarningOpen] = useState(false);
+  const [discardTarget, setDiscardTarget] = useState<SalesOrder | null>(null);
+  const [paymentConfirmation, setPaymentConfirmation] = useState<NonCashPaymentConfirmation | null>(
+    null,
+  );
+  const paymentConfirmationSubmittingRef = useRef(false);
 
-  const customersQuery = useQuery({
-    queryKey: ['pos-customers', session?.tenantId],
-    queryFn: () => getCustomers(session?.tenantId ?? '', session?.accessToken ?? ''),
-    enabled: Boolean(session),
-  });
   const registersQuery = useQuery({
     queryKey: ['cash-registers', session?.tenantId],
     queryFn: () => getCashRegisters(session?.tenantId ?? '', session?.accessToken ?? ''),
@@ -150,7 +189,6 @@ export function PosView() {
     session?.permissions.canCloseCashSession ??
     ['ADMIN', 'SUPER_ADMIN', 'QORVEX_SUPER_ADMIN'].includes(session?.role ?? '');
   const cartReadOnly = !canCreateDirectSale && Boolean(loadedOrder);
-  const electronicInvoiceRequested = Boolean(loadedOrder?.electronicInvoiceRequested);
 
   useEffect(() => {
     const firstRegister = registersQuery.data?.find((register) => register.status === 'ACTIVE');
@@ -211,10 +249,48 @@ export function PosView() {
 
   useEffect(() => () => stopCameraScan(), []);
 
-  const activeCustomers = (customersQuery.data ?? []).filter(
-    (customer) => customer.status === 'ACTIVE',
-  );
+  const fiscalPurpose = getOrderFiscalPurpose(loadedOrder);
+  const fiscalDocumentType = getOrderFiscalDocumentType(loadedOrder);
+  const electronicOrderPending =
+    fiscalDocumentType === 'CONSUMER_ELECTRONIC_32' ||
+    fiscalDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31';
+  const syntheticPreviewEnabled = process.env.NEXT_PUBLIC_SYNTHETIC_ECF === 'true';
+  const preparationKey = ['synthetic-preparation', session?.tenantId, loadedOrder?.id];
+  const preparationQuery = useQuery({
+    queryKey: preparationKey,
+    queryFn: () =>
+      syntheticOrderPreparation(session!.tenantId, session!.accessToken, loadedOrder!.id),
+    enabled: syntheticPreviewEnabled && electronicOrderPending && !!session && !!loadedOrder,
+    refetchInterval: (query) => (query.state.data?.state === 'PENDING' ? 3000 : false),
+    retry: false,
+  });
+  const prepareSyntheticMutation = useMutation({
+    mutationFn: (input: { tenantId: string; accessToken: string; orderId: string }) =>
+      syntheticOrderPreparation(input.tenantId, input.accessToken, input.orderId, true),
+    onSuccess: (result, input) =>
+      queryClient.setQueryData(['synthetic-preparation', input.tenantId, input.orderId], result),
+  });
   const productPool = productsQuery.data ?? [];
+  const rehearsalKey = ['synthetic-rehearsal', session?.tenantId, loadedOrder?.id];
+  const rehearsalQuery = useQuery({
+    queryKey: rehearsalKey,
+    queryFn: () =>
+      syntheticOrderRehearsal(session!.tenantId, session!.accessToken, loadedOrder!.id),
+    enabled:
+      syntheticPreviewEnabled &&
+      electronicOrderPending &&
+      !!session &&
+      !!loadedOrder &&
+      preparationQuery.data?.state === 'DONE',
+    refetchInterval: (query) => (query.state.data && !query.state.data.terminal ? 3000 : false),
+    retry: false,
+  });
+  const rehearsalMutation = useMutation({
+    mutationFn: (input: { tenantId: string; accessToken: string; orderId: string }) =>
+      syntheticOrderRehearsal(input.tenantId, input.accessToken, input.orderId, true),
+    onSuccess: (result, input) =>
+      queryClient.setQueryData(['synthetic-rehearsal', input.tenantId, input.orderId], result),
+  });
   const categories = uniqueValues(
     productPool
       .map((product) => product.category?.name)
@@ -229,37 +305,8 @@ export function PosView() {
   const quantitiesByProduct = Object.fromEntries(
     cart.map((item) => [item.product.id, item.quantity]),
   );
-  const fiscalDocumentValid = validateDominicanDocument(fiscalDocumentType, fiscalDocumentNumber);
-  const fiscalCustomer = fiscalDocumentValid
-    ? activeCustomers.find(
-        (customer) =>
-          customer.documentType === fiscalDocumentType &&
-          normalizeDominicanDocument(customer.documentNumber ?? '') ===
-            normalizeDominicanDocument(fiscalDocumentNumber),
-      )
-    : undefined;
-  const fiscalCustomerMatchesOrder =
-    !loadedOrder?.customerId || fiscalCustomer?.id === loadedOrder.customerId;
-  const requiresFiscalDocument = ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(
-    documentType,
-  );
-  const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
-  const requiresE32Recipient = documentType === 'CONSUMER_ELECTRONIC_32' && totals.total >= 250000;
-  const requiresRecipientDocument = requiresFiscalDocument || requiresE32Recipient;
-  const canCompleteFiscalDocument =
-    !requiresRecipientDocument ||
-    Boolean(
-      fiscalDocumentValid &&
-      fiscalCustomer &&
-      fiscalCustomerMatchesOrder &&
-      (!requiresRnc || fiscalDocumentType === 'RNC'),
-    );
   const canCompleteSale =
-    !isAdmin &&
-    cart.length > 0 &&
-    Boolean(currentCashSession) &&
-    Boolean(loadedOrder) &&
-    canCompleteFiscalDocument;
+    !isAdmin && cart.length > 0 && Boolean(currentCashSession) && Boolean(loadedOrder);
   const selectedOpenSession = (cashSessionsQuery.data ?? []).find(
     (cashSession) =>
       cashSession.status === 'OPEN' && cashSession.cashRegister.id === selectedRegisterId,
@@ -268,6 +315,7 @@ export function PosView() {
     Boolean(selectedOpenSession) && selectedOpenSession?.openedBy?.id !== session?.user.id;
 
   function handleLoadOrder(order: SalesOrder) {
+    if (discardOrderMutation.isPending) return;
     if (loadedOrder && loadedOrder.id !== order.id) {
       setMessage('Quita la orden cargada o completala antes de seleccionar otro ticket.');
       toast.info('Primero quita la orden actual para elegir otra.');
@@ -278,7 +326,7 @@ export function PosView() {
   }
 
   function releaseLoadedOrder() {
-    if (!loadedOrder || releaseOrderMutation.isPending || completeSaleMutation.isPending) {
+    if (!loadedOrder || releaseOrderMutation.isPending || completeSaleMutation.isPending || discardOrderMutation.isPending) {
       return;
     }
 
@@ -374,10 +422,6 @@ export function PosView() {
       }
 
       return completePosSale(session.tenantId, session.accessToken, {
-        customerId: customerId || undefined,
-        documentType,
-        fiscalDocumentType: requiresRecipientDocument ? fiscalDocumentType : undefined,
-        fiscalDocumentNumber: requiresRecipientDocument ? fiscalDocumentNumber : undefined,
         paymentMethod,
         cashSessionId: currentCashSession?.id,
         amountReceived: amountReceived ? parseCurrencyInput(amountReceived) : undefined,
@@ -388,28 +432,40 @@ export function PosView() {
         })),
       });
     },
-    onSuccess: async (invoice) => {
+    onSuccess: (invoice) => {
+      paymentConfirmationSubmittingRef.current = false;
+      setPaymentConfirmation(null);
+      const electronic =
+        invoice.documentType === 'CONSUMER_ELECTRONIC_32' ||
+        invoice.documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
       setMessage(
-        invoice.eNcf
-          ? `e-CF ${invoice.eNcf} creada. Su XML y correo de simulación quedaron pendientes de firma y Resend.`
+        electronic
+          ? 'Venta cobrada. El e-CF quedó en procesamiento fiscal y RIVNU actualizará su estado automáticamente.'
           : `Factura ${invoice.invoiceNumber} creada correctamente.`,
       );
       setCart([]);
       setLoadedOrder(null);
-      setFiscalDocumentNumber('');
+      setPaymentMethod('CASH');
       setAmountReceived(clearCurrencyInput());
-      await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-      await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      await queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
-      await queryClient.invalidateQueries({ queryKey: ['products'] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['cash-movements'] });
-      await queryClient.invalidateQueries({ queryKey: ['employee-logs'] });
-      await invalidateCashQueries();
       toast.dismiss();
-      router.push(`/invoices/${invoice.id}/print?autoPrint=1`);
+      void Promise.allSettled([
+        ...[
+          'invoices',
+          'sales-orders',
+          'dashboard-summary',
+          'products',
+          'inventory-movements',
+          'cash-movements',
+          'employee-logs',
+        ].map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
+        invalidateCashQueries(),
+      ]);
+      // The cashier's receipt lives under Caja, outside the restricted
+      // Facturas module. Navigation must not wait for cache refreshes.
+      router.replace(`/pos/receipts/${invoice.id}?autoPrint=1`);
     },
     onError: (error) => {
+      paymentConfirmationSubmittingRef.current = false;
       setMessage(error instanceof Error ? error.message : 'No se pudo completar la venta.');
       toast.error(error instanceof Error ? error.message : 'No se pudo completar la venta.');
     },
@@ -447,8 +503,6 @@ export function PosView() {
       if (loadedOrder?.id === order.id) {
         setLoadedOrder(null);
         setCart([]);
-        setCustomerId('');
-        setFiscalDocumentNumber('');
         setAmountReceived(clearCurrencyInput());
         setMessage(`Orden ${order.orderNumber} quitada. Ya puedes seleccionar otra.`);
       }
@@ -457,6 +511,38 @@ export function PosView() {
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : 'No se pudo liberar la orden.');
+    },
+  });
+
+  const discardOrderMutation = useMutation({
+    mutationFn: (orderId: string) => {
+      if (!session) throw new Error('Sesion requerida.');
+      return cancelSalesOrder(
+        session.tenantId,
+        session.accessToken,
+        orderId,
+        'Descartada en caja antes del cobro',
+      );
+    },
+    onSuccess: async (order) => {
+      setDiscardTarget(null);
+      setPaymentConfirmation(null);
+      if (loadedOrder?.id === order.id) {
+        setLoadedOrder(null);
+        setCart([]);
+        setPaymentMethod('CASH');
+        setAmountReceived(clearCurrencyInput());
+        setMessage(null);
+      }
+      toast.success('Orden eliminada de pendientes.');
+      await Promise.all(
+        ['sales-orders', 'products', 'pos-products-search', 'order-products', 'dashboard-summary', 'employee-logs'].map(
+          (key) => queryClient.invalidateQueries({ queryKey: [key] }),
+        ),
+      );
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudo eliminar la orden.');
     },
   });
 
@@ -545,12 +631,47 @@ export function PosView() {
   }
 
   function clearCart() {
+    if (discardOrderMutation.isPending || completeSaleMutation.isPending) return;
     if (loadedOrder) {
       releaseOrderMutation.mutate(loadedOrder.id);
       return;
     }
 
     setCart([]);
+  }
+
+  function requestCompleteSale() {
+    if (completeSaleMutation.isPending || discardOrderMutation.isPending || discardTarget) {
+      return;
+    }
+
+    if (paymentMethod === 'CARD' || paymentMethod === 'TRANSFER') {
+      setPaymentConfirmation({
+        method: paymentMethod,
+        amount: totals.requiredPayment,
+      });
+      return;
+    }
+
+    completeSaleMutation.mutate();
+  }
+
+  function confirmNonCashPayment() {
+    if (!paymentConfirmation || paymentConfirmationSubmittingRef.current) {
+      return;
+    }
+
+    const paymentChanged =
+      paymentMethod !== paymentConfirmation.method ||
+      Math.abs(totals.requiredPayment - paymentConfirmation.amount) > 0.005;
+    if (paymentChanged) {
+      setPaymentConfirmation(null);
+      toast.warning('El método o el monto cambió. Revisa el cobro y confirma nuevamente.');
+      return;
+    }
+
+    paymentConfirmationSubmittingRef.current = true;
+    completeSaleMutation.mutate();
   }
 
   function requestCloseCashSession() {
@@ -569,59 +690,6 @@ export function PosView() {
       setMessage(
         'Orden desvinculada por edicion manual. Esta venta se cobrara como venta directa.',
       );
-    }
-  }
-
-  function populateFiscalDocumentFromCustomer(nextCustomerId: string) {
-    const customer = activeCustomers.find((candidate) => candidate.id === nextCustomerId);
-    if (
-      customer &&
-      (customer.documentType === 'RNC' || customer.documentType === 'CEDULA') &&
-      customer.documentNumber
-    ) {
-      setFiscalDocumentType(customer.documentType);
-      setFiscalDocumentNumber(customer.documentNumber);
-    }
-  }
-
-  function handleCustomerChange(nextCustomerId: string) {
-    setCustomerId(nextCustomerId);
-    if (['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(documentType)) {
-      populateFiscalDocumentFromCustomer(nextCustomerId);
-    }
-  }
-
-  function handleDocumentTypeChange(nextDocumentType: string) {
-    setDocumentType(nextDocumentType);
-    if (
-      ['FISCAL_CREDIT_01', 'FISCAL_CREDIT_ELECTRONIC_31'].includes(nextDocumentType) &&
-      customerId
-    ) {
-      populateFiscalDocumentFromCustomer(customerId);
-    }
-    if (nextDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31') {
-      setFiscalDocumentType('RNC');
-    }
-  }
-
-  function handleFiscalDocumentTypeChange(nextDocumentType: 'RNC' | 'CEDULA') {
-    setFiscalDocumentType(nextDocumentType);
-  }
-
-  function handleFiscalDocumentNumberChange(nextDocumentNumber: string) {
-    setFiscalDocumentNumber(nextDocumentNumber);
-    const normalizedDocument = normalizeDominicanDocument(nextDocumentNumber);
-    const matchingCustomer = activeCustomers.find(
-      (customer) =>
-        customer.documentType === fiscalDocumentType &&
-        normalizeDominicanDocument(customer.documentNumber ?? '') === normalizedDocument,
-    );
-
-    if (
-      matchingCustomer &&
-      (!loadedOrder?.customerId || matchingCustomer.id === loadedOrder.customerId)
-    ) {
-      setCustomerId(matchingCustomer.id);
     }
   }
 
@@ -650,15 +718,16 @@ export function PosView() {
     }
 
     setLoadedOrder(order);
-    setDocumentType(order.electronicInvoiceRequested ? 'CONSUMER_ELECTRONIC_32' : 'CONSUMER_02');
-    setFiscalDocumentType('RNC');
-    setCustomerId(order.customerId ?? '');
-    setFiscalDocumentNumber('');
-    if (order.customerId) {
-      populateFiscalDocumentFromCustomer(order.customerId);
-    }
     setCart(items);
     setMessage(`Orden ${order.orderNumber} cargada para cobrar.`);
+  }
+
+  function updateLoadedOrderFiscalDetails(order: SalesOrder) {
+    setLoadedOrder(order);
+    queryClient.setQueriesData<SalesOrder[]>({ queryKey: ['sales-orders'] }, (orders) =>
+      orders?.map((candidate) => (candidate.id === order.id ? order : candidate)),
+    );
+    setMessage(`Datos fiscales de ${order.orderNumber} confirmados.`);
   }
 
   function enableScanner() {
@@ -751,7 +820,7 @@ export function PosView() {
     <div className="space-y-5">
       <ModuleHeader
         title="Caja"
-        description={`Cobro de órdenes enviadas a caja y cierre operativo de ${brand.name}.`}
+        description="Cobro de ordenes enviadas a caja y cierre operativo de Ferreteria RIVNU."
       />
 
       <CashStatusHeader
@@ -813,35 +882,204 @@ export function PosView() {
           </div>
 
           <div className="space-y-3 xl:sticky xl:top-24">
+            {syntheticPreviewEnabled && electronicOrderPending && loadedOrder ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Preparación e-CF de prueba</CardTitle>
+                  <CardDescription>
+                    Datos y numeración sintéticos. Sin firma, sin validez fiscal y sin envío a DGII.
+                    No cobra la orden.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button
+                    type="button"
+                    disabled={prepareSyntheticMutation.isPending}
+                    onClick={() =>
+                      prepareSyntheticMutation.mutate({
+                        tenantId: session!.tenantId,
+                        accessToken: session!.accessToken,
+                        orderId: loadedOrder.id,
+                      })
+                    }
+                  >
+                    {prepareSyntheticMutation.isPending
+                      ? 'Preparando XML…'
+                      : 'Preparar XML sintético E32'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void preparationQuery.refetch()}
+                  >
+                    Consultar estado
+                  </Button>
+                  {prepareSyntheticMutation.error || preparationQuery.error ? (
+                    <p role="alert" className="text-sm text-danger">
+                      {(prepareSyntheticMutation.error || preparationQuery.error)?.message}
+                    </p>
+                  ) : null}
+                  {preparationQuery.data ? (
+                    <div role="status" className="text-sm">
+                      <p>
+                        Motor:{' '}
+                        {preparationQuery.data.executionMode === 'REMOTE_VM4'
+                          ? 'VM4 — prueba remota'
+                          : 'preparación local de prueba'}
+                      </p>
+                      Estado:{' '}
+                      {preparationQuery.data.state === 'DONE'
+                        ? 'XML sin firma preparado'
+                        : preparationQuery.data.state === 'FAILED'
+                          ? 'Error de preparación'
+                          : 'Pendiente'}
+                      {preparationQuery.data.errorCode ? (
+                        <p>
+                          {preparationQuery.data.errorCode === 'REMOTE_UNCONFIRMED'
+                            ? 'Comunicación no confirmada. Pulsa Preparar para reintentar la misma solicitud; no se sustituirá por una preparación local.'
+                            : preparationQuery.data.errorCode}
+                        </p>
+                      ) : null}
+                      {preparationQuery.data.stale ? (
+                        <p>
+                          La orden cambió desde esta preparación; este resultado corresponde al
+                          snapshot anterior.
+                        </p>
+                      ) : null}
+                      {preparationQuery.data.result ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="mt-2"
+                          disabled={
+                            preparationQuery.data.stale || preparationQuery.data.state !== 'DONE'
+                          }
+                          onClick={() => {
+                            const result = preparationQuery.data?.result;
+                            if (result)
+                              void printElectronicDraft(
+                                result.xml,
+                                result.encf,
+                                result.sha256,
+                              ).catch((error) => toast.error(fiscalPrintFailure(error).message));
+                          }}
+                        >
+                          Imprimir borrador sin firma
+                        </Button>
+                      ) : null}
+                      {preparationQuery.data.executionMode === 'REMOTE_VM4' &&
+                      preparationQuery.data.state === 'DONE' ? (
+                        <div className="mt-3 space-y-2">
+                          <p>
+                            Ensayo sintético: firma de prueba → cola → simulador → RI. No se envía a
+                            DGII ni se cobra.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={
+                              preparationQuery.data.stale ||
+                              rehearsalMutation.isPending ||
+                              !!rehearsalQuery.data
+                            }
+                            onClick={() =>
+                              session &&
+                              loadedOrder &&
+                              rehearsalMutation.mutate({
+                                tenantId: session.tenantId,
+                                accessToken: session.accessToken,
+                                orderId: loadedOrder.id,
+                              })
+                            }
+                          >
+                            Iniciar ensayo completo sin validez fiscal
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void rehearsalQuery.refetch()}
+                          >
+                            Consultar ensayo
+                          </Button>
+                          {rehearsalMutation.error || rehearsalQuery.error ? (
+                            <p role="alert">
+                              No se pudo confirmar el ensayo. Consulta nuevamente; no se reservará
+                              otro comprobante.
+                            </p>
+                          ) : null}
+                          {rehearsalQuery.data ? (
+                            <p role="status">
+                              Estado del simulador (no DGII):{' '}
+                              {rehearsalQuery.data.errorCode ||
+                                rehearsalQuery.data.result?.errorCode ||
+                                rehearsalQuery.data.result?.state ||
+                                'PENDIENTE'}
+                            </p>
+                          ) : null}
+                          {rehearsalQuery.data?.result?.model ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={preparationQuery.data.stale || rehearsalQuery.data.stale}
+                              onClick={() => {
+                                try {
+                                  const model = rehearsalQuery.data?.result?.model,
+                                    expected = preparationQuery.data?.result;
+                                  if (model && expected) printSyntheticRehearsal(model, expected);
+                                } catch (error) {
+                                  toast.error(fiscalPrintFailure(error).message);
+                                }
+                              }}
+                            >
+                              Imprimir RI firmada sintética con QR
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {preparationQuery.data.result ? (
+                        <details className="mt-2">
+                          <summary>Ver XML sintético — {preparationQuery.data.result.encf}</summary>
+                          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-100 p-3 text-xs">
+                            {preparationQuery.data.result.xml}
+                          </pre>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Esta orden no tiene una preparación guardada.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
             {loadedOrder ? (
-              <div className="flex flex-col gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
+              <div className="flex flex-col gap-2 rounded-md border border-[#f36c10]/30 bg-[#f36c10]/10 px-3 py-2 text-sm text-[#9a3f05]">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <span>
-                    Cobrando ticket pendiente {loadedOrder.orderNumber}. La factura se emitira al
-                    completar el cobro.
+                    {electronicOrderPending
+                      ? `Orden ${loadedOrder.orderNumber} destinada a e-CF. Confirma E31 o E32; al cobrar, RIVNU reserva, firma y envía el comprobante automáticamente.`
+                      : `Cobrando ticket pendiente ${loadedOrder.orderNumber}. La factura se emitirá al completar el cobro.`}
                   </span>
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
-                    className="shrink-0 border-primary/40 bg-white text-primary hover:bg-primary/10"
+                    className="border-[#f36c10]/40 bg-white text-[#9a3f05] hover:bg-[#f36c10]/10 shrink-0"
                     onClick={releaseLoadedOrder}
-                    disabled={releaseOrderMutation.isPending || completeSaleMutation.isPending}
+                    disabled={releaseOrderMutation.isPending || completeSaleMutation.isPending || discardOrderMutation.isPending}
                   >
                     <X className="h-4 w-4" />
                     Quitar y elegir otra
                   </Button>
                 </div>
-                <div className="text-xs font-semibold">
-                  Origen: {loadedOrder.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                </div>
                 {loadedOrder.notes ? (
-                  <div className="mt-1 border-t border-primary/20 pt-1 text-xs text-primary">
+                  <div className="mt-1 border-t border-[#f36c10]/20 pt-1 text-xs text-[#9a3f05]">
                     <span className="font-semibold">Nota:</span> {loadedOrder.notes}
                   </div>
                 ) : null}
                 {loadedOrder.paymentMode === 'CREDIT' ? (
-                  <div className="border-t border-primary/20 pt-2 text-xs">
+                  <div className="border-t border-[#f36c10]/20 pt-2 text-xs">
                     Venta fiada aprobada · Inicial{' '}
                     <strong>{formatCurrency(Number(loadedOrder.initialPaymentAmount))}</strong> ·
                     Saldo{' '}
@@ -852,42 +1090,39 @@ export function PosView() {
                     </strong>
                   </div>
                 ) : null}
+                <div className="border-t border-[#f36c10]/20 pt-2 text-xs">
+                  Comprobante fijado: <strong>{getOrderFiscalLabel(loadedOrder)}</strong>
+                </div>
               </div>
             ) : null}
             <PosCart
               items={cart}
               onUpdateQuantity={updateQuantity}
               onClear={clearCart}
+              onDiscard={loadedOrder && !isAdmin ? () => setDiscardTarget(loadedOrder) : undefined}
+              isBusy={completeSaleMutation.isPending || releaseOrderMutation.isPending || discardOrderMutation.isPending}
               readOnly={cartReadOnly}
               emptyMessage="Carga una orden pendiente desde la lista para poder cobrarla."
             />
             {!isAdmin ? (
               <PosPaymentPanel
-                customers={activeCustomers}
-                customerId={customerId}
-                documentType={documentType}
-                electronicInvoiceRequested={electronicInvoiceRequested}
-                requiresE32Recipient={requiresE32Recipient}
-                fiscalDocumentType={fiscalDocumentType}
-                fiscalDocumentNumber={fiscalDocumentNumber}
-                fiscalDocumentValid={fiscalDocumentValid}
-                fiscalCustomerName={fiscalCustomer?.name}
+                key={loadedOrder?.id ?? 'empty-order'}
+                tenantId={session.tenantId}
+                accessToken={session.accessToken}
+                order={loadedOrder}
+                fiscalPurpose={fiscalPurpose}
                 paymentMethod={paymentMethod}
                 salePaymentMode={loadedOrder?.paymentMode ?? 'CASH'}
                 dueDate={loadedOrder?.dueDate}
-                customerLocked={Boolean(loadedOrder?.customerId)}
                 amountReceived={amountReceived}
                 totals={totals}
                 message={message}
                 canCompleteSale={canCompleteSale}
-                isCompleting={completeSaleMutation.isPending}
-                onCustomerChange={handleCustomerChange}
-                onDocumentTypeChange={handleDocumentTypeChange}
-                onFiscalDocumentTypeChange={handleFiscalDocumentTypeChange}
-                onFiscalDocumentNumberChange={handleFiscalDocumentNumberChange}
+                isCompleting={completeSaleMutation.isPending || discardOrderMutation.isPending}
                 onPaymentMethodChange={setPaymentMethod}
                 onAmountReceivedChange={setAmountReceived}
-                onCompleteSale={() => completeSaleMutation.mutate()}
+                onFiscalOrderUpdated={updateLoadedOrderFiscalDetails}
+                onCompleteSale={requestCompleteSale}
               />
             ) : null}
 
@@ -905,6 +1140,40 @@ export function PosView() {
           </div>
         </section>
       )}
+
+      <WarningConfirmModal
+        open={Boolean(discardTarget)}
+        title="Eliminar factura sin cobrar"
+        description={`Se descartará la orden ${discardTarget?.orderNumber ?? ''} y se liberarán sus productos reservados. No se realizará ningún cobro ni se consumirá numeración fiscal.`}
+        confirmLabel="Eliminar"
+        cancelLabel="Volver"
+        isPending={discardOrderMutation.isPending}
+        onClose={() => {
+          if (!discardOrderMutation.isPending) setDiscardTarget(null);
+        }}
+        onConfirm={() => {
+          if (discardTarget && !discardOrderMutation.isPending && !completeSaleMutation.isPending) {
+            discardOrderMutation.mutate(discardTarget.id);
+          }
+        }}
+      />
+
+      <WarningConfirmModal
+        open={Boolean(paymentConfirmation)}
+        title={`Confirmar cobro por ${
+          paymentConfirmation?.method === 'CARD' ? 'tarjeta' : 'transferencia'
+        }`}
+        description={`¿Confirmas que cobraste ${formatCurrency(
+          paymentConfirmation?.amount ?? 0,
+        )} por ${
+          paymentConfirmation?.method === 'CARD' ? 'tarjeta' : 'transferencia'
+        }? Al continuar se emitirá la factura y se asignará el NCF.`}
+        confirmLabel="Sí, facturar"
+        cancelLabel="No"
+        isPending={completeSaleMutation.isPending}
+        onClose={() => setPaymentConfirmation(null)}
+        onConfirm={confirmNonCashPayment}
+      />
 
       <WarningConfirmModal
         open={zeroClosingWarningOpen}
@@ -963,6 +1232,7 @@ function SalesOrdersQueuePanel({
           `${getWaitingMinutes(order)} min`,
           `${getWaitingMinutes(order)} minutos`,
           translateStatus(order.status),
+          getOrderFiscalLabel(order),
         ]
           .filter(Boolean)
           .some((value) => value!.toLowerCase().includes(normalizedSearch)),
@@ -986,17 +1256,17 @@ function SalesOrdersQueuePanel({
       </CardHeader>
       <CardContent>
         {loadedOrder ? (
-          <div className="mb-3 rounded-md border border-primary/30 bg-primary/10 p-3">
+          <div className="mb-3 rounded-md border border-[#f36c10]/30 bg-[#f36c10]/10 p-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-primary">
+                <p className="text-sm font-semibold text-[#9a3f05]">
                   Ticket cargado: {loadedOrder.orderNumber}
                 </p>
-                <p className="mt-1 text-xs text-primary">
+                <p className="mt-1 text-xs text-[#9a3f05]">
                   {getOrderSearchLabel(loadedOrder)} - {formatCurrency(Number(loadedOrder.total))}
                 </p>
                 {loadedOrder.notes ? (
-                  <p className="mt-2 inline-block rounded border border-primary/20 bg-white/50 px-1.5 py-0.5 text-xs font-medium text-primary">
+                  <p className="mt-2 text-xs text-[#9a3f05] bg-white/50 border border-[#f36c10]/20 rounded px-1.5 py-0.5 inline-block font-medium">
                     Nota: {loadedOrder.notes}
                   </p>
                 ) : null}
@@ -1005,7 +1275,7 @@ function SalesOrdersQueuePanel({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="border-primary/40 bg-white text-primary hover:bg-primary/10"
+                className="border-[#f36c10]/40 bg-white text-[#9a3f05] hover:bg-[#f36c10]/10"
                 onClick={onReleaseLoaded}
                 disabled={isReleasing}
               >
@@ -1013,7 +1283,7 @@ function SalesOrdersQueuePanel({
                 Quitar y elegir otra
               </Button>
             </div>
-            <p className="mt-2 text-xs text-primary">
+            <p className="mt-2 text-xs text-[#9a3f05]">
               Quita este ticket si no corresponde para poder seleccionar otro de la lista.
             </p>
           </div>
@@ -1044,9 +1314,6 @@ function SalesOrdersQueuePanel({
                       <Badge variant={getStatusVariant(order.status)}>
                         {translateStatus(order.status)}
                       </Badge>
-                      <Badge variant="outline">
-                        {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                      </Badge>
                       {order.paymentMode === 'CREDIT' ? (
                         <Badge variant="outline">
                           {order.creditApproval?.status === 'APPROVED'
@@ -1054,6 +1321,7 @@ function SalesOrdersQueuePanel({
                             : 'Crédito pendiente'}
                         </Badge>
                       ) : null}
+                      <Badge variant="outline">{getOrderFiscalLabel(order)}</Badge>
                       {order.sentToCashierAt ? (
                         <Badge variant={getWaitingVariant(order)}>
                           {getWaitingMinutes(order)} min
@@ -1160,7 +1428,7 @@ function CashStatusHeader({
   return (
     <div className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm lg:grid-cols-4">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-[#f36c10]/10 text-[#f36c10]">
           <Store className="h-5 w-5" />
         </div>
         <div>

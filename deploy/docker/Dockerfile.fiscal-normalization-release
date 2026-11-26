@@ -1,0 +1,10 @@
+# Overlay only this correction on the CURRENT RIVNU API, preserving prior fixes.
+FROM corestack/rivnu-api:quotation-list-20261124 AS api
+USER root
+COPY --chown=node:node apps/api/src/modules/fiscal-documents/erp-sales-projection.ts /app/apps/api/src/modules/fiscal-documents/erp-sales-projection.ts
+COPY --chown=node:node apps/api/src/modules/fiscal-sequences/electronic-range-registration.client.ts /app/apps/api/src/modules/fiscal-sequences/electronic-range-registration.client.ts
+COPY --chown=node:node apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts /app/apps/api/src/modules/fiscal-sequences/electronic-fiscal-dispatch.service.ts
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build
+CMD ["node", "apps/api/dist/main.js"]

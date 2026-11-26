@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   CashMovementType,
   CashSessionStatus,
@@ -20,6 +20,8 @@ import {
 } from '@qorvex/database';
 import { addBusinessDays, businessDateKey } from '../../common/utils/business-date';
 import { PrismaService } from '../../prisma/prisma.service';
+import { readFiscalCustomerSnapshot } from '../fiscal-documents/fiscal-document';
+import { ProductSalesQueryDto } from './dto/product-sales-query.dto';
 
 const revenueStatuses = [
   InvoiceStatus.ISSUED,
@@ -49,6 +51,38 @@ const terminalPurchaseOrderStatuses: PurchaseOrderStatus[] = [
   PurchaseOrderStatus.RECEIVED,
   PurchaseOrderStatus.CANCELLED,
 ];
+const localFiscalDocumentTypes = [
+  InvoiceDocumentType.CONSUMER_02,
+  InvoiceDocumentType.FISCAL_CREDIT_01,
+] as const;
+
+type FiscalSequenceAlertSource = {
+  id: string;
+  documentType: InvoiceDocumentType;
+  prefix: string;
+  startNumber: number;
+  endNumber: number;
+  nextNumber: number;
+  validUntil: Date | null;
+  status: FiscalSequenceStatus;
+  createdAt: Date;
+};
+
+type FiscalSequenceAlert = {
+  id: string;
+  documentType: (typeof localFiscalDocumentTypes)[number];
+  prefix: string;
+  status: FiscalSequenceStatus | 'MISSING';
+  startNumber: number;
+  nextNumber: number;
+  endNumber: number;
+  remaining: number;
+  authorizedCount: number;
+  alertThreshold: number;
+  severity: 'WARNING' | 'CRITICAL';
+  validUntil: Date | null;
+  hasQueuedReplacement: boolean;
+};
 
 @Injectable()
 export class DashboardService {
@@ -59,6 +93,7 @@ export class DashboardService {
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
     const accountingTodayKey = businessDateKey(now);
+    const currentFiscalDate = new Date(`${accountingTodayKey}T00:00:00.000Z`);
     const accountingTomorrowKey = businessDateKey(addBusinessDays(1, now));
     const accountingDueSoonEndKey = businessDateKey(addBusinessDays(8, now));
 
@@ -313,17 +348,7 @@ export class DashboardService {
         where: {
           tenantId,
           documentType: {
-            in: [
-              InvoiceDocumentType.FISCAL_CREDIT_01,
-              InvoiceDocumentType.CONSUMER_02,
-            ],
-          },
-          status: {
-            in: [
-              FiscalSequenceStatus.ACTIVE,
-              FiscalSequenceStatus.EXHAUSTED,
-              FiscalSequenceStatus.EXPIRED,
-            ],
+            in: [...localFiscalDocumentTypes],
           },
         },
         orderBy: [{ documentType: 'asc' }, { createdAt: 'desc' }],
@@ -482,9 +507,24 @@ export class DashboardService {
       }),
     ]);
 
-    const lowStockProductsList = productsForStock.filter(
-      (product) => product.stock - product.reservedStock <= product.minStock,
-    );
+    const lowStockProductsList = productsForStock
+      .filter((product) => product.stock - product.reservedStock <= product.minStock)
+      .sort((left, right) => {
+        const leftAvailable = left.stock - left.reservedStock;
+        const rightAvailable = right.stock - right.reservedStock;
+        const leftOutOfStock = leftAvailable <= 0;
+        const rightOutOfStock = rightAvailable <= 0;
+
+        if (leftOutOfStock !== rightOutOfStock) {
+          return leftOutOfStock ? -1 : 1;
+        }
+
+        return (
+          leftAvailable - rightAvailable ||
+          right.minStock - left.minStock ||
+          left.name.localeCompare(right.name, 'es', { sensitivity: 'base' })
+        );
+      });
     const recentInventoryAlerts = lowStockProductsList.slice(0, 5);
     const grossSalesMonth = this.sumInvoicePaidAmount(invoicesForMonth);
     const grossSalesToday = this.sumInvoicePaidAmount(invoicesForToday);
@@ -576,7 +616,10 @@ export class DashboardService {
       recentInvoices: recentInvoices.map((invoice) => ({
         id: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
-        customerName: invoice.customer?.name ?? 'Consumidor final',
+        customerName:
+          readFiscalCustomerSnapshot(invoice.fiscalCustomerSnapshot)?.name ??
+          invoice.customer?.name ??
+          'Consumidor final',
         status: invoice.status,
         total: this.decimalToNumber(invoice.total),
         cashierName: invoice.issuedBy?.name ?? null,
@@ -617,45 +660,7 @@ export class DashboardService {
         invoiceNumber: log.invoice?.invoiceNumber ?? null,
         createdAt: log.createdAt,
       })),
-      fiscalSequenceAlerts: fiscalSequences
-        .filter((sequence, index, allSequences) =>
-          sequence.status === FiscalSequenceStatus.ACTIVE ||
-          !allSequences.some(
-            (candidate) =>
-              candidate.documentType === sequence.documentType &&
-              candidate.status === FiscalSequenceStatus.ACTIVE,
-          ) &&
-            allSequences.findIndex(
-              (candidate) => candidate.documentType === sequence.documentType,
-            ) === index,
-        )
-        .map((sequence) => {
-          const total = sequence.endNumber - sequence.startNumber + 1;
-          const remaining = Math.max(sequence.endNumber - sequence.nextNumber + 1, 0);
-          const threshold = Math.max(25, Math.ceil(total * 0.1));
-          const expired =
-            sequence.status === FiscalSequenceStatus.EXPIRED ||
-            (sequence.validUntil !== null && sequence.validUntil < now);
-          const exhausted = sequence.status === FiscalSequenceStatus.EXHAUSTED || remaining === 0;
-
-          return {
-            id: sequence.id,
-            documentType: sequence.documentType,
-            prefix: sequence.prefix,
-            nextNumber: sequence.nextNumber,
-            endNumber: sequence.endNumber,
-            remaining,
-            threshold,
-            validUntil: sequence.validUntil,
-            status: sequence.status,
-            severity: expired || exhausted || remaining <= Math.max(5, Math.ceil(total * 0.02))
-              ? 'critical'
-              : 'warning',
-            expired,
-            exhausted,
-          };
-        })
-        .filter((sequence) => sequence.expired || sequence.exhausted || sequence.remaining <= sequence.threshold),
+      fiscalSequenceAlerts: this.buildFiscalSequenceAlerts(fiscalSequences, currentFiscalDate),
       employeeSummary: {
         activeEmployees,
         openCashSessions,
@@ -687,7 +692,67 @@ export class DashboardService {
     };
   }
 
-  async getProductSales(tenantId: string) {
+  async getOperationalAlerts(tenantId: string) {
+    const currentFiscalDate = new Date(`${businessDateKey(new Date())}T00:00:00.000Z`);
+    const [pendingInvoices, openCashSessions, productsForStock, fiscalSequences] =
+      await Promise.all([
+        this.prisma.invoice.count({
+          where: {
+            tenantId,
+            status: { in: pendingInvoiceStatuses },
+          },
+        }),
+        this.prisma.cashSession.count({
+          where: {
+            tenantId,
+            status: CashSessionStatus.OPEN,
+          },
+        }),
+        this.prisma.product.findMany({
+          where: {
+            tenantId,
+            status: ProductStatus.ACTIVE,
+            trackInventory: true,
+          },
+          select: {
+            stock: true,
+            reservedStock: true,
+            minStock: true,
+          },
+        }),
+        this.prisma.fiscalSequence.findMany({
+          where: {
+            tenantId,
+            documentType: { in: [...localFiscalDocumentTypes] },
+          },
+          orderBy: [{ documentType: 'asc' }, { createdAt: 'desc' }],
+        }),
+      ]);
+
+    return {
+      pendingInvoices,
+      lowStockProducts: productsForStock.filter(
+        (product) => product.stock - product.reservedStock <= product.minStock,
+      ).length,
+      openCashSessions,
+      fiscalSequenceAlerts: this.buildFiscalSequenceAlerts(fiscalSequences, currentFiscalDate),
+    };
+  }
+
+  async getProductSales(tenantId: string, query: ProductSalesQueryDto = {}) {
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+
+    if (from && to && from >= to) {
+      throw new BadRequestException('The product sales start date must precede its end date.');
+    }
+
+    const saleDateRange = {
+      ...(from ? { gte: from } : {}),
+      ...(to ? { lt: to } : {}),
+    };
+    const hasDateRange = Boolean(from || to);
+
     const [products, invoiceItems] = await Promise.all([
       this.prisma.product.findMany({
         where: {
@@ -705,6 +770,11 @@ export class DashboardService {
           invoice: {
             tenantId,
             status: { in: revenueStatuses },
+            ...(hasDateRange
+              ? {
+                  OR: [{ issuedAt: saleDateRange }, { issuedAt: null, createdAt: saleDateRange }],
+                }
+              : {}),
           },
         },
         select: {
@@ -726,12 +796,107 @@ export class DashboardService {
 
     return {
       generatedAt: new Date(),
+      range: {
+        from: from?.toISOString() ?? null,
+        to: to?.toISOString() ?? null,
+      },
       productCount: products.length,
       productsWithSales: ranking.mostSold.filter((product) => product.quantitySold > 0).length,
-      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0).length,
+      productsWithoutSales: ranking.leastSold.filter((product) => product.quantitySold === 0)
+        .length,
       mostSold: ranking.mostSold,
       leastSold: ranking.leastSold,
     };
+  }
+
+  private buildFiscalSequenceAlerts(
+    sequences: FiscalSequenceAlertSource[],
+    currentFiscalDate: Date,
+  ): FiscalSequenceAlert[] {
+    return localFiscalDocumentTypes.flatMap<FiscalSequenceAlert>((documentType) => {
+      const candidates = sequences
+        .filter((sequence) => sequence.documentType === documentType)
+        .sort((first, second) => second.createdAt.getTime() - first.createdAt.getTime());
+      const isEligible = (sequence: FiscalSequenceAlertSource) =>
+        sequence.nextNumber <= sequence.endNumber &&
+        (!sequence.validUntil || sequence.validUntil >= currentFiscalDate);
+      const queued = candidates.filter(
+        (sequence) => sequence.status === FiscalSequenceStatus.INACTIVE && isEligible(sequence),
+      );
+      const active = candidates.find(
+        (sequence) => sequence.status === FiscalSequenceStatus.ACTIVE && isEligible(sequence),
+      );
+
+      if (active) {
+        const remaining = Math.max(active.endNumber - active.nextNumber + 1, 0);
+        const authorizedCount = active.endNumber - active.startNumber + 1;
+        const alertThreshold = this.fiscalSequenceAlertThreshold(authorizedCount);
+
+        if (remaining > alertThreshold) {
+          return [];
+        }
+
+        const criticalThreshold = Math.min(
+          alertThreshold,
+          Math.max(2, Math.ceil(authorizedCount * 0.05)),
+        );
+
+        return [
+          {
+            id: active.id,
+            documentType,
+            prefix: active.prefix,
+            status: FiscalSequenceStatus.ACTIVE,
+            startNumber: active.startNumber,
+            nextNumber: active.nextNumber,
+            endNumber: active.endNumber,
+            remaining,
+            authorizedCount,
+            alertThreshold,
+            severity: remaining <= criticalThreshold ? ('CRITICAL' as const) : ('WARNING' as const),
+            validUntil: active.validUntil,
+            hasQueuedReplacement: queued.length > 0,
+          },
+        ];
+      }
+
+      if (queued.length) {
+        return [];
+      }
+
+      const latest = candidates[0];
+      const prefix = documentType === InvoiceDocumentType.CONSUMER_02 ? 'B02' : 'B01';
+      const status = !latest
+        ? ('MISSING' as const)
+        : latest.validUntil && latest.validUntil < currentFiscalDate
+          ? FiscalSequenceStatus.EXPIRED
+          : latest.nextNumber > latest.endNumber
+            ? FiscalSequenceStatus.EXHAUSTED
+            : latest.status;
+      const authorizedCount = latest ? latest.endNumber - latest.startNumber + 1 : 0;
+
+      return [
+        {
+          id: latest?.id ?? `missing-${documentType}`,
+          documentType,
+          prefix: latest?.prefix ?? prefix,
+          status,
+          startNumber: latest?.startNumber ?? 0,
+          nextNumber: latest?.nextNumber ?? 0,
+          endNumber: latest?.endNumber ?? 0,
+          remaining: latest ? Math.max(latest.endNumber - latest.nextNumber + 1, 0) : 0,
+          authorizedCount,
+          alertThreshold: this.fiscalSequenceAlertThreshold(authorizedCount),
+          severity: 'CRITICAL' as const,
+          validUntil: latest?.validUntil ?? null,
+          hasQueuedReplacement: false,
+        },
+      ];
+    });
+  }
+
+  private fiscalSequenceAlertThreshold(authorizedCount: number) {
+    return Math.floor(Math.max(authorizedCount, 0) * 0.2);
   }
 
   private buildSalesSeries(
@@ -847,6 +1012,7 @@ export class DashboardService {
         sku: product.sku,
         brand: product.brand,
         unit: product.unit,
+        categoryId: product.category?.id ?? null,
         categoryName: product.category?.name ?? 'Sin categoria',
         currentPrice: this.decimalToNumber(product.price),
         quantitySold: aggregate?.quantitySold ?? 0,
@@ -859,11 +1025,19 @@ export class DashboardService {
     return {
       mostSold: [...ranking].sort((first, second) => {
         const quantityDiff = second.quantitySold - first.quantitySold;
-        return quantityDiff || second.grossAmount - first.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          second.grossAmount - first.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
       leastSold: [...ranking].sort((first, second) => {
         const quantityDiff = first.quantitySold - second.quantitySold;
-        return quantityDiff || first.grossAmount - second.grossAmount || first.name.localeCompare(second.name);
+        return (
+          quantityDiff ||
+          first.grossAmount - second.grossAmount ||
+          first.name.localeCompare(second.name)
+        );
       }),
     };
   }
@@ -908,10 +1082,7 @@ export class DashboardService {
         overdueBalance += balance;
       } else if (dueDateKey === boundaries.todayKey) {
         dueTodayCount += 1;
-      } else if (
-        dueDateKey >= boundaries.tomorrowKey &&
-        dueDateKey < boundaries.dueSoonEndKey
-      ) {
+      } else if (dueDateKey >= boundaries.tomorrowKey && dueDateKey < boundaries.dueSoonEndKey) {
         dueSoonCount += 1;
       }
     }

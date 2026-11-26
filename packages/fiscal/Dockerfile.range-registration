@@ -1,0 +1,19 @@
+FROM node:22-bookworm-slim AS dependencies
+RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/fiscal/package.json ./packages/fiscal/package.json
+RUN pnpm install --filter @corestack/fiscal --frozen-lockfile --ignore-scripts
+
+FROM dependencies AS production-dependencies
+RUN pnpm --filter @corestack/fiscal --prod deploy /runtime
+
+FROM node:22-bookworm-slim AS runtime
+WORKDIR /app/fiscal
+COPY --from=production-dependencies --chown=10003:4101 /runtime/node_modules ./node_modules
+COPY --chown=10003:4101 packages/fiscal/package.json ./
+COPY --chown=10003:4101 packages/fiscal/src ./src
+USER 10003:4101
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+  CMD ["node", "--experimental-strip-types", "src/authorized-range-health.ts"]
+CMD ["node", "--experimental-strip-types", "src/authorized-range-main.ts"]

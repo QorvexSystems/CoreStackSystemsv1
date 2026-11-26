@@ -1,0 +1,8 @@
+FROM corestack/rivnu-web:cashier-print-discard-20261112 AS web
+USER root
+COPY --chown=node:node apps/web/components/operations/pos/pos-payment-panel.tsx /app/apps/web/components/operations/pos/pos-payment-panel.tsx
+USER node
+WORKDIR /app
+RUN cd apps/web && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

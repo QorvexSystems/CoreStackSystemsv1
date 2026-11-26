@@ -1,11 +1,9 @@
-﻿import {
+import {
   BarcodeType,
   CashMovementType,
   CashSessionStatus,
   CustomerStatus,
   DocumentType,
-  ElectronicDocumentProvider,
-  ElectronicDocumentStatus,
   EmployeeLogAction,
   EmployeeStatus,
   FiscalSequenceStatus,
@@ -32,7 +30,7 @@ function assertSeedAllowed() {
     throw new Error(
       [
         'Refusing to run the development seed in production.',
-        'This seed deletes existing data before recreating the CoreStack/ALLPA demo dataset.',
+        'This seed deletes existing data before recreating the CoreStack/RIVNU demo dataset.',
         'Set ALLOW_PRODUCTION_SEED=true only for an intentional staging/demo reseed.',
       ].join(' '),
     );
@@ -86,6 +84,11 @@ function getInvoiceAmounts(lines: SeedLine[]) {
 }
 
 async function main() {
+  // Approval requests and overrides reference users with RESTRICT because
+  // their audit trail must survive normal user lifecycle operations. A
+  // destructive demo reseed must explicitly clear them before users/tenants.
+  await prisma.taxIdentityApprovalRequest.deleteMany();
+  await prisma.taxIdentityOverride.deleteMany();
   await prisma.importRowError.deleteMany();
   await prisma.importBatch.deleteMany();
   await prisma.employeeActivityLog.deleteMany();
@@ -133,23 +136,23 @@ async function main() {
     },
   });
 
-  const allpaTenant = await prisma.tenant.create({
+  const rivnuTenant = await prisma.tenant.create({
     data: {
-      name: 'ALLPA',
-      commercialName: 'ALLPA',
-      legalName: 'ALLPA',
-      slug: 'allpa',
+      name: 'Ferreteria RIVNU',
+      commercialName: 'Ferreteria RIVNU',
+      legalName: 'Ferreteria RIVNU SRL',
+      slug: 'ferreteria-rivnu',
       rnc: '131000000',
-      email: 'lisbeth@allpa.local',
+      email: 'admin@rivnu.local',
       phone: '809-555-0100',
       address: 'Av. Principal 102, Santo Domingo, Republica Dominicana',
       branding: {
         create: {
-          logoUrl: '/brand/allpa-logo.png',
+          logoUrl: '/tenants/Ferreteria_RIVNU.jpeg',
           primaryColor: '#111111',
-          accentColor: '#ffffff',
-          loginTitle: 'ALLPA',
-          loginSubtitle: 'EXHIBIDORES, EMPAQUES Y TIPS',
+          accentColor: '#f36c10',
+          loginTitle: 'Ferreteria RIVNU',
+          loginSubtitle: 'Acceso privado al POS, facturacion e inventario.',
         },
       },
     },
@@ -176,13 +179,13 @@ async function main() {
 
   const admin = await prisma.user.create({
     data: {
-      email: 'lisbeth@allpa.local',
-      name: 'Lisbeth - ALLPA',
+      email: 'admin@rivnu.local',
+      name: 'Administrador RIVNU',
       phone: '809-555-0101',
       passwordHash,
       memberships: {
         create: {
-          tenantId: allpaTenant.id,
+          tenantId: rivnuTenant.id,
           role: Role.ADMIN,
           canUsePos: false,
           canOpenCashSession: false,
@@ -201,8 +204,8 @@ async function main() {
       },
       employeeProfiles: {
         create: {
-          tenantId: allpaTenant.id,
-          employeeCode: 'ALL-ADM-001',
+          tenantId: rivnuTenant.id,
+          employeeCode: 'RIV-ADM-001',
           jobTitle: 'Administrador general',
           hireDate: new Date('2025-02-01T00:00:00.000Z'),
           documentType: DocumentType.CEDULA,
@@ -215,13 +218,13 @@ async function main() {
 
   const cashier = await prisma.user.create({
     data: {
-      email: 'cajero@allpa.local',
-      name: 'Cajero ALLPA',
+      email: 'cajero@rivnu.local',
+      name: 'Cajero RIVNU',
       phone: '809-555-0102',
       passwordHash,
       memberships: {
         create: {
-          tenantId: allpaTenant.id,
+          tenantId: rivnuTenant.id,
           role: Role.CASHIER,
           canUsePos: true,
           canOpenCashSession: true,
@@ -232,8 +235,8 @@ async function main() {
       },
       employeeProfiles: {
         create: {
-          tenantId: allpaTenant.id,
-          employeeCode: 'ALL-CAJ-001',
+          tenantId: rivnuTenant.id,
+          employeeCode: 'RIV-CAJ-001',
           jobTitle: 'Cajero principal',
           hireDate: new Date('2025-05-15T00:00:00.000Z'),
           documentType: DocumentType.CEDULA,
@@ -246,21 +249,21 @@ async function main() {
 
   const orderTaker = await prisma.user.create({
     data: {
-      email: 'ordenanza@allpa.local',
-      name: 'Ordenanza ALLPA',
+      email: 'ordenanza@rivnu.local',
+      name: 'Ordenanza RIVNU',
       phone: '809-555-0103',
       passwordHash,
       memberships: {
         create: {
-          tenantId: allpaTenant.id,
+          tenantId: rivnuTenant.id,
           role: Role.ORDER_TAKER,
           canTakeOrders: true,
         },
       },
       employeeProfiles: {
         create: {
-          tenantId: allpaTenant.id,
-          employeeCode: 'ALL-ORD-001',
+          tenantId: rivnuTenant.id,
+          employeeCode: 'RIV-ORD-001',
           jobTitle: 'Ordenanza / toma de ordenes',
           hireDate: new Date('2025-06-01T00:00:00.000Z'),
           documentType: DocumentType.CEDULA,
@@ -286,7 +289,7 @@ async function main() {
     ].map((name) =>
       prisma.productCategory.create({
         data: {
-          tenantId: allpaTenant.id,
+          tenantId: rivnuTenant.id,
           name,
           description: `Categoria operativa de ${name.toLowerCase()}.`,
         },
@@ -312,7 +315,7 @@ async function main() {
     {
       category: 'Materiales de construccion',
       name: 'Cemento gris 42.5 kg',
-      sku: 'ALL-CEM-425',
+      sku: 'RIV-CEM-425',
       barcode: '7461123450012',
       barcodeType: BarcodeType.EAN13,
       brand: 'Cibao',
@@ -325,7 +328,7 @@ async function main() {
     {
       category: 'Plomeria',
       name: 'Tuberia PVC 1/2 pulg x 19 pies',
-      sku: 'ALL-PVC-012',
+      sku: 'RIV-PVC-012',
       barcode: '7461123450029',
       barcodeType: BarcodeType.EAN13,
       brand: 'PlastiDom',
@@ -338,8 +341,8 @@ async function main() {
     {
       category: 'Electricidad',
       name: 'Cable THHN #12 rojo metro',
-      sku: 'ALL-CBL-12R',
-      barcode: 'QV-ALL-000003',
+      sku: 'RIV-CBL-12R',
+      barcode: 'QV-RIV-000003',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
       brand: 'EletroMax',
@@ -352,7 +355,7 @@ async function main() {
     {
       category: 'Pinturas',
       name: 'Pintura acrilica blanca galon',
-      sku: 'ALL-PNT-BLA-G',
+      sku: 'RIV-PNT-BLA-G',
       barcode: '7461123450043',
       barcodeType: BarcodeType.EAN13,
       brand: 'Tropical',
@@ -365,7 +368,7 @@ async function main() {
     {
       category: 'Herramientas manuales',
       name: 'Martillo carpintero 16 oz',
-      sku: 'ALL-HER-MAR16',
+      sku: 'RIV-HER-MAR16',
       barcode: '7461123450050',
       barcodeType: BarcodeType.EAN13,
       brand: 'Truper',
@@ -378,8 +381,8 @@ async function main() {
     {
       category: 'Herramientas electricas',
       name: 'Taladro percutor 1/2 pulg 650W',
-      sku: 'ALL-TAL-650',
-      barcode: 'QV-ALL-000006',
+      sku: 'RIV-TAL-650',
+      barcode: 'QV-RIV-000006',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
       brand: 'Bosch',
@@ -392,11 +395,11 @@ async function main() {
     {
       category: 'Tornilleria',
       name: 'Tornillo drywall 1 pulg libra',
-      sku: 'ALL-TOR-DW1',
-      barcode: 'QV-ALL-000007',
+      sku: 'RIV-TOR-DW1',
+      barcode: 'QV-RIV-000007',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
-      brand: 'ALLPA',
+      brand: 'RIVNU',
       unit: ProductUnit.POUND,
       price: 145,
       cost: 92,
@@ -406,7 +409,7 @@ async function main() {
     {
       category: 'Seguridad industrial',
       name: 'Guantes nitrilo trabajo pesado',
-      sku: 'ALL-SEG-GUA-N',
+      sku: 'RIV-SEG-GUA-N',
       barcode: '7461123450081',
       barcodeType: BarcodeType.EAN13,
       brand: 'SafePro',
@@ -419,7 +422,7 @@ async function main() {
     {
       category: 'Jardineria',
       name: 'Manguera reforzada 1/2 pulg 50 pies',
-      sku: 'ALL-JAR-MAN50',
+      sku: 'RIV-JAR-MAN50',
       barcode: '7461123450098',
       barcodeType: BarcodeType.EAN13,
       brand: 'GardenPro',
@@ -432,7 +435,7 @@ async function main() {
     {
       category: 'Ferreteria general',
       name: 'Silicon transparente 10 oz',
-      sku: 'ALL-SIL-TRA10',
+      sku: 'RIV-SIL-TRA10',
       barcode: '7461123450104',
       barcodeType: BarcodeType.EAN13,
       brand: 'Pegaflex',
@@ -445,7 +448,7 @@ async function main() {
     {
       category: 'Electricidad',
       name: 'Breaker 20A 1 polo',
-      sku: 'ALL-BRK-20A1',
+      sku: 'RIV-BRK-20A1',
       barcode: '7461123450111',
       barcodeType: BarcodeType.EAN13,
       brand: 'Square D',
@@ -458,8 +461,8 @@ async function main() {
     {
       category: 'Plomeria',
       name: 'Llave angular 1/2 pulg cromada',
-      sku: 'ALL-LLA-ANG12',
-      barcode: 'QV-ALL-000012',
+      sku: 'RIV-LLA-ANG12',
+      barcode: 'QV-RIV-000012',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
       brand: 'Helvex',
@@ -472,8 +475,8 @@ async function main() {
     {
       category: 'Materiales de construccion',
       name: 'Varilla 3/8 pulg x 20 pies',
-      sku: 'ALL-VAR-38',
-      barcode: 'QV-ALL-000013',
+      sku: 'RIV-VAR-38',
+      barcode: 'QV-RIV-000013',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
       brand: 'Metaldom',
@@ -486,7 +489,7 @@ async function main() {
     {
       category: 'Pinturas',
       name: 'Brocha profesional 3 pulg',
-      sku: 'ALL-BRO-3PRO',
+      sku: 'RIV-BRO-3PRO',
       barcode: '7461123450142',
       barcodeType: BarcodeType.EAN13,
       brand: 'Atlas',
@@ -499,7 +502,7 @@ async function main() {
     {
       category: 'Herramientas manuales',
       name: 'Cinta metrica 5 metros',
-      sku: 'ALL-CIN-5M',
+      sku: 'RIV-CIN-5M',
       barcode: '7461123450159',
       barcodeType: BarcodeType.EAN13,
       brand: 'Stanley',
@@ -512,7 +515,7 @@ async function main() {
     {
       category: 'Seguridad industrial',
       name: 'Casco seguridad blanco',
-      sku: 'ALL-CAS-BLA',
+      sku: 'RIV-CAS-BLA',
       barcode: '7461123450166',
       barcodeType: BarcodeType.EAN13,
       brand: 'SafePro',
@@ -525,7 +528,7 @@ async function main() {
     {
       category: 'Herramientas electricas',
       name: 'Disco corte metal 4 1/2 pulg',
-      sku: 'ALL-DIS-MET45',
+      sku: 'RIV-DIS-MET45',
       barcode: '7461123450173',
       barcodeType: BarcodeType.EAN13,
       brand: 'Norton',
@@ -538,8 +541,8 @@ async function main() {
     {
       category: 'Ferreteria general',
       name: 'Cerradura pomo dormitorio',
-      sku: 'ALL-CER-DOR',
-      barcode: 'QV-ALL-000018',
+      sku: 'RIV-CER-DOR',
+      barcode: 'QV-RIV-000018',
       barcodeType: BarcodeType.INTERNAL_CODE128,
       generatedBarcode: true,
       brand: 'Yale',
@@ -555,7 +558,7 @@ async function main() {
     productRows.map((row) =>
       prisma.product.create({
         data: {
-          tenantId: allpaTenant.id,
+          tenantId: rivnuTenant.id,
           categoryId: categoryByName.get(row.category),
           name: row.name,
           sku: row.sku,
@@ -563,7 +566,7 @@ async function main() {
           barcodeType: row.barcodeType,
           generatedBarcode: row.generatedBarcode ?? false,
           barcodeCreatedById: row.generatedBarcode ? admin.id : null,
-          description: `${row.name} para ventas POS e inventario de ALLPA.`,
+          description: `${row.name} para ventas POS e inventario de Ferreteria RIVNU.`,
           imageUrl: productImageByCategory.get(row.category),
           brand: row.brand,
           unit: row.unit,
@@ -584,15 +587,15 @@ async function main() {
 
   await prisma.inventoryMovement.createMany({
     data: products.map((product) => ({
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       productId: product.id,
       type: InventoryMovementType.INITIAL_STOCK,
       quantity: product.stock,
       previousStock: 0,
       newStock: product.stock,
       unitCost: product.cost,
-      reason: 'Inventario inicial ALLPA',
-      reference: 'SEED-ALLPA-INITIAL',
+      reason: 'Inventario inicial RIVNU',
+      reference: 'SEED-RIVNU-INITIAL',
       createdById: admin.id,
       createdAt: new Date('2026-06-01T13:00:00.000Z'),
     })),
@@ -601,7 +604,7 @@ async function main() {
   const customers = await Promise.all([
     prisma.customer.create({
       data: {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         name: 'Constructora Duarte SRL',
         documentType: DocumentType.RNC,
         documentNumber: '131123456',
@@ -612,7 +615,7 @@ async function main() {
     }),
     prisma.customer.create({
       data: {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         name: 'Servicios Electricos del Norte',
         documentType: DocumentType.RNC,
         documentNumber: '131654321',
@@ -623,7 +626,7 @@ async function main() {
     }),
     prisma.customer.create({
       data: {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         name: 'Cliente Consumidor Final',
         documentType: DocumentType.CONSUMER_FINAL,
         status: CustomerStatus.ACTIVE,
@@ -633,15 +636,15 @@ async function main() {
 
   const cashRegister = await prisma.cashRegister.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       name: 'Caja Principal',
-      location: 'Mostrador ALLPA',
+      location: 'Mostrador RIVNU',
     },
   });
 
   const cashSession = await prisma.cashSession.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       cashRegisterId: cashRegister.id,
       openedById: cashier.id,
       status: CashSessionStatus.OPEN,
@@ -652,62 +655,84 @@ async function main() {
 
   await prisma.cashMovement.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       cashSessionId: cashSession.id,
       userId: cashier.id,
       type: CashMovementType.OPENING,
       amount: money(5000),
       method: PaymentMethod.CASH,
       reason: 'Apertura de caja',
-      reference: 'CAJA-ALL-001',
+      reference: 'CAJA-RIV-001',
       createdAt: new Date('2026-06-17T12:00:00.000Z'),
     },
   });
 
-  await prisma.fiscalSequence.createMany({
-    data: [
-      {
-        tenantId: allpaTenant.id,
-        documentType: InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
-        prefix: 'E32',
+  const seedB02AuthorizationNumber = 'SEED-ONLY-B02-0001';
+  const seedB01AuthorizationNumber = 'SEED-ONLY-B01-0001';
+  const seedB01ValidUntil = new Date('2026-12-31T00:00:00.000Z');
+  const fiscalIssuerSnapshot = {
+    rnc: rivnuTenant.rnc,
+    legalName: rivnuTenant.legalName,
+    commercialName: rivnuTenant.commercialName,
+    address: rivnuTenant.address,
+    phone: rivnuTenant.phone,
+    email: rivnuTenant.email,
+    logoUrl: '/tenants/Ferreteria_RIVNU.jpeg',
+    pointOfSale: cashRegister.name,
+    pointOfSaleLocation: cashRegister.location,
+  };
+
+  const [consumerSequence, fiscalCreditSequence] = await Promise.all([
+    prisma.fiscalSequence.create({
+      data: {
+        tenantId: rivnuTenant.id,
+        documentType: InvoiceDocumentType.CONSUMER_02,
+        prefix: 'B02',
         startNumber: 1,
-        endNumber: 25,
+        endNumber: 100,
         nextNumber: 3,
-        validUntil: new Date('2027-12-31T23:59:59.000Z'),
+        authorizationNumber: seedB02AuthorizationNumber,
+        issuerTaxId: rivnuTenant.rnc,
+        validUntil: null,
         status: FiscalSequenceStatus.ACTIVE,
       },
-      {
-        tenantId: allpaTenant.id,
-        documentType: InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
-        prefix: 'E31',
+    }),
+    prisma.fiscalSequence.create({
+      data: {
+        tenantId: rivnuTenant.id,
+        documentType: InvoiceDocumentType.FISCAL_CREDIT_01,
+        prefix: 'B01',
         startNumber: 1,
-        endNumber: 2500,
+        endNumber: 100,
         nextNumber: 2,
-        validUntil: new Date('2027-12-31T23:59:59.000Z'),
+        authorizationNumber: seedB01AuthorizationNumber,
+        issuerTaxId: rivnuTenant.rnc,
+        validUntil: seedB01ValidUntil,
         status: FiscalSequenceStatus.ACTIVE,
       },
-    ],
-  });
+    }),
+  ]);
 
   const bySku = new Map(products.map((product) => [product.sku, product]));
+  const productsById = new Map(products.map((product) => [product.id, product]));
   const now = new Date('2026-06-17T15:30:00.000Z');
   const yesterday = new Date('2026-06-16T16:45:00.000Z');
   const lastWeek = new Date('2026-06-10T14:20:00.000Z');
 
   const pendingOrderAmounts = getInvoiceAmounts([
     {
-      productId: bySku.get('ALL-CIN-5M')!.id,
-      sku: 'ALL-CIN-5M',
-      barcode: bySku.get('ALL-CIN-5M')!.barcode,
-      description: bySku.get('ALL-CIN-5M')!.name,
+      productId: bySku.get('RIV-CIN-5M')!.id,
+      sku: 'RIV-CIN-5M',
+      barcode: bySku.get('RIV-CIN-5M')!.barcode,
+      description: bySku.get('RIV-CIN-5M')!.name,
       quantity: 1,
       unitPrice: 235,
     },
     {
-      productId: bySku.get('ALL-DIS-MET45')!.id,
-      sku: 'ALL-DIS-MET45',
-      barcode: bySku.get('ALL-DIS-MET45')!.barcode,
-      description: bySku.get('ALL-DIS-MET45')!.name,
+      productId: bySku.get('RIV-DIS-MET45')!.id,
+      sku: 'RIV-DIS-MET45',
+      barcode: bySku.get('RIV-DIS-MET45')!.barcode,
+      description: bySku.get('RIV-DIS-MET45')!.name,
       quantity: 3,
       unitPrice: 75,
     },
@@ -715,7 +740,7 @@ async function main() {
 
   const pendingSalesOrder = await prisma.salesOrder.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       customerId: customers[2].id,
       orderNumber: 'ORD-20260617-0001',
       status: SalesOrderStatus.SENT_TO_CASHIER,
@@ -732,8 +757,10 @@ async function main() {
           barcode: line.barcode,
           description: line.description,
           quantity: line.quantity,
+          unit: bySku.get(line.sku!)?.unit ?? ProductUnit.UNIT,
           reservedQuantity: line.quantity,
           unitPrice: line.unitPrice,
+          taxCategory: bySku.get(line.sku!)?.taxCategory ?? TaxCategory.ITBIS_18,
           taxRate: line.taxRate,
           taxTotal: line.taxTotal,
           subtotal: line.subtotal,
@@ -756,18 +783,18 @@ async function main() {
 
   const paidAmounts = getInvoiceAmounts([
     {
-      productId: bySku.get('ALL-CEM-425')!.id,
-      sku: 'ALL-CEM-425',
-      barcode: bySku.get('ALL-CEM-425')!.barcode,
-      description: bySku.get('ALL-CEM-425')!.name,
+      productId: bySku.get('RIV-CEM-425')!.id,
+      sku: 'RIV-CEM-425',
+      barcode: bySku.get('RIV-CEM-425')!.barcode,
+      description: bySku.get('RIV-CEM-425')!.name,
       quantity: 4,
       unitPrice: 465,
     },
     {
-      productId: bySku.get('ALL-TOR-DW1')!.id,
-      sku: 'ALL-TOR-DW1',
-      barcode: bySku.get('ALL-TOR-DW1')!.barcode,
-      description: bySku.get('ALL-TOR-DW1')!.name,
+      productId: bySku.get('RIV-TOR-DW1')!.id,
+      sku: 'RIV-TOR-DW1',
+      barcode: bySku.get('RIV-TOR-DW1')!.barcode,
+      description: bySku.get('RIV-TOR-DW1')!.name,
       quantity: 2,
       unitPrice: 145,
     },
@@ -775,14 +802,19 @@ async function main() {
 
   const paidInvoice = await prisma.invoice.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       customerId: customers[2].id,
-      documentType: InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
-      invoiceNumber: 'ALL-BA0001',
-      ncf: 'BA0001',
-      eNcf: 'BA0001',
+      documentType: InvoiceDocumentType.CONSUMER_02,
+      invoiceNumber: 'RIV-B0200000001',
+      ncf: 'B0200000001',
+      eNcf: null,
+      fiscalSequenceId: consumerSequence.id,
+      fiscalAuthorizationNumber: seedB02AuthorizationNumber,
+      fiscalValidUntil: null,
+      fiscalIssuerSnapshot,
+      fiscalCustomerSnapshot: Prisma.JsonNull,
       status: InvoiceStatus.PAID,
-      fiscalStatus: InvoiceFiscalStatus.SIGNED,
+      fiscalStatus: InvoiceFiscalStatus.LOCAL_ISSUED,
       subtotal: paidAmounts.subtotal,
       taxTotal: paidAmounts.taxTotal,
       discountTotal: zero,
@@ -801,7 +833,9 @@ async function main() {
           barcode: line.barcode,
           description: line.description,
           quantity: line.quantity,
+          unit: productsById.get(line.productId)?.unit ?? ProductUnit.UNIT,
           unitPrice: line.unitPrice,
+          taxCategory: productsById.get(line.productId)?.taxCategory ?? TaxCategory.ITBIS_18,
           taxRate: line.taxRate,
           taxTotal: line.taxTotal,
           discountTotal: zero,
@@ -814,7 +848,7 @@ async function main() {
 
   await prisma.payment.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       invoiceId: paidInvoice.id,
       method: PaymentMethod.CASH,
       amount: paidAmounts.total,
@@ -827,7 +861,7 @@ async function main() {
 
   await prisma.cashMovement.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       cashSessionId: cashSession.id,
       userId: cashier.id,
       type: CashMovementType.SALE_PAYMENT,
@@ -842,18 +876,18 @@ async function main() {
 
   const pendingAmounts = getInvoiceAmounts([
     {
-      productId: bySku.get('ALL-TAL-650')!.id,
-      sku: 'ALL-TAL-650',
-      barcode: bySku.get('ALL-TAL-650')!.barcode,
-      description: bySku.get('ALL-TAL-650')!.name,
+      productId: bySku.get('RIV-TAL-650')!.id,
+      sku: 'RIV-TAL-650',
+      barcode: bySku.get('RIV-TAL-650')!.barcode,
+      description: bySku.get('RIV-TAL-650')!.name,
       quantity: 1,
       unitPrice: 3850,
     },
     {
-      productId: bySku.get('ALL-BRK-20A1')!.id,
-      sku: 'ALL-BRK-20A1',
-      barcode: bySku.get('ALL-BRK-20A1')!.barcode,
-      description: bySku.get('ALL-BRK-20A1')!.name,
+      productId: bySku.get('RIV-BRK-20A1')!.id,
+      sku: 'RIV-BRK-20A1',
+      barcode: bySku.get('RIV-BRK-20A1')!.barcode,
+      description: bySku.get('RIV-BRK-20A1')!.name,
       quantity: 3,
       unitPrice: 395,
     },
@@ -861,14 +895,24 @@ async function main() {
 
   await prisma.invoice.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       customerId: customers[1].id,
-      documentType: InvoiceDocumentType.FISCAL_CREDIT_ELECTRONIC_31,
-      invoiceNumber: 'ALL-E3100000001',
-      ncf: null,
-      eNcf: 'E3100000001',
+      documentType: InvoiceDocumentType.FISCAL_CREDIT_01,
+      invoiceNumber: 'RIV-B0100000001',
+      ncf: 'B0100000001',
+      eNcf: null,
+      fiscalSequenceId: fiscalCreditSequence.id,
+      fiscalAuthorizationNumber: seedB01AuthorizationNumber,
+      fiscalValidUntil: seedB01ValidUntil,
+      fiscalIssuerSnapshot,
+      fiscalCustomerSnapshot: {
+        id: customers[1].id,
+        name: customers[1].name,
+        documentType: customers[1].documentType,
+        documentNumber: customers[1].documentNumber,
+      },
       status: InvoiceStatus.ISSUED,
-      fiscalStatus: InvoiceFiscalStatus.SIGNED,
+      fiscalStatus: InvoiceFiscalStatus.LOCAL_ISSUED,
       subtotal: pendingAmounts.subtotal,
       taxTotal: pendingAmounts.taxTotal,
       discountTotal: zero,
@@ -886,7 +930,9 @@ async function main() {
           barcode: line.barcode,
           description: line.description,
           quantity: line.quantity,
+          unit: productsById.get(line.productId)?.unit ?? ProductUnit.UNIT,
           unitPrice: line.unitPrice,
+          taxCategory: productsById.get(line.productId)?.taxCategory ?? TaxCategory.ITBIS_18,
           taxRate: line.taxRate,
           taxTotal: line.taxTotal,
           discountTotal: zero,
@@ -899,10 +945,10 @@ async function main() {
 
   const cancelledAmounts = getInvoiceAmounts([
     {
-      productId: bySku.get('ALL-PVC-012')!.id,
-      sku: 'ALL-PVC-012',
-      barcode: bySku.get('ALL-PVC-012')!.barcode,
-      description: bySku.get('ALL-PVC-012')!.name,
+      productId: bySku.get('RIV-PVC-012')!.id,
+      sku: 'RIV-PVC-012',
+      barcode: bySku.get('RIV-PVC-012')!.barcode,
+      description: bySku.get('RIV-PVC-012')!.name,
       quantity: 6,
       unitPrice: 95,
     },
@@ -910,12 +956,17 @@ async function main() {
 
   await prisma.invoice.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       customerId: customers[0].id,
-      documentType: InvoiceDocumentType.CONSUMER_ELECTRONIC_32,
-      invoiceNumber: 'ALL-BA0002',
-      ncf: 'BA0002',
-      eNcf: 'BA0002',
+      documentType: InvoiceDocumentType.CONSUMER_02,
+      invoiceNumber: 'RIV-B0200000002',
+      ncf: 'B0200000002',
+      eNcf: null,
+      fiscalSequenceId: consumerSequence.id,
+      fiscalAuthorizationNumber: seedB02AuthorizationNumber,
+      fiscalValidUntil: null,
+      fiscalIssuerSnapshot,
+      fiscalCustomerSnapshot: Prisma.JsonNull,
       status: InvoiceStatus.CANCELLED,
       fiscalStatus: InvoiceFiscalStatus.CANCELLED,
       subtotal: cancelledAmounts.subtotal,
@@ -934,7 +985,9 @@ async function main() {
           barcode: line.barcode,
           description: line.description,
           quantity: line.quantity,
+          unit: productsById.get(line.productId)?.unit ?? ProductUnit.UNIT,
           unitPrice: line.unitPrice,
+          taxCategory: productsById.get(line.productId)?.taxCategory ?? TaxCategory.ITBIS_18,
           taxRate: line.taxRate,
           taxTotal: line.taxTotal,
           discountTotal: zero,
@@ -945,24 +998,10 @@ async function main() {
     },
   });
 
-  await prisma.electronicDocument.createMany({
-    data: [
-      {
-        tenantId: allpaTenant.id,
-        invoiceId: paidInvoice.id,
-        provider: ElectronicDocumentProvider.DGII_DIRECT,
-        status: ElectronicDocumentStatus.SIGNED,
-        trackId: 'ALLPA-DEMO-TRACK-001',
-        requestPayload: { mode: 'demo', eNcf: paidInvoice.eNcf },
-        responsePayload: { mode: 'demo', status: 'SIGNED' },
-      },
-    ],
-  });
-
   await prisma.employeeActivityLog.createMany({
     data: [
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: orderTaker.id,
         action: EmployeeLogAction.CREATE_SALES_ORDER,
         entity: 'SalesOrder',
@@ -972,7 +1011,7 @@ async function main() {
         createdAt: new Date('2026-06-17T14:45:00.000Z'),
       },
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: orderTaker.id,
         action: EmployeeLogAction.SEND_SALES_ORDER_TO_CASHIER,
         entity: 'SalesOrder',
@@ -982,7 +1021,7 @@ async function main() {
         createdAt: new Date('2026-06-17T14:46:00.000Z'),
       },
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: cashier.id,
         cashSessionId: cashSession.id,
         action: EmployeeLogAction.OPEN_CASH_SESSION,
@@ -993,7 +1032,7 @@ async function main() {
         createdAt: new Date('2026-06-17T12:00:00.000Z'),
       },
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: cashier.id,
         cashSessionId: cashSession.id,
         action: EmployeeLogAction.CREATE_SALE,
@@ -1005,7 +1044,7 @@ async function main() {
         createdAt: now,
       },
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: cashier.id,
         cashSessionId: cashSession.id,
         action: EmployeeLogAction.ISSUE_INVOICE,
@@ -1013,16 +1052,16 @@ async function main() {
         entityId: paidInvoice.id,
         invoiceId: paidInvoice.id,
         amount: paidAmounts.total,
-        metadata: { eNcf: paidInvoice.eNcf },
+        metadata: { ncf: paidInvoice.ncf },
         createdAt: now,
       },
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: admin.id,
         action: EmployeeLogAction.ADD_PRODUCT,
         entity: 'Product',
-        entityId: bySku.get('ALL-TAL-650')!.id,
-        metadata: { sku: 'ALL-TAL-650', generatedBarcode: true },
+        entityId: bySku.get('RIV-TAL-650')!.id,
+        metadata: { sku: 'RIV-TAL-650', generatedBarcode: true },
         createdAt: new Date('2026-06-14T13:30:00.000Z'),
       },
     ],
@@ -1030,9 +1069,9 @@ async function main() {
 
   await prisma.importBatch.create({
     data: {
-      tenantId: allpaTenant.id,
+      tenantId: rivnuTenant.id,
       type: ImportType.PRODUCTS,
-      filename: 'plantilla-productos-allpa.xlsx',
+      filename: 'plantilla-productos-rivnu.xlsx',
       status: ImportStatus.DRAFT,
       totalRows: 0,
       createdById: admin.id,
@@ -1042,14 +1081,14 @@ async function main() {
   await prisma.auditLog.createMany({
     data: [
       {
-        tenantId: allpaTenant.id,
+        tenantId: rivnuTenant.id,
         userId: admin.id,
-        action: 'ALLPA_SEED_CREATED',
+        action: 'RIVNU_SEED_CREATED',
         entity: 'Tenant',
-        entityId: allpaTenant.id,
+        entityId: rivnuTenant.id,
         metadata: {
           source: 'development-seed',
-          tenant: 'ALLPA',
+          tenant: 'Ferreteria RIVNU',
           poweredBy: 'CoreStack',
         },
       },
@@ -1061,16 +1100,16 @@ async function main() {
         entityId: coreStackTenant.id,
         metadata: {
           source: 'development-seed',
-          note: 'CoreStack es proveedor/core, no tenant operativo de ALLPA.',
+          note: 'CoreStack es proveedor/core, no tenant operativo de RIVNU.',
         },
       },
     ],
   });
 
-  console.log(`Seed completed for tenant ${allpaTenant.name} (${allpaTenant.id})`);
-  console.log(`ALLPA admin login: lisbeth@allpa.local / ${demoPassword}`);
-  console.log(`ALLPA cashier login: cajero@allpa.local / ${demoPassword}`);
-  console.log(`ALLPA ordenanza login: ordenanza@allpa.local / ${demoPassword}`);
+  console.log(`Seed completed for tenant ${rivnuTenant.name} (${rivnuTenant.id})`);
+  console.log(`RIVNU admin login: admin@rivnu.local / ${demoPassword}`);
+  console.log(`RIVNU cashier login: cajero@rivnu.local / ${demoPassword}`);
+  console.log(`RIVNU ordenanza login: ordenanza@rivnu.local / ${demoPassword}`);
   console.log(`CoreStack platform login: superadmin@corestack.local / ${demoPassword}`);
 }
 

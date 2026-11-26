@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { EmployeeLogAction, Prisma, SalesOrderDestination } from '@qorvex/database';
 import { PrismaService } from '../../prisma/prisma.service';
+import { readFiscalCustomerSnapshot } from '../fiscal-documents/fiscal-document';
 import { OperationalLogCategory, OperationalLogsQueryDto } from './dto/operational-logs-query.dto';
 import {
   OperationalLog,
@@ -40,6 +41,7 @@ const safeMetadataKeys = [
   'amountReceived',
   'changeAmount',
   'documentType',
+  'ncf',
   'eNcf',
   'sourceDestination',
   'sourceStatus',
@@ -98,6 +100,7 @@ const operationalInvoiceSelect = {
   status: true,
   total: true,
   paymentMethod: true,
+  fiscalCustomerSnapshot: true,
   customer: {
     select: {
       id: true,
@@ -355,8 +358,9 @@ export class EmployeeLogsService {
         ? OperationalLogCategory.QUOTATION
         : OperationalLogCategory.ORDER_TAKING;
     const customerName =
-      order?.customer?.name ??
+      readFiscalCustomerSnapshot(invoice?.fiscalCustomerSnapshot)?.name ??
       order?.clientName ??
+      order?.customer?.name ??
       invoice?.customer?.name ??
       (metadataCustomerId ? customerById.get(metadataCustomerId) : undefined) ??
       readString(rawMetadata, 'clientName') ??

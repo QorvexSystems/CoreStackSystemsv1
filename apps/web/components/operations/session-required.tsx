@@ -3,7 +3,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getSession, type AuthSession } from '@/lib/auth-session';
-import { brand } from '@/lib/brand';
 
 export function useCurrentSession() {
   return getSession();
@@ -19,7 +18,7 @@ export function SessionRequired({ session }: { session: AuthSession | null }) {
       <CardHeader>
         <CardTitle>Sesion requerida</CardTitle>
         <CardDescription>
-          Inicia sesión como usuario autorizado de {brand.name} para consultar este módulo.
+          Inicia sesion como usuario autorizado de Ferreteria RIVNU para consultar este modulo.
         </CardDescription>
       </CardHeader>
       <CardContent>

@@ -1,0 +1,38 @@
+name: corestack-fiscal-range-registration
+services:
+  fiscal-range-registration:
+    image: ${FISCAL_RANGE_REGISTRATION_IMAGE:?Set a reviewed range registration image}
+    user: "10003:4101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: 0.25
+    mem_limit: 192m
+    memswap_limit: 192m
+    pids_limit: 48
+    ulimits:
+      core: { soft: 0, hard: 0 }
+      nofile: { soft: 512, hard: 512 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777
+    ports:
+      - "10.0.0.1:4083:8443"
+    volumes:
+      - /opt/corestack/fe/config/fiscal-range-registration.json:/run/config/fiscal-range-registration.json:ro
+      - /opt/corestack/fe/config/fiscal-production-activation.json:/run/config/fiscal-production-activation.json:ro
+      - /opt/corestack/fe/config/internal-root-2026.crt:/run/secrets/postgresql-ca.crt:ro
+      - /opt/corestack/secrets/rivnu-range-registration/postgresql.password:/run/secrets/postgresql-password:ro
+      - /opt/corestack/secrets/rivnu-range-registration/service.token:/run/secrets/fiscal_range_registration_token:ro
+      - /opt/corestack/fe/config/rivnu-range-registration.crt:/run/secrets/range-registration-server.crt:ro
+      - /opt/corestack/secrets/rivnu-range-registration/tls.key:/run/secrets/range-registration-server.key:ro
+      - /opt/corestack/fe/config/internal-root-2026.crt:/run/secrets/registration-ca.crt:ro
+    networks: [fiscal-network]
+    logging:
+      driver: local
+      options: { max-size: "5m", max-file: "3" }
+networks:
+  fiscal-network:
+    external: true

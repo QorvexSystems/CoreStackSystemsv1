@@ -1,0 +1,34 @@
+name: corestack-fiscal-worker
+services:
+  fiscal-worker:
+    image: ${FISCAL_WORKER_IMAGE:?Set a reviewed fiscal worker image}
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    cpus: 0.5
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    volumes:
+      - /opt/corestack/fe/config/fiscal-worker.json:/run/config/fiscal-worker.json:ro
+      - /opt/corestack/fe/config/internal-root-2026.crt:/run/secrets/postgresql-ca.crt:ro
+      - /opt/corestack/secrets/rivnu-fe-pre-postgresql.password:/run/secrets/postgresql-password:ro
+    networks: [fiscal-network]
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+networks:
+  fiscal-network:
+    external: true

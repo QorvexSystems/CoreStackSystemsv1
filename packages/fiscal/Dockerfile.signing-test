@@ -1,0 +1,7 @@
+# Synthetic/offline cryptographic tests only; not a production signer image.
+FROM corestack/fiscal-worker-test:local
+USER root
+RUN apt-get update && apt-get install --no-install-recommends --yes xmlsec1 openssl \
+    && rm -rf /var/lib/apt/lists/*
+USER node
+CMD ["node", "--experimental-strip-types", "--test", "test/signature-integration.ts"]

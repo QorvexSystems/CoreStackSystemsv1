@@ -1,7 +1,6 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsBoolean,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -14,8 +13,9 @@ import {
 import {
   CreditTermOption,
   DocumentType,
+  FiscalDocumentPurpose,
+  FiscalIssuanceMode,
   InitialPaymentOption,
-  ProductInventoryDestination,
   SalePaymentMode,
   SalesOrderDestination,
   SalesOrderPriceLevel,
@@ -32,16 +32,12 @@ export class SalesOrderItemDto {
 }
 
 export class CreateSalesOrderDto {
+  @IsOptional()
+  @IsEnum(FiscalIssuanceMode)
+  fiscalIssuanceMode?: FiscalIssuanceMode;
+
   @IsEnum(SalesOrderDestination)
   destination: SalesOrderDestination;
-
-  @IsOptional()
-  @IsEnum(ProductInventoryDestination)
-  inventorySource?: ProductInventoryDestination;
-
-  @IsOptional()
-  @IsBoolean()
-  electronicInvoiceRequested?: boolean;
 
   @IsOptional()
   @IsString()
@@ -59,6 +55,14 @@ export class CreateSalesOrderDto {
   @IsOptional()
   @IsEnum(SalePaymentMode)
   paymentMode?: SalePaymentMode;
+
+  @IsOptional()
+  @IsEnum(FiscalDocumentPurpose)
+  /**
+   * @deprecated Accepted temporarily for rolling-client compatibility. The
+   * order service deliberately ignores it: Caja confirms the fiscal purpose.
+   */
+  fiscalPurpose?: FiscalDocumentPurpose;
 
   @IsOptional()
   @IsEnum(InitialPaymentOption)

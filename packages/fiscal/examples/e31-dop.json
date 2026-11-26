@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "operationId": "synthetic-example-e31",
+  "source": { "documentId": "synthetic-invoice-1", "revision": "1" },
+  "type": 31,
+  "issuedOn": "2026-09-20",
+  "currency": "DOP",
+  "pricesIncludeTax": false,
+  "issuer": {
+    "rnc": "101010632",
+    "fiscalName": "EMISOR SINTETICO",
+    "address": "Dirección de prueba"
+  },
+  "buyer": { "kind": "DOMESTIC", "identifier": "101010641", "fiscalName": "COMPRADOR SINTETICO" },
+  "incomeType": "01",
+  "payment": { "type": 1 },
+  "lines": [
+    {
+      "sourceLineId": "line-1",
+      "description": "Producto de prueba",
+      "kind": "GOOD",
+      "quantity": "2.00",
+      "unitPrice": "100.0000",
+      "billingIndicator": 1,
+      "discount": "10.00"
+    }
+  ],
+  "expectedTotals": {
+    "net": "190.00",
+    "itbis": "34.20",
+    "total": "224.20",
+    "itbisWithheld": "0.00",
+    "isrWithheld": "0.00"
+  }
+}

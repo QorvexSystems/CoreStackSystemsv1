@@ -1,8 +1,7 @@
-import { DocumentType, InvoiceDocumentType, PaymentMethod } from '@qorvex/database';
+import { InvoiceDocumentType, PaymentMethod } from '@qorvex/database';
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsEnum,
   IsIn,
   IsNumber,
   IsOptional,
@@ -10,6 +9,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { SALES_FISCAL_DOCUMENT_TYPES } from '../../fiscal-documents/fiscal-document';
 
 export class PosSaleItemDto {
   @IsString()
@@ -27,16 +27,8 @@ export class CompleteSaleDto {
   customerId?: string;
 
   @IsOptional()
-  @IsEnum(InvoiceDocumentType)
+  @IsIn(SALES_FISCAL_DOCUMENT_TYPES)
   documentType?: InvoiceDocumentType;
-
-  @IsOptional()
-  @IsIn([DocumentType.RNC, DocumentType.CEDULA])
-  fiscalDocumentType?: 'RNC' | 'CEDULA';
-
-  @IsOptional()
-  @IsString()
-  fiscalDocumentNumber?: string;
 
   @IsIn([PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.TRANSFER])
   paymentMethod: PaymentMethod;
