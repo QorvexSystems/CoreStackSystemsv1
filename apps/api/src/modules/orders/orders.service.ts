@@ -45,6 +45,7 @@ import {
   ClaimSalesOrderDto,
   CreateSalesOrderDto,
   SalesOrderItemDto,
+  SaveOrderTakingDraftDto,
 } from './dto/create-sales-order.dto';
 
 const adminRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.QORVEX_SUPER_ADMIN];
@@ -79,10 +80,14 @@ export class OrdersService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(tenantId: string, user: AuthenticatedUser, status?: string) {
+  async findAll(tenantId: string, user: AuthenticatedUser, status?: string, origin?: string) {
     const membership = this.getMembership(tenantId, user);
     this.ensureCanViewOrders(membership);
     await this.releaseExpiredClaims(tenantId);
+
+    if (origin && origin !== 'QUOTATION') {
+      throw new BadRequestException('Invalid sales order origin.');
+    }
 
     const parsedStatuses = this.parseStatuses(status);
     const ownOrdersOnly =
@@ -100,11 +105,88 @@ export class OrdersService {
         ...(destinationFilter ? { destination: destinationFilter } : {}),
         ...(parsedStatuses ? { status: { in: parsedStatuses } } : {}),
         ...(ownOrdersOnly ? { createdById: user.id } : {}),
+        ...(origin === 'QUOTATION'
+          ? {
+              OR: [
+                { destination: SalesOrderDestination.QUOTATION },
+                { orderNumber: { startsWith: 'COT-' } },
+              ],
+            }
+          : {}),
       },
       include: this.orderInclude(),
-      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
-      take: 150,
+      orderBy:
+        origin === 'QUOTATION'
+          ? [{ createdAt: 'desc' }]
+          : [{ status: 'asc' }, { createdAt: 'desc' }],
+      ...(origin === 'QUOTATION' ? {} : { take: 150 }),
     });
+  }
+
+  async findDrafts(tenantId: string, user: AuthenticatedUser) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    return this.prisma.orderTakingDraft.findMany({
+      where: { tenantId },
+      include: { createdBy: { select: { id: true, name: true } } },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async createDraft(tenantId: string, user: AuthenticatedUser, dto: SaveOrderTakingDraftDto) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    this.validateDraft(dto);
+    return this.prisma.orderTakingDraft.create({
+      data: {
+        tenantId,
+        createdById: user.id,
+        label: dto.label.trim(),
+        snapshot: dto.snapshot as Prisma.InputJsonValue,
+      },
+      include: { createdBy: { select: { id: true, name: true } } },
+    });
+  }
+
+  async updateDraft(
+    tenantId: string,
+    user: AuthenticatedUser,
+    id: string,
+    dto: SaveOrderTakingDraftDto,
+  ) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    this.validateDraft(dto);
+    if (!dto.version) throw new BadRequestException('Draft version is required.');
+    const updated = await this.prisma.orderTakingDraft.updateMany({
+      where: { id, tenantId, version: dto.version },
+      data: {
+        label: dto.label.trim(),
+        snapshot: dto.snapshot as Prisma.InputJsonValue,
+        version: { increment: 1 },
+      },
+    });
+    if (updated.count !== 1) {
+      throw new BadRequestException('Draft changed on another device. Reload it before saving.');
+    }
+    return this.prisma.orderTakingDraft.findFirstOrThrow({
+      where: { id, tenantId },
+      include: { createdBy: { select: { id: true, name: true } } },
+    });
+  }
+
+  async discardDraft(tenantId: string, user: AuthenticatedUser, id: string) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    const deleted = await this.prisma.orderTakingDraft.deleteMany({ where: { id, tenantId } });
+    if (deleted.count !== 1) throw new NotFoundException('Draft not found for tenant.');
+    return { id };
+  }
+
+  private validateDraft(dto: SaveOrderTakingDraftDto) {
+    if (!dto.label.trim()) throw new BadRequestException('Draft label is required.');
+    if (!Array.isArray(dto.snapshot?.cart) || dto.snapshot.cart.length > 100) {
+      throw new BadRequestException('Draft products are invalid.');
+    }
+    if (JSON.stringify(dto.snapshot).length > 256_000) {
+      throw new BadRequestException('Draft is too large.');
+    }
   }
 
   async findOne(tenantId: string, user: AuthenticatedUser, id: string) {
@@ -137,7 +219,7 @@ export class OrdersService {
     tenantId: string,
     user: AuthenticatedUser,
     q: string,
-    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+    inventorySource: ProductInventoryDestination | 'ALL' = ProductInventoryDestination.SALES_INVENTORY,
   ) {
     await this.ensureCanTakeOrders(tenantId, user);
     const query = q.trim();
@@ -145,7 +227,7 @@ export class OrdersService {
     return this.prisma.product.findMany({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
+        ...(inventorySource === 'ALL' ? {} : { inventoryDestination: inventorySource }),
         status: ProductStatus.ACTIVE,
         ...(query
           ? {
@@ -160,32 +242,54 @@ export class OrdersService {
       },
       include: {
         category: true,
+        ...(inventorySource === ProductInventoryDestination.WAREHOUSE || inventorySource === 'ALL'
+          ? { warehouseStocks: { where: { tenantId }, select: { quantity: true } } }
+          : {}),
+      },
+      orderBy: inventorySource === ProductInventoryDestination.WAREHOUSE
+        ? [{ name: 'asc' }]
+        : [{ stock: 'desc' }, { name: 'asc' }],
+    });
+  }
+
+  async findOrderProduct(
+    tenantId: string,
+    user: AuthenticatedUser,
+    productId: string,
+    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+  ) {
+    await this.ensureCanTakeOrders(tenantId, user);
+    const product = await this.prisma.product.findFirst({
+      where: { id: productId, tenantId, inventoryDestination: inventorySource, status: ProductStatus.ACTIVE },
+      include: {
+        category: true,
         ...(inventorySource === ProductInventoryDestination.WAREHOUSE
           ? { warehouseStocks: { where: { tenantId }, select: { quantity: true } } }
           : {}),
       },
-      orderBy: [{ stock: 'asc' }, { name: 'asc' }],
     });
+    if (!product) throw new NotFoundException('Product is no longer available in this inventory.');
+    return product;
   }
 
   async findProductByBarcode(
     tenantId: string,
     user: AuthenticatedUser,
     barcode: string,
-    inventorySource: ProductInventoryDestination = ProductInventoryDestination.SALES_INVENTORY,
+    inventorySource: ProductInventoryDestination | 'ALL' = ProductInventoryDestination.SALES_INVENTORY,
   ) {
     await this.ensureCanTakeOrders(tenantId, user);
     const lookupCandidates = getBarcodeLookupCandidates(barcode);
     const product = await this.prisma.product.findFirst({
       where: {
         tenantId,
-        inventoryDestination: inventorySource,
+        ...(inventorySource === 'ALL' ? {} : { inventoryDestination: inventorySource }),
         status: ProductStatus.ACTIVE,
         OR: [{ barcode: { in: lookupCandidates } }, { sku: { in: lookupCandidates } }],
       },
       include: {
         category: true,
-        ...(inventorySource === ProductInventoryDestination.WAREHOUSE
+        ...(inventorySource === ProductInventoryDestination.WAREHOUSE || inventorySource === 'ALL'
           ? { warehouseStocks: { where: { tenantId }, select: { quantity: true } } }
           : {}),
       },
@@ -229,6 +333,14 @@ export class OrdersService {
     this.validatePaymentModeFields(paymentMode, dto);
 
     return this.prisma.$transaction(async (tx) => {
+      if (dto.draftId) {
+        if (!dto.draftVersion) throw new BadRequestException('Draft version is required.');
+        const draft = await tx.orderTakingDraft.findFirst({
+          where: { id: dto.draftId, tenantId, version: dto.draftVersion },
+          select: { id: true },
+        });
+        if (!draft) throw new BadRequestException('Draft changed or was already submitted.');
+      }
       const ecfRecipientEmail = electronicInvoiceRequested
         ? dto.ecfRecipientEmail?.trim().toLowerCase() || null
         : null;
@@ -416,6 +528,15 @@ export class OrdersService {
 
       await tx.employeeActivityLog.createMany({ data: activityLogs });
 
+      if (dto.draftId) {
+        const deleted = await tx.orderTakingDraft.deleteMany({
+          where: { id: dto.draftId, tenantId, version: dto.draftVersion },
+        });
+        if (deleted.count !== 1) {
+          throw new BadRequestException('Draft changed or was already submitted.');
+        }
+      }
+
       return order;
     });
   }
@@ -597,6 +718,9 @@ export class OrdersService {
 
   async cancel(tenantId: string, user: AuthenticatedUser, id: string, dto?: CancelSalesOrderDto) {
     return this.prisma.$transaction(async (tx) => {
+      // Serialize cancellation with checkout and claim changes. Never release
+      // the reservation of an order that has already become an invoice.
+      await this.lockSalesOrder(tx, tenantId, id);
       const order = await tx.salesOrder.findFirst({
         where: { id, tenantId },
         include: this.orderInclude(),
@@ -629,8 +753,9 @@ export class OrdersService {
       }
 
       if (
-        !openOrderStatuses.includes(order.status) &&
-        order.status !== SalesOrderStatus.QUOTATION
+        order.invoiceId !== null ||
+        (!openOrderStatuses.includes(order.status) &&
+          order.status !== SalesOrderStatus.QUOTATION)
       ) {
         throw new BadRequestException('Only pending sales orders can be cancelled.');
       }
@@ -644,6 +769,7 @@ export class OrdersService {
         where: {
           id,
           tenantId,
+          invoiceId: null,
           status: { in: cancellableStatuses },
         },
         data: {

@@ -9,6 +9,7 @@ import {
   CancelSalesOrderDto,
   ClaimSalesOrderDto,
   CreateSalesOrderDto,
+  SaveOrderTakingDraftDto,
 } from './dto/create-sales-order.dto';
 import { OrdersService } from './orders.service';
 
@@ -22,8 +23,42 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('status') status?: string,
+    @Query('origin') origin?: string,
   ) {
-    return this.ordersService.findAll(tenantId, user, status);
+    return this.ordersService.findAll(tenantId, user, status, origin);
+  }
+
+  @Get('drafts')
+  findDrafts(@TenantId() tenantId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.ordersService.findDrafts(tenantId, user);
+  }
+
+  @Post('drafts')
+  createDraft(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SaveOrderTakingDraftDto,
+  ) {
+    return this.ordersService.createDraft(tenantId, user, dto);
+  }
+
+  @Patch('drafts/:id')
+  updateDraft(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SaveOrderTakingDraftDto,
+  ) {
+    return this.ordersService.updateDraft(tenantId, user, id, dto);
+  }
+
+  @Post('drafts/:id/discard')
+  discardDraft(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.ordersService.discardDraft(tenantId, user, id);
   }
 
   @Get('products/search')
@@ -31,9 +66,19 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('q') q = '',
-    @Query('inventorySource') inventorySource?: ProductInventoryDestination,
+    @Query('inventorySource') inventorySource?: ProductInventoryDestination | 'ALL',
   ) {
     return this.ordersService.searchProducts(tenantId, user, q, inventorySource);
+  }
+
+  @Get('products/:productId')
+  findOrderProduct(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('productId') productId: string,
+    @Query('inventorySource') inventorySource?: ProductInventoryDestination,
+  ) {
+    return this.ordersService.findOrderProduct(tenantId, user, productId, inventorySource);
   }
 
   @Get('products/barcode/:barcode')
@@ -41,7 +86,7 @@ export class OrdersController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Param('barcode') barcode: string,
-    @Query('inventorySource') inventorySource?: ProductInventoryDestination,
+    @Query('inventorySource') inventorySource?: ProductInventoryDestination | 'ALL',
   ) {
     return this.ordersService.findProductByBarcode(tenantId, user, barcode, inventorySource);
   }

@@ -4,7 +4,9 @@ import {
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsInt,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -51,6 +53,16 @@ export class SalesOrderItemDto {
 }
 
 export class CreateSalesOrderDto {
+  @IsOptional()
+  @IsString()
+  draftId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  draftVersion?: number;
+
   @IsEnum(SalesOrderDestination)
   destination: SalesOrderDestination;
 
@@ -137,6 +149,21 @@ export class CreateSalesOrderDto {
   @ValidateNested({ each: true })
   @Type(() => SalesOrderItemDto)
   items: SalesOrderItemDto[];
+}
+
+export class SaveOrderTakingDraftDto {
+  @IsString()
+  @MaxLength(160)
+  label: string;
+
+  @IsObject()
+  snapshot: Record<string, unknown>;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  version?: number;
 }
 
 export class ClaimSalesOrderDto {

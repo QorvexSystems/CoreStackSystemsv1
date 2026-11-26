@@ -11,6 +11,7 @@ import { normalizeDominicanDocument, validateDominicanDocument } from '../../com
 import { PrismaService } from '../../prisma/prisma.service';
 
 export type RncLookupResult = {
+  documentType: 'RNC' | 'CEDULA';
   outcome: 'VERIFIED' | 'NOT_FOUND' | 'NON_ACTIVE' | 'REGISTRY_STALE' | 'UNAVAILABLE';
   documentNumber: string;
   fiscalName: string | null;
@@ -27,8 +28,15 @@ export class DgiiRegistryService {
   ) {}
 
   async lookupRnc(value: string, db: Pick<Prisma.TransactionClient, 'dgiiRegistryDataset'> = this.prisma): Promise<RncLookupResult> {
-    if (!validateDominicanDocument(DocumentType.RNC, value)) {
-      throw new BadRequestException('El RNC no es válido.');
+    return this.lookupIdentity(DocumentType.RNC, value, db);
+  }
+
+  async lookupIdentity(documentType: DocumentType, value: string, db: Pick<Prisma.TransactionClient, 'dgiiRegistryDataset'> = this.prisma): Promise<RncLookupResult> {
+    if (documentType !== DocumentType.RNC && documentType !== DocumentType.CEDULA) {
+      throw new BadRequestException('Selecciona RNC o cédula.');
+    }
+    if (!validateDominicanDocument(documentType, value)) {
+      throw new BadRequestException(documentType === DocumentType.RNC ? 'El RNC no es válido.' : 'La cédula no es válida.');
     }
     const documentNumber = normalizeDominicanDocument(value);
     const checkedAt = new Date();
@@ -37,7 +45,7 @@ export class DgiiRegistryService {
       select: {
         sourceUpdatedAt: true,
         records: {
-          where: { documentType: DocumentType.RNC, documentNumber },
+          where: { documentType, documentNumber },
           select: { fiscalName: true, registryStatus: true, status: true },
           take: 1,
         },
@@ -46,6 +54,7 @@ export class DgiiRegistryService {
     const record = dataset?.records[0];
     const result = (outcome: RncLookupResult['outcome']): RncLookupResult => ({
       outcome,
+      documentType,
       documentNumber,
       fiscalName: record?.fiscalName ?? null,
       registryStatus: record?.registryStatus ?? null,
@@ -63,12 +72,16 @@ export class DgiiRegistryService {
   }
 
   async requireActiveRnc(value: string, db: Prisma.TransactionClient): Promise<RncLookupResult & { fiscalName: string }> {
-    const result = await this.lookupRnc(value, db);
+    return this.requireActiveIdentity(DocumentType.RNC, value, db);
+  }
+
+  async requireActiveIdentity(documentType: DocumentType, value: string, db: Prisma.TransactionClient): Promise<RncLookupResult & { fiscalName: string }> {
+    const result = await this.lookupIdentity(documentType, value, db);
     if (result.outcome === 'UNAVAILABLE' || result.outcome === 'REGISTRY_STALE') {
       throw new ServiceUnavailableException('La consulta del padrón DGII no está disponible o necesita actualizarse.');
     }
     if (result.outcome !== 'VERIFIED' || !result.fiscalName) {
-      throw new BadRequestException('El RNC no figura activo en el padrón DGII.');
+      throw new BadRequestException('El RNC o la cédula no figura activo en el padrón DGII.');
     }
     return { ...result, fiscalName: result.fiscalName };
   }

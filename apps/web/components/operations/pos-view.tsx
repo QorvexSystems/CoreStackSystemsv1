@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Store,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -29,6 +30,7 @@ import { Label } from '@/components/ui/label';
 import {
   closeCashSession,
   completePosSale,
+  cancelSalesOrder,
   claimSalesOrder,
   getCashRegisters,
   getCashSessions,
@@ -153,6 +155,7 @@ export function PosView() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loadedOrder, setLoadedOrder] = useState<SalesOrder | null>(null);
+  const [discardTarget, setDiscardTarget] = useState<SalesOrder | null>(null);
   const [orderClaimPending, setOrderClaimPending] = useState(false);
   const [closingDialogOpen, setClosingDialogOpen] = useState(false);
   const [counterSaleOpen, setCounterSaleOpen] = useState(false);
@@ -165,14 +168,15 @@ export function PosView() {
     enabled: Boolean(session),
   });
   const rncLookupQuery = useQuery({
-    queryKey: ['pos-rnc-lookup', session?.tenantId, normalizeDominicanDocument(fiscalDocumentNumber)],
+    queryKey: ['pos-rnc-lookup', session?.tenantId, fiscalDocumentType, normalizeDominicanDocument(fiscalDocumentNumber)],
     queryFn: () => lookupPosRnc(
       session?.tenantId ?? '',
       session?.accessToken ?? '',
       fiscalDocumentNumber,
+      fiscalDocumentType,
     ),
     enabled: Boolean(session && isAllpa && documentType === 'FISCAL_CREDIT_ELECTRONIC_31' &&
-      fiscalDocumentType === 'RNC' && validateDominicanDocument('RNC', fiscalDocumentNumber)),
+      validateDominicanDocument(fiscalDocumentType, fiscalDocumentNumber)),
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
@@ -371,6 +375,7 @@ export function PosView() {
   );
   const requiresRnc = documentType === 'FISCAL_CREDIT_ELECTRONIC_31';
   const verifiedRnc = isAllpa && requiresRnc &&
+    rncLookupQuery.data?.documentType === fiscalDocumentType &&
     rncLookupQuery.data?.documentNumber === normalizeDominicanDocument(fiscalDocumentNumber) &&
     rncLookupQuery.data.outcome === 'VERIFIED';
   const requiresE32Recipient = documentType === 'CONSUMER_ELECTRONIC_32' && totals.total >= 250000;
@@ -381,8 +386,7 @@ export function PosView() {
       fiscalDocumentValid &&
         (isAllpa && requiresRnc ? verifiedRnc : fiscalCustomer) &&
         fiscalCustomerMatchesOrder &&
-        (!isAllpa || !requiresRnc || !customerId || customerId === fiscalCustomer?.id) &&
-        (!requiresRnc || fiscalDocumentType === 'RNC'),
+        (!isAllpa || !requiresRnc || !customerId || customerId === fiscalCustomer?.id),
     );
   const canCompleteSale =
     cart.length > 0 &&
@@ -399,7 +403,7 @@ export function PosView() {
     Boolean(selectedOpenSession) && selectedOpenSession?.openedBy?.id !== session?.user.id;
 
   function handleLoadOrder(order: SalesOrder) {
-    if (completeSaleMutation.isPending || claimOrderMutation.isPending) return;
+    if (completeSaleMutation.isPending || claimOrderMutation.isPending || discardOrderMutation.isPending) return;
     if (!loadedOrder && cart.length) {
       toast.info('Completa o vacía la venta de mostrador antes de cargar una orden.');
       return;
@@ -415,7 +419,7 @@ export function PosView() {
   }
 
   function releaseLoadedOrder() {
-    if (!loadedOrder || releaseOrderMutation.isPending || completeSaleMutation.isPending) {
+    if (!loadedOrder || releaseOrderMutation.isPending || completeSaleMutation.isPending || discardOrderMutation.isPending) {
       return;
     }
 
@@ -753,6 +757,35 @@ export function PosView() {
     },
   });
 
+  const discardOrderMutation = useMutation({
+    mutationFn: (orderId: string) => {
+      if (!session) throw new Error('Sesion requerida.');
+      if (orderClaimPending || claimOrderMutation.isPending || releaseOrderMutation.isPending || completeSaleMutation.isPending) {
+        throw new Error('Espera a que termine la operación de Caja antes de eliminar la orden.');
+      }
+      return cancelSalesOrder(session.tenantId, session.accessToken, orderId, 'Descartada en caja antes del cobro');
+    },
+    onSuccess: async (order) => {
+      setDiscardTarget(null);
+      await queryClient.cancelQueries({ queryKey: ['sales-orders'] });
+      queryClient.setQueriesData<SalesOrder[]>(
+        { queryKey: ['sales-orders', session?.tenantId, 'OPEN'] },
+        (orders) => orders?.filter((candidate) => candidate.id !== order.id),
+      );
+      queryClient.setQueryData(['sales-orders', session?.tenantId, 'requested', order.id], order);
+      if (loadedOrder?.id === order.id) resetCheckoutState();
+      toast.success('Orden eliminada de pendientes.');
+      await Promise.all(
+        ['sales-orders', 'products', 'pos-products-search', 'order-products-search', 'dashboard-summary', 'employee-logs'].map(
+          (key) => queryClient.invalidateQueries({ queryKey: [key] }),
+        ),
+      );
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudo eliminar la orden.');
+    },
+  });
+
   if (!session) {
     return <SessionRequired session={session} />;
   }
@@ -835,6 +868,7 @@ export function PosView() {
   }
 
   function clearCart() {
+    if (discardOrderMutation.isPending || completeSaleMutation.isPending) return;
     if (loadedOrder) {
       releaseLoadedOrder();
       return;
@@ -898,13 +932,12 @@ export function PosView() {
     ) {
       populateFiscalDocumentFromCustomer(customerId);
     }
-    if (nextDocumentType === 'FISCAL_CREDIT_ELECTRONIC_31') {
-      setFiscalDocumentType('RNC');
-    }
   }
 
   function handleFiscalDocumentTypeChange(nextDocumentType: 'RNC' | 'CEDULA') {
     setFiscalDocumentType(nextDocumentType);
+    setFiscalDocumentNumber('');
+    if (!loadedOrder?.customerId) setCustomerId('');
   }
 
   function handleFiscalDocumentNumberChange(nextDocumentNumber: string) {
@@ -1169,6 +1202,7 @@ export function PosView() {
                     cart.length > 0 ||
                     claimOrderMutation.isPending ||
                     completeSaleMutation.isPending ||
+                    discardOrderMutation.isPending ||
                     (requestedOrderQuery.data.status === 'IN_CASHIER' &&
                       requestedOrderQuery.data.claimedBy?.id !== session.user.id)
                   }
@@ -1229,7 +1263,7 @@ export function PosView() {
         />
       ) : (
         <fieldset
-          disabled={completeSaleMutation.isPending}
+          disabled={completeSaleMutation.isPending || discardOrderMutation.isPending}
           className="grid min-h-0 min-w-0 flex-1 gap-3 md:grid-cols-2"
         >
           <div className="surface-scrollbar min-h-0 min-w-0 space-y-2 md:overflow-y-auto">
@@ -1304,17 +1338,32 @@ export function PosView() {
                   <CardTitle>Cobro actual</CardTitle>
                   <CardDescription>Revisa los conceptos y completa el pago.</CardDescription>
                 </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                {loadedOrder && canUsePos ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-danger"
+                    onClick={() => setDiscardTarget(loadedOrder)}
+                    disabled={orderClaimPending || claimOrderMutation.isPending || releaseOrderMutation.isPending || completeSaleMutation.isPending || discardOrderMutation.isPending}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Eliminar factura
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
                   onClick={clearCart}
                   disabled={
-                    !cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending
+                    !cart.length || releaseOrderMutation.isPending || completeSaleMutation.isPending || discardOrderMutation.isPending
                   }
                 >
                   Limpiar
                 </Button>
+                </div>
               </CardHeader>
               <CardContent className="surface-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
                 {loadedOrder ? (
@@ -1389,7 +1438,7 @@ export function PosView() {
                     }
                     totals={totals}
                     message={message}
-                    canCompleteSale={canCompleteSale}
+                    canCompleteSale={canCompleteSale && !discardOrderMutation.isPending && !discardTarget}
                     isCompleting={completeSaleMutation.isPending}
                     onCustomerChange={handleCustomerChange}
                     onDocumentTypeChange={handleDocumentTypeChange}
@@ -1421,6 +1470,24 @@ export function PosView() {
           </div>
         </fieldset>
       )}
+
+      <ActionDialog
+        open={Boolean(discardTarget)}
+        title="Eliminar factura sin cobrar"
+        description={`Se descartará la orden ${discardTarget?.orderNumber ?? ''} y se liberarán sus productos reservados. No se realizará ningún cobro ni se consumirá numeración fiscal.`}
+        tone="danger"
+        confirmLabel="Eliminar"
+        cancelLabel="Volver"
+        isPending={discardOrderMutation.isPending}
+        onClose={() => {
+          if (!discardOrderMutation.isPending) setDiscardTarget(null);
+        }}
+        onConfirm={() => {
+          if (discardTarget && !discardOrderMutation.isPending && !completeSaleMutation.isPending) {
+            discardOrderMutation.mutate(discardTarget.id);
+          }
+        }}
+      />
 
       <CashCloseDialog
         open={closingDialogOpen}

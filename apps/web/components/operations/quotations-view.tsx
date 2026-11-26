@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { acceptSalesOrder, cancelSalesOrder, getSalesOrders, type SalesOrder } from '@/lib/api';
+import { acceptSalesOrder, cancelSalesOrder, getQuotations, type SalesOrder } from '@/lib/api';
 import { brand } from '@/lib/brand';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
 import { getOrderClientLabel, getOrderSearchLabel } from '@/lib/order-client';
@@ -32,7 +32,7 @@ export function QuotationsView() {
 
   const quotationsQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'quotations-all'],
-    queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? ''),
+    queryFn: () => getQuotations(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: Boolean(session),
   });
 
@@ -56,10 +56,10 @@ export function QuotationsView() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['sales-orders'] });
-      toast.success('Cotizacion cancelada correctamente.');
+      toast.success('Cotización rechazada correctamente.');
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : 'No se pudo cancelar la cotizacion.');
+      toast.error(error instanceof Error ? error.message : 'No se pudo rechazar la cotización.');
     },
   });
 
@@ -179,6 +179,10 @@ export function QuotationsView() {
             <p className="rounded-md bg-zinc-50 px-3 py-4 text-sm text-muted-foreground">
               Cargando cotizaciones...
             </p>
+          ) : quotationsQuery.isError ? (
+            <div className="rounded-md border border-danger/20 bg-danger/5 px-3 py-4 text-sm text-danger">
+              No se pudieron cargar las cotizaciones. Intenta actualizar la página.
+            </div>
           ) : activeOrders.length ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {activeOrders.map((order) => (
@@ -204,14 +208,14 @@ export function QuotationsView() {
 
       <CancelReasonModal
         open={Boolean(cancelTarget)}
-        title="Cancelar cotizacion"
+        title="Rechazar cotización"
         description={
           cancelTarget
-            ? `Indica por que se cancela ${cancelTarget.orderNumber}.`
-            : 'Indica por que se cancela esta cotizacion.'
+            ? `Indica por qué se rechaza ${cancelTarget.orderNumber}.`
+            : 'Indica por qué se rechaza esta cotización.'
         }
         reason={cancelReason}
-        confirmLabel="Cancelar cotizacion"
+        confirmLabel="Rechazar cotización"
         isPending={cancelMutation.isPending}
         onReasonChange={setCancelReason}
         onClose={closeCancelModal}
@@ -334,7 +338,7 @@ function QuotationCard({
               disabled={isCancelling}
             >
               <Trash className="h-4 w-4" />
-              Eliminar
+              Rechazar
             </Button>
           ) : null}
         </div>

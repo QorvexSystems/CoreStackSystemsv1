@@ -83,13 +83,13 @@ export class PosService {
     private readonly dgiiRegistry: DgiiRegistryService,
   ) {}
 
-  async lookupRnc(tenantId: string, user: AuthenticatedUser, rnc: string) {
+  async lookupRnc(tenantId: string, user: AuthenticatedUser, rnc: string, documentType: DocumentType = DocumentType.RNC) {
     await this.ensureCanUsePos(tenantId, user);
     const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { slug: true } });
     if (tenant.slug !== 'allpa') {
       throw new ForbiddenException('La consulta del RNC está disponible solo en ALLPA.');
     }
-    return this.dgiiRegistry.lookupRnc(rnc);
+    return this.dgiiRegistry.lookupIdentity(documentType, rnc);
   }
 
   async searchProducts(tenantId: string, user: AuthenticatedUser, q: string) {
@@ -283,9 +283,6 @@ export class PosService {
       }
 
       if (requiresFiscalCustomer || requiresE32Recipient) {
-        if (requiresRnc && dto.fiscalDocumentType !== DocumentType.RNC) {
-          throw new BadRequestException('La factura E31 requiere el RNC del cliente.');
-        }
         if (
           (dto.fiscalDocumentType !== DocumentType.RNC &&
             dto.fiscalDocumentType !== DocumentType.CEDULA) ||
@@ -293,7 +290,7 @@ export class PosService {
         ) {
           throw new BadRequestException(
             requiresRnc
-              ? 'La factura E31 requiere el RNC del cliente.'
+              ? 'La factura E31 requiere el RNC o la cédula del cliente.'
               : requiresE32Recipient
                 ? 'La factura E32 de RD$250,000 o más requiere el RNC o la cédula y nombre del comprador.'
                 : 'La factura B01 requiere el RNC o la cédula del cliente.',
@@ -319,20 +316,20 @@ export class PosService {
         });
 
         if (requiresRnc && tenantPolicy.slug === 'allpa') {
-          const verified = await this.dgiiRegistry.requireActiveRnc(fiscalDocumentNumber, tx);
-          if (customer && (customer.documentType !== DocumentType.RNC ||
+          const verified = await this.dgiiRegistry.requireActiveIdentity(dto.fiscalDocumentType, fiscalDocumentNumber, tx);
+          if (customer && (customer.documentType !== dto.fiscalDocumentType ||
             normalizeDominicanDocument(customer.documentNumber ?? '') !== fiscalDocumentNumber)) {
-            throw new BadRequestException('El RNC no corresponde al cliente asignado a la orden.');
+            throw new BadRequestException('El documento fiscal no corresponde al cliente asignado a la orden.');
           }
           const existing = await tx.customer.findUnique({
             where: { tenantId_documentType_documentNumber: {
               tenantId,
-              documentType: DocumentType.RNC,
+              documentType: dto.fiscalDocumentType,
               documentNumber: fiscalDocumentNumber,
             } },
           });
           if (existing?.status !== undefined && existing.status !== CustomerStatus.ACTIVE) {
-            throw new BadRequestException('El cliente con este RNC está inactivo.');
+            throw new BadRequestException('El cliente con este RNC o cédula está inactivo.');
           }
           fiscalCustomer = existing
             ? existing.name === verified.fiscalName
@@ -341,7 +338,7 @@ export class PosService {
             : await tx.customer.create({ data: {
                 tenantId,
                 name: verified.fiscalName,
-                documentType: DocumentType.RNC,
+                documentType: dto.fiscalDocumentType,
                 documentNumber: fiscalDocumentNumber,
               } });
         }
@@ -349,7 +346,7 @@ export class PosService {
         if (!fiscalCustomer) {
           throw new BadRequestException(
             requiresRnc
-              ? 'No existe un cliente activo con ese RNC. Regístralo antes de emitir la E31.'
+              ? 'No existe un cliente activo con ese RNC o cédula. Regístralo antes de emitir la E31.'
               : requiresE32Recipient
                 ? 'No existe un cliente activo con ese RNC o cédula. Regístralo antes de emitir la E32.'
                 : 'No existe un cliente activo con ese RNC o cédula. Regístralo antes de emitir la B01.',

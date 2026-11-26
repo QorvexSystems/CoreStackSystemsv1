@@ -34,7 +34,13 @@ import {
   getProductLabel,
   getProducts,
 } from '@/lib/api';
-import { openBarcodeLabelPrintWindow, printBarcodeLabel } from '@/lib/barcode-label-print';
+import {
+  DEFAULT_LABEL_DIMENSIONS,
+  openBarcodeLabelPrintWindow,
+  printBarcodeLabel,
+  type LabelDimensions,
+  type LabelSize,
+} from '@/lib/barcode-label-print';
 import { brand } from '@/lib/brand';
 import {
   getStatusVariant,
@@ -63,6 +69,41 @@ export function ProductsView() {
     id: string;
     name: string;
   } | null>(null);
+  const [productPendingLabel, setProductPendingLabel] = useState<{ id: string; name: string } | null>(null);
+  const [labelSize, setLabelSize] = useState<LabelSize>('MEDIUM');
+  const [labelDimensions, setLabelDimensions] = useState<Record<LabelSize, LabelDimensions>>(DEFAULT_LABEL_DIMENSIONS);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('allpa-label-dimensions-v1') ?? '{}') as Partial<Record<LabelSize, LabelDimensions>>;
+      setLabelDimensions((current) => {
+        const next = { ...current };
+        for (const size of ['SMALL', 'MEDIUM', 'LARGE'] as const) {
+          const value = saved[size];
+          if (value && Number.isFinite(value.widthMm) && Number.isFinite(value.heightMm)
+            && value.widthMm >= 15 && value.widthMm <= 120
+            && value.heightMm >= 10 && value.heightMm <= 100) {
+            next[size] = value;
+          }
+        }
+        return next;
+      });
+    } catch {
+      // Browser storage may be unavailable; the defaults remain usable.
+    }
+  }, []);
+
+  function updateLabelDimension(field: keyof LabelDimensions, value: number) {
+    setLabelDimensions((current) => {
+      const next = { ...current, [labelSize]: { ...current[labelSize], [field]: value } };
+      try {
+        window.localStorage.setItem('allpa-label-dimensions-v1', JSON.stringify(next));
+      } catch {
+        // Printing still works if this browser does not allow local storage.
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     setSearch(searchParams.get('q') ?? '');
@@ -99,7 +140,7 @@ export function ProductsView() {
     },
   });
   const labelMutation = useMutation({
-    mutationFn: ({ productId }: { productId: string; printWindow: Window }) => {
+    mutationFn: ({ productId }: { productId: string; printWindow: Window; size: LabelSize; dimensions: LabelDimensions }) => {
       if (!session) {
         throw new Error('Sesion requerida.');
       }
@@ -108,7 +149,8 @@ export function ProductsView() {
     },
     onSuccess: (label, variables) => {
       try {
-        printBarcodeLabel(variables.printWindow, label);
+        printBarcodeLabel(variables.printWindow, label, variables.size, variables.dimensions);
+        setProductPendingLabel(null);
         toast.success('Etiqueta enviada a la impresora', {
           description: `${label.name} - ${label.barcode}`,
         });
@@ -132,7 +174,7 @@ export function ProductsView() {
       return;
     }
 
-    labelMutation.mutate({ productId, printWindow });
+    labelMutation.mutate({ productId, printWindow, size: labelSize, dimensions: { ...labelDimensions[labelSize] } });
   }
   const deleteMutation = useMutation({
     mutationFn: (productId: string) => {
@@ -486,7 +528,7 @@ export function ProductsView() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => requestProductLabel(product.id)}
+                                onClick={() => setProductPendingLabel({ id: product.id, name: product.name })}
                                 aria-label="Imprimir etiqueta"
                               >
                                 <Printer className="h-4 w-4" />
@@ -553,6 +595,59 @@ export function ProductsView() {
           setPage(1);
         }}
       />
+      <ActionDialog
+        open={Boolean(productPendingLabel)}
+        onClose={() => { if (!labelMutation.isPending) setProductPendingLabel(null); }}
+        title="Imprimir etiqueta"
+        description={productPendingLabel?.name}
+        icon={<Printer className="h-5 w-5" aria-hidden="true" />}
+        confirmLabel="Imprimir etiqueta"
+        cancelLabel="Cancelar"
+        isPending={labelMutation.isPending}
+        confirmDisabled={
+          labelDimensions[labelSize].widthMm < 15 || labelDimensions[labelSize].widthMm > 120
+          || labelDimensions[labelSize].heightMm < 10 || labelDimensions[labelSize].heightMm > 100
+        }
+        onConfirm={() => { if (productPendingLabel) requestProductLabel(productPendingLabel.id); }}
+      >
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-foreground">Tamaño de la etiqueta</legend>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {([
+              ['SMALL', 'Pequeña'],
+              ['MEDIUM', 'Mediana'],
+              ['LARGE', 'Grande'],
+            ] as const).map(([size, label]) => (
+              <label key={size} className={`flex cursor-pointer flex-col gap-1 rounded-lg border p-3 transition-colors focus-within:ring-2 focus-within:ring-primary ${labelSize === size ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}>
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="radio" name="product-label-size" value={size} checked={labelSize === size}
+                    onChange={() => setLabelSize(size)} className="accent-blue-600" />
+                  {label}
+                </span>
+                <span className="pl-5 text-xs text-muted-foreground">
+                  {labelDimensions[size].widthMm} × {labelDimensions[size].heightMm} mm
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <div className="rounded-lg border border-border bg-muted/30 p-3">
+          <p className="mb-2 text-sm font-medium">Medidas del rollo seleccionado</p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-xs text-muted-foreground">Ancho (mm)
+              <Input type="number" min={15} max={120} step={1} value={labelDimensions[labelSize].widthMm}
+                onChange={(event) => updateLabelDimension('widthMm', Number(event.target.value))}
+                className="mt-1 bg-white" />
+            </label>
+            <label className="text-xs text-muted-foreground">Alto (mm)
+              <Input type="number" min={10} max={100} step={1} value={labelDimensions[labelSize].heightMm}
+                onChange={(event) => updateLabelDimension('heightMm', Number(event.target.value))}
+                className="mt-1 bg-white" />
+            </label>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">En la impresora, usa el mismo tamaño de papel y escala 100 %.</p>
+        </div>
+      </ActionDialog>
       <ActionDialog
         open={Boolean(productPendingDeactivation)}
         onClose={() => {

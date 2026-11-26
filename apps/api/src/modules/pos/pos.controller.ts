@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { DocumentType } from '@qorvex/database';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { TenantId } from '../../common/decorators/tenant-id.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -44,8 +45,9 @@ export class PosController {
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Query('rnc') rnc = '',
+    @Query('documentType') documentType: DocumentType = DocumentType.RNC,
   ) {
-    return this.posService.lookupRnc(tenantId, user, rnc);
+    return this.posService.lookupRnc(tenantId, user, rnc, documentType);
   }
 
   @Post('sales/preview')

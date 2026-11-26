@@ -1,6 +1,6 @@
 'use client';
 
-import { Barcode, Camera, Search, ScanLine, X } from 'lucide-react';
+import { Barcode, Camera, Search, ScanLine } from 'lucide-react';
 import { ChangeEvent, FormEvent, RefObject, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,10 +8,10 @@ import { Input } from '@/components/ui/input';
 type BarcodeInputProps = {
   barcode: string;
   scannerEnabled: boolean;
-  cameraActive: boolean;
+  cameraActive?: boolean;
   scannerMessage: string | null;
   barcodeInputRef: RefObject<HTMLInputElement | null>;
-  videoRef: RefObject<HTMLVideoElement | null>;
+  videoRef?: RefObject<HTMLVideoElement | null>;
   isPending: boolean;
   keepFocus?: boolean;
   showCamera?: boolean;
@@ -19,7 +19,7 @@ type BarcodeInputProps = {
   onSubmit: (code: string) => void;
   onEnableScanner: () => void;
   onDisableScanner: () => void;
-  onStartCamera: () => void;
+  onStartCamera?: () => void;
 };
 
 const autoSubmitMinLength = 6;
@@ -29,7 +29,7 @@ const autoSubmitDelayMs = 220;
 export function BarcodeInput({
   barcode,
   scannerEnabled,
-  cameraActive,
+  cameraActive = false,
   scannerMessage,
   barcodeInputRef,
   videoRef,
@@ -43,6 +43,8 @@ export function BarcodeInput({
   onStartCamera,
 }: BarcodeInputProps) {
   const lastSubmittedCodeRef = useRef('');
+  const scannerEnabledRef = useRef(scannerEnabled);
+  scannerEnabledRef.current = scannerEnabled;
 
   useEffect(() => {
     const code = normalizeScannedCode(barcode);
@@ -81,6 +83,7 @@ export function BarcodeInput({
   function submitBarcode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     submitCode(barcode);
+    if (scannerEnabled) barcodeInputRef.current?.focus();
   }
 
   function submitCode(value: string) {
@@ -105,21 +108,16 @@ export function BarcodeInput({
           type="button"
           className="h-11"
           variant={scannerEnabled ? 'default' : 'outline'}
-          onClick={onEnableScanner}
+          onClick={scannerEnabled ? onDisableScanner : onEnableScanner}
+          aria-pressed={scannerEnabled}
         >
           <ScanLine className="h-4 w-4" />
-          Activar lector
+          {scannerEnabled ? 'Desactivar lector' : 'Activar lector'}
         </Button>
         {showCamera ? (
           <Button type="button" className="h-11" variant="outline" onClick={onStartCamera}>
             <Camera className="h-4 w-4" />
             Camara QR
-          </Button>
-        ) : null}
-        {scannerEnabled ? (
-          <Button type="button" className="h-11" variant="ghost" onClick={onDisableScanner}>
-            <X className="h-4 w-4" />
-            Apagar
           </Button>
         ) : null}
       </div>
@@ -133,11 +131,13 @@ export function BarcodeInput({
             onChange={handleBarcodeChange}
             onBlur={() => {
               if (keepFocus && scannerEnabled && !cameraActive) {
-                window.setTimeout(() => barcodeInputRef.current?.focus(), 40);
+                window.setTimeout(() => {
+                  if (scannerEnabledRef.current) barcodeInputRef.current?.focus();
+                }, 40);
               }
             }}
             className="h-11 pl-9"
-            placeholder="Escanea o escribe codigo QR o codigo de barras"
+            placeholder={showCamera ? 'Escanea o escribe código QR o de barras' : 'Escanea o escribe el código de barras'}
             autoComplete="off"
             inputMode="text"
           />

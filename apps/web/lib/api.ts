@@ -496,6 +496,7 @@ export type StoreCreditLookup = {
 };
 
 export type RncLookup = {
+  documentType: 'RNC' | 'CEDULA';
   outcome: 'VERIFIED' | 'NOT_FOUND' | 'NON_ACTIVE' | 'REGISTRY_STALE' | 'UNAVAILABLE';
   documentNumber: string;
   fiscalName: string | null;
@@ -730,6 +731,8 @@ export type SalesOrderTransitionResult = Pick<
 >;
 
 export type CreateSalesOrderPayload = {
+  draftId?: string;
+  draftVersion?: number;
   destination: 'CASH_SALE' | 'QUOTATION';
   inventorySource?: 'SALES_INVENTORY' | 'WAREHOUSE';
   electronicInvoiceRequested?: boolean;
@@ -755,6 +758,18 @@ export type CreateSalesOrderPayload = {
     unitPrice?: number;
     quantity: number;
   }>;
+};
+
+export type OrderTakingDraft = {
+  id: string;
+  tenantId: string;
+  createdById: string;
+  createdBy: { id: string; name: string };
+  label: string;
+  snapshot: unknown;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type CreditSaleApproval = {
@@ -2157,6 +2172,42 @@ export function getSalesOrders(tenantId: string, accessToken: string, status?: s
   });
 }
 
+export function getOrderTakingDrafts(tenantId: string, accessToken: string) {
+  return fetchJson<OrderTakingDraft[]>('/orders/drafts', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function createOrderTakingDraft(
+  tenantId: string, accessToken: string, label: string, snapshot: Record<string, unknown>,
+) {
+  return fetchJson<OrderTakingDraft>('/orders/drafts', {
+    method: 'POST', headers: tenantHeaders(tenantId, accessToken), body: JSON.stringify({ label, snapshot }),
+  });
+}
+
+export function updateOrderTakingDraft(
+  tenantId: string, accessToken: string, draftId: string, version: number,
+  label: string, snapshot: Record<string, unknown>,
+) {
+  return fetchJson<OrderTakingDraft>(`/orders/drafts/${draftId}`, {
+    method: 'PATCH', headers: tenantHeaders(tenantId, accessToken),
+    body: JSON.stringify({ version, label, snapshot }),
+  });
+}
+
+export function discardOrderTakingDraft(tenantId: string, accessToken: string, draftId: string) {
+  return fetchJson<{ id: string }>(`/orders/drafts/${draftId}/discard`, {
+    method: 'POST', headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
+export function getQuotations(tenantId: string, accessToken: string) {
+  return fetchJson<SalesOrder[]>('/orders?origin=QUOTATION', {
+    headers: tenantHeaders(tenantId, accessToken),
+  });
+}
+
 export function getSalesOrder(tenantId: string, accessToken: string, orderId: string) {
   return fetchJson<SalesOrder>(`/orders/${orderId}`, {
     headers: tenantHeaders(tenantId, accessToken),
@@ -2232,10 +2283,22 @@ export function searchOrderProducts(
   tenantId: string,
   accessToken: string,
   q: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
+  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' | 'ALL' = 'SALES_INVENTORY',
 ) {
   return fetchJson<Product[]>(
     `/orders/products/search?q=${encodeURIComponent(q)}&inventorySource=${inventorySource}`,
+    { headers: tenantHeaders(tenantId, accessToken) },
+  );
+}
+
+export function getOrderProduct(
+  tenantId: string,
+  accessToken: string,
+  productId: string,
+  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE',
+) {
+  return fetchJson<Product>(
+    `/orders/products/${encodeURIComponent(productId)}?inventorySource=${inventorySource}`,
     { headers: tenantHeaders(tenantId, accessToken) },
   );
 }
@@ -2244,7 +2307,7 @@ export function getOrderProductByBarcode(
   tenantId: string,
   accessToken: string,
   barcode: string,
-  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' = 'SALES_INVENTORY',
+  inventorySource: 'SALES_INVENTORY' | 'WAREHOUSE' | 'ALL' = 'SALES_INVENTORY',
 ) {
   return fetchJson<Product>(
     `/orders/products/barcode/${encodeURIComponent(barcode)}?inventorySource=${inventorySource}`,
@@ -2414,8 +2477,8 @@ export function lookupPosStoreCredit(tenantId: string, accessToken: string, invo
   );
 }
 
-export function lookupPosRnc(tenantId: string, accessToken: string, rnc: string) {
-  return fetchJson<RncLookup>(`/pos/rnc/lookup?rnc=${encodeURIComponent(rnc)}`, {
+export function lookupPosRnc(tenantId: string, accessToken: string, rnc: string, documentType: 'RNC' | 'CEDULA' = 'RNC') {
+  return fetchJson<RncLookup>(`/pos/rnc/lookup?rnc=${encodeURIComponent(rnc)}&documentType=${documentType}`, {
     headers: tenantHeaders(tenantId, accessToken),
   });
 }

@@ -1,0 +1,15 @@
+FROM corestack/allpa-web:product-label-sizes-20261115
+
+ENV NEXT_PUBLIC_API_URL=https://allpa-api.corestack-systems.com
+ENV NEXT_PUBLIC_APP_URL=https://allpa.corestack-systems.com
+
+USER root
+COPY --chown=node:node apps/web/components/operations/orders-view.tsx /app/apps/web/components/operations/orders-view.tsx
+COPY --chown=node:node apps/web/components/operations/pos/barcode-input.tsx /app/apps/web/components/operations/pos/barcode-input.tsx
+USER node
+WORKDIR /app
+
+RUN cd apps/web && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

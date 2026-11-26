@@ -10,6 +10,29 @@ type BarcodeLabel = {
   price?: number | null;
 };
 
+export type LabelSize = 'SMALL' | 'MEDIUM' | 'LARGE';
+export type LabelDimensions = { widthMm: number; heightMm: number };
+
+export const DEFAULT_LABEL_DIMENSIONS: Record<LabelSize, LabelDimensions> = {
+  SMALL: { widthMm: 30, heightMm: 20 },
+  MEDIUM: { widthMm: 40, heightMm: 30 },
+  LARGE: { widthMm: 50, heightMm: 40 },
+};
+
+const labelStyle: Record<LabelSize, {
+  paddingMm: number;
+  gapMm: number;
+  namePt: number;
+  pricePt: number;
+  barcodeHeight: number;
+  barcodeFontSize: number;
+  barcodeModuleWidth: number;
+}> = {
+  SMALL: { paddingMm: 1, gapMm: 0.3, namePt: 7, pricePt: 8, barcodeHeight: 22, barcodeFontSize: 8, barcodeModuleWidth: 1.05 },
+  MEDIUM: { paddingMm: 1.5, gapMm: 0.7, namePt: 8.5, pricePt: 10, barcodeHeight: 32, barcodeFontSize: 9, barcodeModuleWidth: 1.2 },
+  LARGE: { paddingMm: 2, gapMm: 1, namePt: 10, pricePt: 12, barcodeHeight: 43, barcodeFontSize: 11, barcodeModuleWidth: 1.35 },
+};
+
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (character) => {
     const entities: Record<string, string> = {
@@ -44,19 +67,21 @@ function resolveBarcodeFormat(type?: string | null) {
   }
 }
 
-function createBarcodeSvg(value: string, type?: string | null) {
+function createBarcodeSvg(value: string, size: LabelSize, type?: string | null) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+
+  const style = labelStyle[size];
 
   JsBarcode(svg, value, {
     format: resolveBarcodeFormat(type),
     displayValue: true,
     font: 'Arial',
-    fontSize: 11,
+    fontSize: style.barcodeFontSize,
     lineColor: '#000000',
     background: '#ffffff',
     margin: 0,
-    width: 1.35,
-    height: 46,
+    width: style.barcodeModuleWidth,
+    height: style.barcodeHeight,
   });
 
   return svg.outerHTML;
@@ -74,14 +99,26 @@ export function openBarcodeLabelPrintWindow() {
   return printWindow;
 }
 
-/** Uses the printer's current label media; the application never overrides its page size. */
-export function printBarcodeLabel(printWindow: Window, label: BarcodeLabel) {
+/** Prints one label on media with the selected physical dimensions. */
+export function printBarcodeLabel(
+  printWindow: Window,
+  label: BarcodeLabel,
+  size: LabelSize,
+  dimensions: LabelDimensions,
+) {
   const barcode = label.barcode.trim();
   if (!barcode) throw new Error('La etiqueta no tiene un código de barras válido.');
 
-  const barcodeSvg = createBarcodeSvg(barcode, label.barcodeType);
+  const { widthMm, heightMm } = dimensions;
+  if (!Number.isFinite(widthMm) || !Number.isFinite(heightMm)
+    || widthMm < 15 || widthMm > 120 || heightMm < 10 || heightMm > 100) {
+    throw new Error('Indica medidas válidas para la etiqueta en milímetros.');
+  }
+
+  const barcodeSvg = createBarcodeSvg(barcode, size, label.barcodeType);
   const productName = label.name?.trim() || brand.name;
   const price = label.price == null ? null : formatCurrency(label.price);
+  const style = labelStyle[size];
 
   printWindow.document.open();
   printWindow.document.write(`<!doctype html>
@@ -90,25 +127,25 @@ export function printBarcodeLabel(printWindow: Window, label: BarcodeLabel) {
         <meta charset="utf-8" />
         <title>${escapeHtml(productName)} · Etiqueta</title>
         <style>
-          @page { size: auto; margin: 0; }
+          @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
           * { box-sizing: border-box; }
-          html, body { width: 100%; min-height: 100%; margin: 0; background: #fff; color: #000; }
+          html, body { width: ${widthMm}mm; height: ${heightMm}mm; margin: 0; overflow: hidden; background: #fff; color: #000; }
           body { font-family: Arial, Helvetica, sans-serif; }
           .label {
             display: flex;
-            min-height: 100%;
-            width: 100%;
+            width: ${widthMm}mm;
+            height: ${heightMm}mm;
             flex-direction: column;
             justify-content: center;
-            gap: 1.5mm;
-            padding: 2.5mm;
+            gap: ${style.gapMm}mm;
+            padding: ${style.paddingMm}mm;
             text-align: center;
           }
-          .name { overflow: hidden; font-size: 10pt; font-weight: 700; line-height: 1.15; }
-          .price { font-size: 11pt; font-weight: 700; line-height: 1.1; }
-          .barcode { display: flex; justify-content: center; max-width: 100%; overflow: hidden; }
-          .barcode svg { display: block; max-width: 100%; height: auto; }
-          @media screen { .label { min-width: 58mm; min-height: 40mm; } }
+          .name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; font-size: ${style.namePt}pt; font-weight: 700; line-height: 1.08; }
+          .price { white-space: nowrap; font-size: ${style.pricePt}pt; font-weight: 700; line-height: 1; }
+          .barcode { display: flex; flex: 0 1 auto; justify-content: center; min-height: 0; max-width: 100%; overflow: hidden; }
+          .barcode svg { display: block; width: auto; max-width: 100%; height: auto; max-height: ${size === 'SMALL' ? 8.5 : size === 'MEDIUM' ? 12 : 16}mm; }
+          @media screen { body { min-width: ${widthMm}mm; min-height: ${heightMm}mm; } }
         </style>
       </head>
       <body>

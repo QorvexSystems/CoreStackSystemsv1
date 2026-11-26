@@ -2,14 +2,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ChevronLeft,
-  ChevronRight,
-  ClipboardCheck,
   CreditCard,
   FileText,
   PackagePlus,
+  Pause,
+  Play,
   Search,
   Send,
+  Trash2,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -26,12 +26,17 @@ import {
   acceptSalesOrder,
   cancelSalesOrder,
   createSalesOrder,
+  createOrderTakingDraft,
+  discardOrderTakingDraft,
   getCustomers,
+  getOrderTakingDrafts,
+  getOrderProduct,
   getOrderProductByBarcode,
   getSalesOrder,
   getSalesOrders,
   searchOrderProducts,
   updateSalesOrder,
+  updateOrderTakingDraft,
   type Product,
   type CreditTermOption,
   type Customer,
@@ -39,6 +44,7 @@ import {
   type SalePaymentMode,
   type SalesOrder,
   type SalesOrderPriceLevel,
+  type OrderTakingDraft,
 } from '@/lib/api';
 import { canTakeOrders, isAdminSession } from '@/lib/authorization';
 import { getStatusVariant, translateStatus } from '@/lib/display-labels';
@@ -52,8 +58,8 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils';
 import { CancelReasonModal } from './cancel-reason-modal';
 import { ModuleHeader } from './module-header';
 import { OrderActivityDrawer } from './orders/order-activity-drawer';
+import { CartSummaryBar, OrderCheckoutDialog } from './orders/order-checkout-dialog';
 import { CommonProductDialog, type CommonProductDraft } from './orders/common-product-dialog';
-import { CartSummaryBar, OrderCartDrawer } from './orders/order-cart-drawer';
 import { BarcodeInput } from './pos/barcode-input';
 import {
   clearCurrencyInput,
@@ -62,8 +68,7 @@ import {
   parseCurrencyInput,
   sanitizeCurrencyInput,
 } from './pos/currency-input';
-import { PosCart } from './pos/pos-cart';
-import { PosProductGrid } from './pos/pos-product-grid';
+import { QuickOrderLines } from './orders/quick-order-lines';
 import {
   canAddProduct,
   calculateSaleAmounts,
@@ -75,22 +80,33 @@ import {
   getProductPrice,
   getQuantityStep,
   roundQuantity,
-  uniqueValues,
 } from './pos/pos-utils';
 import { playScanFeedback } from './pos/scan-feedback';
 import type { CartItem } from './pos/types';
 import { SessionRequired, useCurrentSession } from './session-required';
 
-type BarcodeDetectorResult = { rawValue: string };
-type BarcodeDetectorInstance = {
-  detect(source: HTMLVideoElement): Promise<BarcodeDetectorResult[]>;
-};
-type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorInstance;
-type WindowWithBarcodeDetector = Window &
-  typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor };
-
 type OrderDestination = 'CASH_SALE' | 'QUOTATION';
 type InventorySource = 'SALES_INVENTORY' | 'WAREHOUSE';
+type OrderDraftSnapshot = {
+  cart: CartItem[];
+  destination: OrderDestination;
+  inventorySource: InventorySource;
+  electronicInvoiceRequested: boolean;
+  ecfRecipientEmail: string;
+  clientName: string;
+  quotationDocumentType: 'RNC' | 'CEDULA';
+  quotationDocumentNumber: string;
+  customerId: string;
+  priceLevel: SalesOrderPriceLevel;
+  customDiscountPercent: number | null;
+  paymentMode: SalePaymentMode;
+  initialPaymentOption: InitialPaymentOption;
+  customInitialPaymentAmount: string;
+  creditTermOption: CreditTermOption;
+  customDueDate: string;
+  creditRequestNote: string;
+  notes: string;
+};
 const finalDiscountCustomerId = '__FINAL_DISCOUNT_10__';
 const finalPreferredCustomerId = '__FINAL_PREFERRED_18__';
 
@@ -253,11 +269,10 @@ export function OrdersView() {
   const editOrderId = searchParams.get('edit');
   const router = useRouter();
   const barcodeInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanFrameRef = useRef<number | null>(null);
   const loadedEditOrderRef = useRef<string | null>(null);
   const editToastShownRef = useRef<string | null>(null);
+  const pauseInProgressRef = useRef(false);
+  const clearInProgressRef = useRef(false);
 
   const [destination, setDestination] = useState<OrderDestination>('CASH_SALE');
   const [inventorySource, setInventorySource] = useState<InventorySource>('SALES_INVENTORY');
@@ -284,24 +299,28 @@ export function OrdersView() {
   const [notes, setNotes] = useState('');
   const [barcode, setBarcode] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
   const [scannerMessage, setScannerMessage] = useState<string | null>(null);
   const [lastScannedProduct, setLastScannedProduct] = useState<Product | null>(null);
   const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('ALL');
-  const [availableOnly, setAvailableOnly] = useState(false);
-  const [productPage, setProductPage] = useState(1);
-  const [productPageSize, setProductPageSize] = useState(50);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [orderTab, setOrderTab] = useState<'ACTIVE' | 'PENDING'>('ACTIVE');
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const [activeDraftVersion, setActiveDraftVersion] = useState<number | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   const [commonProductOpen, setCommonProductOpen] = useState(false);
-  const [activityDrawer, setActivityDrawer] = useState<'orders' | 'quotations' | null>(null);
+  const [quotationsOpen, setQuotationsOpen] = useState(false);
   const [loadedEditOrderId, setLoadedEditOrderId] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
   const [cancelTargetLabel, setCancelTargetLabel] = useState('');
   const [cancelReason, setCancelReason] = useState('');
+  const effectiveInventorySource: InventorySource = editOrderId || discountRequestOrderId
+    ? inventorySource
+    : cart.find((item) => !item.commonProduct)?.product.inventoryDestination ?? inventorySource;
+  const hasCatalogProducts = cart.some((item) => !item.commonProduct);
 
   const customersQuery = useQuery({
     queryKey: ['order-customers', session?.tenantId],
@@ -309,21 +328,23 @@ export function OrdersView() {
     enabled: canUseOrderTaking,
   });
   const productsQuery = useQuery({
-    queryKey: ['order-products-search', session?.tenantId, search, inventorySource],
+    queryKey: ['order-products-search', session?.tenantId, debouncedSearch, effectiveInventorySource],
     queryFn: () =>
       searchOrderProducts(
         session?.tenantId ?? '',
         session?.accessToken ?? '',
-        search,
-        inventorySource,
+        debouncedSearch,
+        effectiveInventorySource,
       ),
-    enabled: canUseOrderTaking,
+    enabled: canUseOrderTaking && debouncedSearch.length >= 2,
   });
-  const pendingOrdersQuery = useQuery({
-    queryKey: ['sales-orders', session?.tenantId, 'OPEN'],
-    queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? '', 'OPEN'),
+  const draftsQuery = useQuery({
+    queryKey: ['order-taking-drafts', session?.tenantId],
+    queryFn: () => getOrderTakingDrafts(session?.tenantId ?? '', session?.accessToken ?? ''),
     enabled: canUseOrderTaking,
+    refetchInterval: 15000,
   });
+  const pendingDrafts = (draftsQuery.data ?? []).filter((draft) => draft.id !== activeDraftId);
   const quotationsQuery = useQuery({
     queryKey: ['sales-orders', session?.tenantId, 'QUOTATION'],
     queryFn: () => getSalesOrders(session?.tenantId ?? '', session?.accessToken ?? '', 'QUOTATION'),
@@ -349,6 +370,22 @@ export function OrdersView() {
       barcodeInputRef.current?.focus();
     }
   }, [scannerEnabled]);
+
+  useEffect(() => {
+    if (!scannerEnabled) return;
+    function handleScannerEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      setScannerEnabled(false);
+      setScannerMessage(null);
+    }
+    document.addEventListener('keydown', handleScannerEscape);
+    return () => document.removeEventListener('keydown', handleScannerEscape);
+  }, [scannerEnabled]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 180);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     if (cashierCreditOnly && !editOrderId) {
@@ -382,8 +419,6 @@ export function OrdersView() {
       ),
     );
   }, [customDiscountPercent, priceLevel, pricesIncludeTax]);
-
-  useEffect(() => () => stopCameraScan(), []);
 
   // Cargar orden para edición si está el parámetro 'edit'
   useEffect(() => {
@@ -557,24 +592,22 @@ export function OrdersView() {
       })
       .slice(0, 8);
   }, [activeCustomers, normalizedCustomerSearch]);
-  const productPool = productsQuery.data ?? [];
-  const categories = uniqueValues(
-    productPool
-      .map((product) => product.category?.name)
-      .filter((value): value is string => Boolean(value)),
-  );
-  const filteredProducts = productPool
-    .filter((product) => categoryFilter === 'ALL' || product.category?.name === categoryFilter)
-    .filter(
-      (product) => !availableOnly || !isStockLimited(product) || getAvailableStock(product) > 0,
-    );
-  const productPageCount = Math.max(1, Math.ceil(filteredProducts.length / productPageSize));
-  const productRangeStart = filteredProducts.length ? (productPage - 1) * productPageSize + 1 : 0;
-  const productRangeEnd = Math.min(productPage * productPageSize, filteredProducts.length);
-  const visibleProducts = filteredProducts.slice(
-    productRangeStart ? productRangeStart - 1 : 0,
-    productRangeEnd,
-  );
+  const sortedProducts = [...(productsQuery.data ?? [])]
+    .sort((a, b) => {
+      const exact = (product: Product) =>
+        Number([product.sku, product.barcode].some((code) => code?.toLowerCase() === debouncedSearch.toLowerCase()));
+      const exactDifference = exact(b) - exact(a);
+      if (exactDifference) return exactDifference;
+      if (cart.some((item) => !item.commonProduct) || editOrderId) {
+        const sameSourceDifference =
+          Number(b.inventoryDestination === effectiveInventorySource) - Number(a.inventoryDestination === effectiveInventorySource);
+        if (sameSourceDifference) return sameSourceDifference;
+      }
+      const stockDifference = Number(!isStockLimited(b) || getAvailableStock(b) > 0)
+        - Number(!isStockLimited(a) || getAvailableStock(a) > 0);
+      return stockDifference || a.name.localeCompare(b.name);
+    });
+  const visibleProducts = sortedProducts.slice(0, 50);
   const quantitiesByProduct = Object.fromEntries(
     cart.map((item) => [item.product.id, item.quantity]),
   );
@@ -639,16 +672,19 @@ export function OrdersView() {
         throw new Error('Sesion requerida.');
       }
 
-      return getOrderProductByBarcode(session.tenantId, session.accessToken, code, inventorySource);
+      return getOrderProductByBarcode(
+        session.tenantId, session.accessToken, code, effectiveInventorySource,
+      );
     },
     onSuccess: (product) => {
       const added = addProduct(product);
       setBarcode('');
       if (added) {
+        const sourceLabel = product.inventoryDestination === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario';
         playScanFeedback('success');
         setLastScannedProduct(product);
-        setScannerMessage(`Producto agregado: ${product.name}`);
-        toast.success('Producto agregado', { description: product.name });
+        setScannerMessage(`Producto agregado desde ${sourceLabel}: ${product.name}`);
+        toast.success('Producto agregado', { description: `${product.name} · ${sourceLabel}` });
       } else {
         playScanFeedback('error');
       }
@@ -707,8 +743,11 @@ export function OrdersView() {
       const effectiveCustomDiscountPercent =
         discountRequest?.percent ?? customDiscountPercent ?? undefined;
       const payload = {
+        ...(!editOrderId && activeDraftId && activeDraftVersion
+          ? { draftId: activeDraftId, draftVersion: activeDraftVersion }
+          : {}),
         destination,
-        inventorySource,
+        inventorySource: effectiveInventorySource,
         electronicInvoiceRequested:
           destination === 'CASH_SALE' ? electronicInvoiceRequested : false,
         ecfRecipientEmail:
@@ -764,6 +803,16 @@ export function OrdersView() {
       return createSalesOrder(session.tenantId, session.accessToken, payload);
     },
     onSuccess: async (order) => {
+      if (activeDraftId && session) {
+        try {
+          await discardOrderTakingDraft(session.tenantId, session.accessToken, activeDraftId);
+        } catch {
+          toast.error('La orden se creó, pero no se pudo quitar de En espera. Elimínala allí para evitar duplicarla.');
+        }
+      }
+      setActiveDraftId(null);
+      setActiveDraftVersion(null);
+      await queryClient.invalidateQueries({ queryKey: ['order-taking-drafts'] });
       if (session?.role === 'ORDER_TAKER' && order.discountApproval) {
         const percent = Number(order.discountRate) * 100;
         setDiscountRequestOrderId(order.id);
@@ -901,6 +950,36 @@ export function OrdersView() {
     },
   });
 
+  const saveDraftMutation = useMutation({
+    mutationFn: async () => {
+      if (!session) throw new Error('Sesión requerida.');
+      const snapshot = captureDraftSnapshot();
+      const label = clientName.trim() || cart[0]?.product.name || 'Cliente sin especificar';
+      if (activeDraftId && activeDraftVersion) {
+        return updateOrderTakingDraft(
+          session.tenantId, session.accessToken, activeDraftId, activeDraftVersion,
+          label, snapshot as unknown as Record<string, unknown>,
+        );
+      }
+      return createOrderTakingDraft(
+        session.tenantId, session.accessToken, label,
+        snapshot as unknown as Record<string, unknown>,
+      );
+    },
+  });
+
+  const discardDraftMutation = useMutation({
+    mutationFn: (draftId: string) => {
+      if (!session) throw new Error('Sesión requerida.');
+      return discardOrderTakingDraft(session.tenantId, session.accessToken, draftId);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['order-taking-drafts'] });
+      toast.success('Orden pendiente eliminada.');
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'No se pudo eliminar la orden.'),
+  });
+
   if (!session) {
     return <SessionRequired session={session} />;
   }
@@ -917,6 +996,21 @@ export function OrdersView() {
   }
 
   function addProduct(product: Product) {
+    const productSource = product.inventoryDestination;
+    if (discountRequestOrderId) {
+      toast.error('Espera la aprobación del descuento antes de modificar la orden.');
+      return false;
+    }
+    if (
+      (editOrderId && productSource !== effectiveInventorySource) ||
+      cart.some((item) => !item.commonProduct && item.product.inventoryDestination !== productSource)
+    ) {
+      const currentSource = effectiveInventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario';
+      const error = `Esta orden usa ${currentSource}. Termínala o páusala antes de agregar productos de otro origen.`;
+      setMessage(error);
+      toast.error(error);
+      return false;
+    }
     const currentQuantity = quantitiesByProduct[product.id] ?? 0;
 
     if (!canAddProduct(product, currentQuantity)) {
@@ -924,7 +1018,12 @@ export function OrdersView() {
       return false;
     }
 
-    setMessage(null);
+    if (productSource !== inventorySource) {
+      setInventorySource(productSource);
+      setMessage(`Origen de la orden: ${productSource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}.`);
+    } else {
+      setMessage(null);
+    }
     setCart((current) => {
       const existing = current.find((item) => item.product.id === product.id);
 
@@ -967,6 +1066,10 @@ export function OrdersView() {
   }
 
   function updateQuantity(productId: string, quantity: number) {
+    if (quantity <= 0 && activeDraftId && cart.length === 1 && cart[0]?.product.id === productId) {
+      void clearCurrentOrder();
+      return;
+    }
     setCart((current) =>
       current
         .map((item) => {
@@ -1111,104 +1214,167 @@ export function OrdersView() {
     }
   }
 
-  function handleInventorySourceChange(nextInventorySource: InventorySource) {
-    if (nextInventorySource === inventorySource) return;
-    setInventorySource(nextInventorySource);
-    setCart([]);
-    setCategoryFilter('ALL');
-    setAvailableOnly(false);
-    setProductPage(1);
-    setMessage(
-      nextInventorySource === 'WAREHOUSE'
-        ? 'Catálogo B2B de almacén seleccionado.'
-        : 'Catálogo de inventario de ventas seleccionado.',
-    );
-  }
-
   function enableScanner() {
+    setSearchOpen(false);
     setScannerEnabled(true);
-    setScannerMessage(
-      'Lector activo. Escanea con pistola USB o usa camara si el navegador lo soporta.',
-    );
+    setScannerMessage('Lector activo. Escanea productos de forma continua; pulsa Desactivar lector al terminar.');
     window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
   }
 
   function disableScanner() {
     setScannerEnabled(false);
     setScannerMessage(null);
-    stopCameraScan();
   }
 
-  async function startCameraScan() {
-    setScannerEnabled(true);
-    setScannerMessage(null);
+  function captureDraftSnapshot(): OrderDraftSnapshot {
+    return {
+      cart, destination, inventorySource: effectiveInventorySource, electronicInvoiceRequested, ecfRecipientEmail,
+      clientName, quotationDocumentType, quotationDocumentNumber, customerId, priceLevel,
+      customDiscountPercent, paymentMode, initialPaymentOption, customInitialPaymentAmount,
+      creditTermOption, customDueDate, creditRequestNote, notes,
+    };
+  }
 
-    const detectorConstructor = (window as WindowWithBarcodeDetector).BarcodeDetector;
-    if (!detectorConstructor || !navigator.mediaDevices?.getUserMedia) {
-      setScannerMessage(
-        'Camara QR no disponible en este navegador. Usa el lector USB o escribe el codigo.',
-      );
-      barcodeInputRef.current?.focus();
+  function resetForNextCustomer() {
+    setCart([]);
+    setDestination('CASH_SALE');
+    setInventorySource('SALES_INVENTORY');
+    setElectronicInvoiceRequested(false);
+    setEcfRecipientEmail('');
+    setClientName('');
+    setQuotationDocumentType('CEDULA');
+    setQuotationDocumentNumber('');
+    setCustomerId('');
+    setPriceLevel('REGULAR');
+    setCustomDiscountPercent(null);
+    setCustomDiscountInput('');
+    setPaymentMode(cashierCreditOnly ? 'CREDIT' : 'CASH');
+    setInitialPaymentOption('PERCENT_30');
+    setCustomInitialPaymentAmount(clearCurrencyInput());
+    setCreditTermOption('CUSTOMER_DEFAULT');
+    setCustomDueDate('');
+    setCreditRequestNote('');
+    setNotes('');
+    setSearch('');
+    setMessage(null);
+    setActiveDraftId(null);
+    setActiveDraftVersion(null);
+  }
+
+  async function clearCurrentOrder() {
+    if (clearInProgressRef.current) return false;
+    if (discountRequestOrderId) return false;
+    if (!activeDraftId) {
+      setCart([]);
+      return true;
+    }
+    clearInProgressRef.current = true;
+    try {
+      await discardDraftMutation.mutateAsync(activeDraftId);
+      resetForNextCustomer();
+      setCartDrawerOpen(false);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearInProgressRef.current = false;
+    }
+  }
+
+  function selectInventorySource(source: InventorySource) {
+    if (source === effectiveInventorySource) return;
+    if (editOrderId || discountRequestOrderId || hasCatalogProducts) return;
+    setInventorySource(source);
+    setSearch('');
+    setSearchOpen(false);
+    setBarcode('');
+    setLastScannedProduct(null);
+    setScannerMessage(null);
+  }
+
+  async function pauseCurrentOrder(nextTab: 'ACTIVE' | 'PENDING' = 'PENDING') {
+    if (pauseInProgressRef.current || clearInProgressRef.current) return false;
+    if (!cart.length) {
+      if (activeDraftId && !(await clearCurrentOrder())) return false;
+      setOrderTab(nextTab);
+      return true;
+    }
+    if (editOrderId || discountRequestOrderId) {
+      toast.error('Termina la edición o la aprobación antes de pausar esta orden.');
+      return false;
+    }
+    try {
+      pauseInProgressRef.current = true;
+      await saveDraftMutation.mutateAsync();
+      await queryClient.invalidateQueries({ queryKey: ['order-taking-drafts'] });
+      resetForNextCustomer();
+      setOrderTab(nextTab);
+      toast.success('Orden en espera. Puedes atender al siguiente cliente.');
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo pausar la orden.');
+      return false;
+    } finally {
+      pauseInProgressRef.current = false;
+    }
+  }
+
+  async function resumeDraft(draft: OrderTakingDraft) {
+    if (cart.length && !(await pauseCurrentOrder())) return;
+    const snapshot = draft.snapshot as OrderDraftSnapshot;
+    if (!snapshot || !Array.isArray(snapshot.cart)) {
+      toast.error('Esta orden pendiente no tiene datos válidos.');
       return;
     }
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-      streamRef.current = stream;
-      setCameraActive(true);
-
-      if (!videoRef.current) {
-        return;
-      }
-
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-
-      const detector = new detectorConstructor({
-        formats: ['qr_code', 'code_128', 'ean_13', 'upc_a'],
-      });
-
-      const scan = async () => {
-        if (!videoRef.current || !streamRef.current) {
-          return;
+      const refreshedCart = await Promise.all(snapshot.cart.map(async (item) => {
+        if (item.commonProduct) {
+          return buildCommonCartItem(item.product.id, {
+            description: item.commonProduct.description,
+            unit: item.commonProduct.unit,
+            unitPrice: item.commonProduct.regularUnitPrice,
+            quantity: item.quantity,
+          }, snapshot.priceLevel, snapshot.customDiscountPercent);
         }
-
-        try {
-          const results = await detector.detect(videoRef.current);
-          const value = results[0]?.rawValue;
-          if (value) {
-            setBarcode(value);
-            stopCameraScan();
-            barcodeMutation.mutate(value);
-            return;
-          }
-        } catch {
-          setScannerMessage('No pude leer el codigo todavia. Manten el codigo frente a la camara.');
-        }
-
-        scanFrameRef.current = window.requestAnimationFrame(scan);
-      };
-
-      scanFrameRef.current = window.requestAnimationFrame(scan);
-    } catch {
-      setScannerMessage(
-        'No se pudo activar la camara. Puedes usar el lector USB o escribir el codigo.',
-      );
-      barcodeInputRef.current?.focus();
+        const product = await getOrderProduct(
+          session!.tenantId, session!.accessToken, item.product.id, snapshot.inventorySource,
+        );
+        return buildPricedCartItem(
+          product, item.quantity, snapshot.priceLevel, 0,
+          snapshot.customDiscountPercent, pricesIncludeTax,
+        );
+      }));
+      const insufficientStock = refreshedCart.some((item) =>
+        !item.commonProduct && isStockLimited(item.product)
+          && item.quantity > getAvailableStock(item.product));
+      setCart(refreshedCart);
+      setDestination(snapshot.destination);
+      setInventorySource(snapshot.inventorySource);
+      setElectronicInvoiceRequested(snapshot.electronicInvoiceRequested);
+      setEcfRecipientEmail(snapshot.ecfRecipientEmail);
+      setClientName(snapshot.clientName);
+      setQuotationDocumentType(snapshot.quotationDocumentType);
+      setQuotationDocumentNumber(snapshot.quotationDocumentNumber);
+      setCustomerId(snapshot.customerId);
+      setPriceLevel(snapshot.priceLevel);
+      setCustomDiscountPercent(snapshot.customDiscountPercent);
+      setPaymentMode(snapshot.paymentMode);
+      setInitialPaymentOption(snapshot.initialPaymentOption);
+      setCustomInitialPaymentAmount(snapshot.customInitialPaymentAmount);
+      setCreditTermOption(snapshot.creditTermOption);
+      setCustomDueDate(snapshot.customDueDate);
+      setCreditRequestNote(snapshot.creditRequestNote);
+      setNotes(snapshot.notes);
+      setActiveDraftId(draft.id);
+      setActiveDraftVersion(draft.version);
+      setOrderTab('ACTIVE');
+      setMessage(insufficientStock
+        ? 'Orden retomada. Revisa las líneas cuya existencia cambió antes de enviarla.'
+        : 'Orden retomada. Precios y existencias actualizados.');
+      if (insufficientStock) toast.warning('La existencia de uno o más productos cambió. Revisa sus cantidades.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo retomar la orden.');
     }
-  }
-
-  function stopCameraScan() {
-    if (scanFrameRef.current) {
-      window.cancelAnimationFrame(scanFrameRef.current);
-      scanFrameRef.current = null;
-    }
-
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    setCameraActive(false);
   }
 
   return (
@@ -1227,225 +1393,242 @@ export function OrdersView() {
     >
       <ModuleHeader
         title="Toma de ordenes"
-        description="Escanea, busca y agrega productos. Revisa la orden cuando estés listo para enviarla a caja."
+        description="Escanea o busca, prepara la orden y envíala a caja cuando el cliente esté listo."
       />
 
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            setCartDrawerOpen(false);
-            setActivityDrawer('orders');
-          }}
-        >
-          <ClipboardCheck className="h-4 w-4" />
-          Órdenes abiertas
-          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-100 px-1.5 text-xs font-semibold text-zinc-700">
-            {pendingOrdersQuery.data?.length ?? 0}
-          </span>
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            setCartDrawerOpen(false);
-            setActivityDrawer('quotations');
-          }}
-        >
-          <FileText className="h-4 w-4" />
-          Cotizaciones
+      <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 pb-3">
+      <div role="tablist" aria-label="Órdenes en preparación" className="flex flex-wrap gap-2">
+        <button type="button" role="tab" aria-selected={orderTab === 'ACTIVE'}
+          className={cn('rounded-lg px-4 py-2.5 text-sm font-semibold transition', orderTab === 'ACTIVE' ? 'bg-zinc-950 text-white' : 'bg-white text-zinc-700 hover:bg-zinc-100')}
+          onClick={() => setOrderTab('ACTIVE')}>
+          Orden actual {cart.length ? `· ${cart.length}` : ''}
+        </button>
+        <button type="button" role="tab" aria-selected={orderTab === 'PENDING'}
+          className={cn('rounded-lg px-4 py-2.5 text-sm font-semibold transition', orderTab === 'PENDING' ? 'bg-amber-400 text-amber-950' : 'bg-amber-50 text-amber-900 hover:bg-amber-100')}
+          onClick={() => void pauseCurrentOrder('PENDING')}>
+          En espera · {pendingDrafts.length}
+        </button>
+      </div>
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        {orderTab === 'ACTIVE' ? (
+          <div role="group" aria-label="Origen de los productos" className="inline-flex rounded-lg border border-zinc-200 bg-white p-1">
+            {([
+              ['SALES_INVENTORY', 'Inventario'],
+              ['WAREHOUSE', 'Almacén B2B'],
+            ] as const).map(([source, label]) => (
+              <button key={source} type="button" aria-pressed={effectiveInventorySource === source}
+                disabled={Boolean(editOrderId || discountRequestOrderId || (hasCatalogProducts && effectiveInventorySource !== source))}
+                title={hasCatalogProducts && effectiveInventorySource !== source ? 'Limpia o pausa esta orden para cambiar de origen' : undefined}
+                onClick={() => selectInventorySource(source)}
+                className={cn('rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                  effectiveInventorySource === source ? 'bg-blue-600 text-white' : 'text-zinc-600 hover:bg-zinc-100')}
+              >{label}</button>
+            ))}
+          </div>
+        ) : null}
+        <Button type="button" variant="outline" onClick={() => { setCartDrawerOpen(false); setQuotationsOpen(true); }}>
+          <FileText className="h-4 w-4" /> Cotizaciones
           <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-zinc-100 px-1.5 text-xs font-semibold text-zinc-700">
             {quotationsQuery.data?.length ?? 0}
           </span>
         </Button>
+        {orderTab === 'ACTIVE' && cart.length && !editOrderId && !discountRequestOrderId ? (
+          <Button type="button" variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-50"
+            disabled={saveDraftMutation.isPending || discardDraftMutation.isPending} onClick={() => void pauseCurrentOrder('ACTIVE')}>
+            <Pause className="h-4 w-4" /> Pausar y nueva orden
+          </Button>
+        ) : null}
+      </div>
       </div>
 
+      {orderTab === 'PENDING' ? (
+        <section className="space-y-3" aria-label="Órdenes en espera">
+          {draftsQuery.isLoading ? <p className="text-sm text-zinc-500">Cargando órdenes pendientes...</p> : null}
+          {draftsQuery.isError ? <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">No se pudieron cargar las órdenes en espera.</p> : null}
+          {!draftsQuery.isLoading && !draftsQuery.isError && !pendingDrafts.length ? (
+            <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-8 text-center text-sm text-amber-900">
+              No hay órdenes pausadas. Puedes preparar una en la pestaña Orden actual.
+            </div>
+          ) : null}
+          {pendingDrafts.map((draft) => {
+            const saved = draft.snapshot as Partial<OrderDraftSnapshot>;
+            const items = Array.isArray(saved?.cart) ? saved.cart : [];
+            const amount = items.reduce((sum, item) => sum + Number(item.total ?? 0), 0);
+            return (
+              <div key={draft.id} className="flex flex-wrap items-center gap-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800"><Pause className="h-5 w-5" /></div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-zinc-950">{draft.label}</p>
+                  <p className="text-xs text-zinc-600">{items.length} producto(s) · {formatCurrency(amount)} · Pausada por {draft.createdBy.name}</p>
+                </div>
+                <Button type="button" onClick={() => void resumeDraft(draft)}><Play className="h-4 w-4" /> Retomar</Button>
+                <Button type="button" variant="ghost" className="text-red-600 hover:bg-red-50" disabled={discardDraftMutation.isPending}
+                  onClick={() => { if (window.confirm(`¿Eliminar la orden pendiente de ${draft.label}?`)) discardDraftMutation.mutate(draft.id); }}>
+                  <Trash2 className="h-4 w-4" /> Eliminar
+                </Button>
+              </div>
+            );
+          })}
+        </section>
+      ) : (
       <section>
         <div className="space-y-4">
-          <Card className="overflow-hidden border-zinc-200 bg-white">
+          <Card className={cn('relative border-zinc-200 bg-white', searchOpen && 'z-20')}>
             <CardHeader className="border-b border-zinc-100 bg-zinc-50/70 pb-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <CardTitle>Catálogo de productos</CardTitle>
+                  <CardTitle>Encuentra un producto</CardTitle>
                   <CardDescription>
-                    Busca por nombre o SKU, filtra el catálogo o usa el lector.
+                    Busca en {effectiveInventorySource === 'WAREHOUSE' ? 'almacén B2B' : 'inventario'} por nombre, SKU o código. Agrégalo con un toque.
                   </CardDescription>
                 </div>
                 {lastScannedProduct ? (
-                  <Badge variant="success">Ultimo escaneo: {lastScannedProduct.name}</Badge>
+                  <Badge variant="success">Último escaneo: {lastScannedProduct.name} · {lastScannedProduct.inventoryDestination === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}</Badge>
                 ) : null}
               </div>
             </CardHeader>
             <CardContent className="space-y-3 p-3 sm:p-4">
-              <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50/70 p-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <Label>Origen de la venta</Label>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Selecciona el inventario antes de agregar productos.
-                    </p>
-                  </div>
-                  <div className="grid min-w-72 grid-cols-2 gap-1 rounded-md border border-zinc-200 bg-white p-1">
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      aria-pressed={inventorySource === 'SALES_INVENTORY'}
-                      className={`min-h-10 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
-                        inventorySource === 'SALES_INVENTORY'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('SALES_INVENTORY')}
-                    >
-                      Inventario
-                    </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(editOrderId)}
-                      aria-pressed={inventorySource === 'WAREHOUSE'}
-                      className={`min-h-10 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
-                        inventorySource === 'WAREHOUSE'
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
-                      onClick={() => handleInventorySourceChange('WAREHOUSE')}
-                    >
-                      Almacén B2B
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {inventorySource === 'WAREHOUSE'
-                    ? 'Los productos y existencias corresponden al almacén B2B.'
-                    : 'Los productos y existencias corresponden al inventario de ventas.'}
-                </p>
+              <div>
+                <BarcodeInput
+                  barcode={barcode}
+                  scannerEnabled={scannerEnabled}
+                  scannerMessage={scannerMessage}
+                  barcodeInputRef={barcodeInputRef}
+                  isPending={barcodeMutation.isPending}
+                  keepFocus
+                  showCamera={false}
+                  onBarcodeChange={setBarcode}
+                  onSubmit={(code) => barcodeMutation.mutate(code)}
+                  onEnableScanner={enableScanner}
+                  onDisableScanner={disableScanner}
+                />
               </div>
 
-              <BarcodeInput
-                barcode={barcode}
-                scannerEnabled={scannerEnabled}
-                cameraActive={cameraActive}
-                scannerMessage={scannerMessage}
-                barcodeInputRef={barcodeInputRef}
-                videoRef={videoRef}
-                isPending={barcodeMutation.isPending}
-                keepFocus
-                onBarcodeChange={setBarcode}
-                onSubmit={(code) => barcodeMutation.mutate(code)}
-                onEnableScanner={enableScanner}
-                onDisableScanner={disableScanner}
-                onStartCamera={startCameraScan}
-              />
-
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1.4fr_0.9fr_auto]">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={search}
-                    onChange={(event) => {
-                      setSearch(event.target.value);
-                      setProductPage(1);
-                    }}
-                    className="h-11 bg-white pl-9"
-                    placeholder="Buscar por nombre o SKU"
-                  />
-                </div>
-                <select
-                  value={categoryFilter}
-                  onChange={(event) => {
-                    setCategoryFilter(event.target.value);
-                    setProductPage(1);
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-600" />
+                <Input value={search} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }}
+                  onFocus={() => setSearchOpen(true)}
+                  onBlur={() => setSearchOpen(false)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setSearchOpen(false);
+                    if (event.key === 'Enter' && debouncedSearch === search.trim() && visibleProducts[0]) {
+                      event.preventDefault();
+                      const firstAvailable = visibleProducts.find((product) =>
+                        canAddProduct(product, quantitiesByProduct[product.id] ?? 0));
+                      if (firstAvailable && addProduct(firstAvailable)) { setSearch(''); setSearchOpen(false); }
+                    }
                   }}
-                  className="h-11 rounded-md border border-input bg-white px-3 text-sm"
-                >
-                  <option value="ALL">Todos los departamentos</option>
-                  {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-                <label className="flex h-11 cursor-pointer items-center justify-between gap-3 rounded-md border border-input bg-white px-3 text-sm font-medium">
-                  <span className="whitespace-nowrap">Solo disponibles</span>
-                  <input
-                    type="checkbox"
-                    checked={availableOnly}
-                    onChange={(event) => {
-                      setAvailableOnly(event.target.checked);
-                      setProductPage(1);
-                    }}
-                    className="h-5 w-5 rounded border-input accent-primary"
-                  />
-                </label>
+                  role="combobox" aria-autocomplete="list" aria-expanded={searchOpen && search.trim().length >= 2}
+                  aria-controls="order-product-results" autoComplete="off"
+                  className="h-14 rounded-xl border-blue-200 bg-white pl-12 pr-4 text-base shadow-sm focus-visible:ring-blue-500"
+                  placeholder={`Busca en ${effectiveInventorySource === 'WAREHOUSE' ? 'almacén B2B' : 'inventario'} por nombre, SKU o código`} />
+                {searchOpen && search.trim().length >= 2 ? (
+                  <div id="order-product-results" role="listbox" className="absolute inset-x-0 top-full z-30 mt-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-xl">
+                    {productsQuery.isLoading || debouncedSearch !== search.trim() ? (
+                      <p className="px-4 py-5 text-sm text-zinc-500">Buscando productos...</p>
+                    ) : productsQuery.isError ? (
+                      <p className="px-4 py-5 text-sm text-red-600">No se pudo buscar en el catálogo. Intenta de nuevo.</p>
+                    ) : visibleProducts.length ? visibleProducts.map((product) => {
+                      const unitTotal = calculateSaleAmounts(getProductPrice(product), 1, Number(product.taxRate), getPriceLevelDiscountRate(priceLevel, customDiscountPercent), pricesIncludeTax).total;
+                      return (
+                        <button key={product.id} type="button" role="option" aria-selected={false}
+                          disabled={!canAddProduct(product, quantitiesByProduct[product.id] ?? 0)}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => { if (addProduct(product)) { setSearch(''); setSearchOpen(false); } }}
+                          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-blue-50 focus-visible:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">
+                          <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-100">
+                            {product.imageUrl ? <img src={product.imageUrl} alt="" className="h-full w-full object-cover" /> : <PackagePlus className="h-5 w-5 text-zinc-400" />}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center gap-1.5 text-sm font-semibold leading-snug text-zinc-950">
+                              <span>{product.name}</span>
+                              <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', product.inventoryDestination === 'WAREHOUSE' ? 'bg-amber-100 text-amber-900' : 'bg-blue-100 text-blue-800')}>
+                                {product.inventoryDestination === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
+                              </span>
+                            </span>
+                            <span className="block text-xs text-zinc-500">{[product.sku || product.barcode, product.category?.name].filter(Boolean).join(' · ')}</span>
+                            <span className="block text-xs text-zinc-500">Existencia: {isStockLimited(product) ? getAvailableStock(product) : 'Sin control'}</span>
+                          </span>
+                          <strong className="shrink-0 text-sm text-blue-700">{formatCurrency(unitTotal)}</strong>
+                        </button>
+                      );
+                    }) : <p className="px-4 py-5 text-sm text-zinc-500">No encontramos productos con esa búsqueda.</p>}
+                    {(productsQuery.data?.length ?? 0) > visibleProducts.length ? (
+                      <p className="border-t border-zinc-100 px-4 py-2 text-xs text-zinc-500">
+                        Mostrando {visibleProducts.length} de {productsQuery.data?.length} coincidencias. Escribe más para afinar la búsqueda.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </CardContent>
           </Card>
 
-          <div className="space-y-4">
-            <PosProductGrid
-              products={visibleProducts}
-              pricesIncludeTax={pricesIncludeTax}
-              quantitiesByProduct={quantitiesByProduct}
-              inventorySource={inventorySource}
-              isLoading={productsQuery.isLoading}
-              onAddProduct={addProduct}
-            />
-            {!productsQuery.isLoading && filteredProducts.length ? (
-              <OrderProductPagination
-                page={productPage}
-                pageCount={productPageCount}
-                pageSize={productPageSize}
-                rangeStart={productRangeStart}
-                rangeEnd={productRangeEnd}
-                total={filteredProducts.length}
-                onPageChange={setProductPage}
-                onPageSizeChange={(nextPageSize) => {
-                  setProductPageSize(nextPageSize);
-                  setProductPage(1);
-                }}
-              />
-            ) : null}
-          </div>
-
-          <CartSummaryBar
-            itemCount={cart.length}
-            total={totals.total}
-            onOpen={() => {
-              setActivityDrawer(null);
-              setCartDrawerOpen(true);
-            }}
-          />
         </div>
 
-        <OrderCartDrawer
+        <Card className="mt-4 min-w-0 border-zinc-200 bg-white">
+            <CardHeader className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100">
+              <div><CardTitle>Orden actual</CardTitle><CardDescription>{cart.length} producto(s) · en orden de incorporación</CardDescription></div>
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="mr-1 text-lg text-blue-700">{formatCurrency(totals.total)}</strong>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-dashed"
+                  onClick={() => setCommonProductOpen(true)}
+                  disabled={Boolean(discountRequestOrderId)}
+                >
+                  <PackagePlus className="h-4 w-4" /> Producto común
+                </Button>
+                <Button type="button" onClick={() => setCartDrawerOpen(true)}>
+                  <Send className="h-4 w-4" /> Revisar y enviar
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 p-3 sm:p-4">
+              <QuickOrderLines items={cart} disabled={Boolean(discountRequestOrderId)} onUpdateQuantity={updateQuantity} />
+              {cart.length && !discountRequestOrderId ? <Button type="button" variant="ghost" size="sm" className="text-red-600" disabled={discardDraftMutation.isPending} onClick={() => void clearCurrentOrder()}>Limpiar productos</Button> : null}
+            </CardContent>
+        </Card>
+        <CartSummaryBar itemCount={cart.length} total={totals.total} onOpen={() => setCartDrawerOpen(true)} />
+        <OrderCheckoutDialog
           open={cartDrawerOpen}
           itemCount={cart.length}
           total={totals.total}
           onClose={() => setCartDrawerOpen(false)}
-          onClear={() => setCart([])}
-          clearDisabled={Boolean(discountRequestOrderId)}
+          onClear={() => void clearCurrentOrder()}
+          clearDisabled={Boolean(discountRequestOrderId || discardDraftMutation.isPending)}
+          footer={
+            <Button
+              type="submit"
+              form="order-checkout-form"
+              className="h-12 w-full text-base font-bold"
+              disabled={
+                !cart.length ||
+                createOrderMutation.isPending ||
+                sendApprovedDiscountOrderMutation.isPending ||
+                (Boolean(discountRequestOrderId) && discountApprovalStatus !== 'APPROVED')
+              }
+            >
+              {discountRequestOrderId ? (
+                discountApprovalStatus === 'APPROVED' ? (
+                  <><Send className="h-5 w-5" />{sendApprovedDiscountOrderMutation.isPending ? 'Enviando a caja...' : 'Enviar a caja'}</>
+                ) : (
+                  <><FileText className="h-5 w-5" />{discountApprovalStatus === 'REJECTED' ? 'Descuento rechazado' : 'Aprobación pendiente'}</>
+                )
+              ) : editOrderId ? (
+                <><FileText className="h-5 w-5" />Actualizar cotización</>
+              ) : destination === 'QUOTATION' ? (
+                <><FileText className="h-5 w-5" />Guardar cotización</>
+              ) : paymentMode === 'CREDIT' ? (
+                <><CreditCard className="h-5 w-5" />Solicitar aprobación de crédito</>
+              ) : (
+                <><Send className="h-5 w-5" />Enviar a caja</>
+              )}
+            </Button>
+          }
         >
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full justify-center border-dashed"
-            onClick={() => setCommonProductOpen(true)}
-            disabled={Boolean(discountRequestOrderId)}
-          >
-            <PackagePlus className="h-4 w-4" />
-            Producto común
-          </Button>
-          <PosCart
-            items={cart}
-            pricesIncludeTax={pricesIncludeTax}
-            showTaxBreakdown={session?.tenantSlug === 'allpa'}
-            onUpdateQuantity={updateQuantity}
-            onClear={() => setCart([])}
-            showHeader={false}
-            readOnly={Boolean(discountRequestOrderId)}
-          />
-          <Card>
+          <Card className="border-zinc-200 bg-white">
             <CardHeader>
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -1504,6 +1687,7 @@ export function OrdersView() {
             </CardHeader>
             <CardContent>
               <form
+                id="order-checkout-form"
                 className="space-y-4 [&_input]:min-h-11 [&_select]:h-11"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -2178,60 +2362,10 @@ export function OrdersView() {
 
                 {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
 
-                <div className="sticky bottom-0 z-10 -mx-1 border-t border-zinc-200 bg-white/95 px-1 pb-1 pt-3 backdrop-blur">
-                  <Button
-                    type="submit"
-                    className="h-14 w-full text-base font-bold"
-                    disabled={
-                      !cart.length ||
-                      createOrderMutation.isPending ||
-                      sendApprovedDiscountOrderMutation.isPending ||
-                      (Boolean(discountRequestOrderId) && discountApprovalStatus !== 'APPROVED')
-                    }
-                  >
-                    {discountRequestOrderId ? (
-                      discountApprovalStatus === 'APPROVED' ? (
-                        <>
-                          <Send className="h-5 w-5" />
-                          {sendApprovedDiscountOrderMutation.isPending
-                            ? 'Enviando a caja...'
-                            : 'Enviar a caja'}
-                        </>
-                      ) : (
-                        <>
-                          <FileText className="h-5 w-5" />
-                          {discountApprovalStatus === 'REJECTED'
-                            ? 'Descuento rechazado'
-                            : 'Aprobación pendiente'}
-                        </>
-                      )
-                    ) : editOrderId ? (
-                      <>
-                        <FileText className="h-5 w-5" />
-                        Actualizar cotizacion
-                      </>
-                    ) : destination === 'QUOTATION' ? (
-                      <>
-                        <FileText className="h-5 w-5" />
-                        Guardar cotizacion
-                      </>
-                    ) : paymentMode === 'CREDIT' ? (
-                      <>
-                        <CreditCard className="h-5 w-5" />
-                        Solicitar aprobación de crédito
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-5 w-5" />
-                        Enviar a caja
-                      </>
-                    )}
-                  </Button>
-                </div>
               </form>
             </CardContent>
           </Card>
-        </OrderCartDrawer>
+        </OrderCheckoutDialog>
         <CommonProductDialog
           open={commonProductOpen}
           onClose={() => setCommonProductOpen(false)}
@@ -2262,56 +2396,37 @@ export function OrdersView() {
           }}
         />
       </section>
+      )}
 
       <OrderActivityDrawer
-        open={activityDrawer !== null}
-        title={activityDrawer === 'orders' ? 'Órdenes abiertas' : 'Cotizaciones'}
-        description={
-          activityDrawer === 'orders'
-            ? 'Preventas pendientes de aprobación o cobro. Aún no son facturas.'
-            : 'Cotizaciones registradas sin cobro. Puedes imprimirlas o cancelarlas si aplica.'
-        }
-        onClose={() => setActivityDrawer(null)}
+        open={quotationsOpen}
+        title="Cotizaciones"
+        description="Cotizaciones registradas sin cobro. Puedes imprimirlas o cancelarlas si aplica."
+        onClose={() => setQuotationsOpen(false)}
       >
-        {activityDrawer === 'orders' ? (
-          <PendingOrdersPanel
-            orders={pendingOrdersQuery.data ?? []}
-            loading={pendingOrdersQuery.isLoading}
-            cancellingId={cancelOrderMutation.variables?.orderId}
-            embedded
-            onCancel={(order) => {
-              setActivityDrawer(null);
-              setCancelTargetId(order.id);
-              setCancelTargetLabel(order.orderNumber);
-              setCancelReason('');
-              setCancelModalOpen(true);
-            }}
-          />
-        ) : (
-          <QuotationsPanel
-            orders={quotationsQuery.data ?? []}
-            loading={quotationsQuery.isLoading}
-            showManagement={Boolean(isAdminSession(session) || canTakeOrders(session))}
-            cancellingId={cancelOrderMutation.variables?.orderId}
-            embedded
-            onCancel={(order) => {
-              setActivityDrawer(null);
-              setCancelTargetId(order.id);
-              setCancelTargetLabel(order.orderNumber);
-              setCancelReason('');
-              setCancelModalOpen(true);
-            }}
-          />
-        )}
+        <QuotationsPanel
+          orders={quotationsQuery.data ?? []}
+          loading={quotationsQuery.isLoading}
+          showManagement={Boolean(isAdminSession(session) || canTakeOrders(session))}
+          cancellingId={cancelOrderMutation.variables?.orderId}
+          embedded
+          onCancel={(order) => {
+            setQuotationsOpen(false);
+            setCancelTargetId(order.id);
+            setCancelTargetLabel(order.orderNumber);
+            setCancelReason('');
+            setCancelModalOpen(true);
+          }}
+        />
       </OrderActivityDrawer>
 
       <CancelReasonModal
         open={cancelModalOpen}
-        title="Cancelar orden o cotizacion"
+        title="Cancelar cotización"
         description={
           cancelTargetLabel
             ? `Indica por que se cancela ${cancelTargetLabel}.`
-            : 'Indica por que se cancela esta orden o cotizacion.'
+            : 'Indica por que se cancela esta cotización.'
         }
         reason={cancelReason}
         isPending={cancelOrderMutation.isPending}
@@ -2340,7 +2455,6 @@ export function OrdersView() {
     </div>
   );
 }
-
 function CustomDiscountDialog({
   open,
   isAllpa,
@@ -2423,184 +2537,6 @@ function CustomDiscountDialog({
       </div>
     </div>,
     document.body,
-  );
-}
-
-function OrderProductPagination({
-  page,
-  pageCount,
-  pageSize,
-  rangeStart,
-  rangeEnd,
-  total,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  page: number;
-  pageCount: number;
-  pageSize: number;
-  rangeStart: number;
-  rangeEnd: number;
-  total: number;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>Mostrar</span>
-        <select
-          value={pageSize}
-          onChange={(event) => onPageSizeChange(Number(event.target.value))}
-          className="h-9 rounded-md border border-input bg-white px-2 text-sm text-foreground"
-          aria-label="Productos por bloque"
-        >
-          {[50, 100].map((size) => (
-            <option key={size} value={size}>
-              {size}
-            </option>
-          ))}
-        </select>
-        <span>por bloque</span>
-      </div>
-
-      <div className="flex items-center justify-between gap-2 sm:justify-end">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          disabled={page <= 1}
-          onClick={() => onPageChange(page - 1)}
-          aria-label="Bloque anterior"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <div className="min-w-36 text-center text-sm">
-          <span className="font-medium text-foreground">
-            {rangeStart}-{rangeEnd}
-          </span>{' '}
-          <span className="text-muted-foreground">de {total}</span>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          disabled={page >= pageCount}
-          onClick={() => onPageChange(page + 1)}
-          aria-label="Bloque siguiente"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function PendingOrdersPanel({
-  orders,
-  loading,
-  cancellingId,
-  embedded = false,
-  onCancel,
-}: {
-  orders: SalesOrder[];
-  loading: boolean;
-  cancellingId?: string;
-  embedded?: boolean;
-  onCancel: (order: SalesOrder) => void;
-}) {
-  return (
-    <Card className={cn(embedded && 'border-0 bg-transparent shadow-none')}>
-      {!embedded ? (
-        <CardHeader>
-          <CardTitle>Órdenes abiertas</CardTitle>
-          <CardDescription>
-            Preventas pendientes de aprobación o cobro. Aún no son facturas.
-          </CardDescription>
-        </CardHeader>
-      ) : null}
-      <CardContent className={cn('space-y-2', embedded && 'p-0')}>
-        {loading ? (
-          <p className="rounded-md bg-zinc-50 px-3 py-2 text-sm text-muted-foreground">
-            Cargando ordenes...
-          </p>
-        ) : orders.length ? (
-          orders.map((order) => (
-            <div key={order.id} className="rounded-md border border-zinc-200 bg-white p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold text-zinc-950">{order.orderNumber}</p>
-                    <Badge variant={getStatusVariant(order.status)}>
-                      {translateStatus(order.status)}
-                    </Badge>
-                    <Badge variant="outline">
-                      {order.inventorySource === 'WAREHOUSE' ? 'Almacén B2B' : 'Inventario'}
-                    </Badge>
-                    {order.paymentMode === 'CREDIT' ? (
-                      <Badge variant="outline">
-                        {order.creditApproval?.status === 'PENDING'
-                          ? 'Crédito pendiente'
-                          : order.creditApproval?.status === 'APPROVED'
-                            ? 'Crédito aprobado'
-                            : 'Fiado'}
-                      </Badge>
-                    ) : null}
-                    {order.sentToCashierAt ? (
-                      <Badge variant={getWaitingVariant(order)}>
-                        {getWaitingMinutes(order)} min
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {getOrderSearchLabel(order)} -{' '}
-                    {formatDate(order.sentToCashierAt ?? order.createdAt)}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Creada por {order.createdBy.name}
-                  </p>
-                  {order.claimedBy ? (
-                    <p className="mt-1 text-xs text-warning">
-                      Tomada por {order.claimedBy.name}
-                      {order.claimedCashSession?.cashRegister.name
-                        ? ` en ${order.claimedCashSession.cashRegister.name}`
-                        : ''}
-                    </p>
-                  ) : null}
-                  {order.paymentMode === 'CREDIT' ? (
-                    <p className="mt-1 text-xs text-sky-800">
-                      Inicial {formatCurrency(Number(order.initialPaymentAmount))} · Saldo{' '}
-                      {formatCurrency(
-                        Number(order.total) - Number(order.initialPaymentAmount ?? 0),
-                      )}
-                    </p>
-                  ) : null}
-                </div>
-                <p className="shrink-0 text-sm font-bold">{formatCurrency(Number(order.total))}</p>
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">{order.items.length} producto(s)</p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onCancel(order)}
-                  disabled={cancellingId === order.id || order.status === 'IN_CASHIER'}
-                >
-                  <X className="h-4 w-4" />
-                  Cancelar
-                </Button>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center">
-            <ClipboardCheck className="mx-auto h-6 w-6 text-muted-foreground" />
-            <p className="mt-2 text-sm text-muted-foreground">No hay tickets pendientes.</p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -2695,23 +2631,4 @@ function QuotationsPanel({
       </CardContent>
     </Card>
   );
-}
-
-function getWaitingMinutes(order: SalesOrder) {
-  const startedAt = new Date(order.sentToCashierAt ?? order.createdAt).getTime();
-  return Math.max(Math.floor((Date.now() - startedAt) / 60000), 0);
-}
-
-function getWaitingVariant(order: SalesOrder) {
-  const minutes = getWaitingMinutes(order);
-
-  if (minutes >= 30) {
-    return 'danger' as const;
-  }
-
-  if (minutes >= 10) {
-    return 'warning' as const;
-  }
-
-  return 'outline' as const;
 }

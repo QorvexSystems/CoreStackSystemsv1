@@ -1,0 +1,22 @@
+# Rebuild only the quotation listing against the currently deployed ALLPA image.
+FROM corestack/allpa-web:e31-identity-20261112 AS build
+ENV NEXT_PUBLIC_API_URL=https://allpa-api.corestack-systems.com
+ENV NEXT_PUBLIC_APP_URL=https://allpa.corestack-systems.com
+USER root
+COPY --chown=node:node apps/api/src/modules/orders/orders.controller.ts apps/api/src/modules/orders/orders.service.ts /app/apps/api/src/modules/orders/
+COPY --chown=node:node apps/web/lib/api.ts /app/apps/web/lib/api.ts
+COPY --chown=node:node apps/web/components/operations/quotations-view.tsx /app/apps/web/components/operations/quotations-view.tsx
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build \
+    && cd ../web && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+
+FROM corestack/allpa-api:e31-identity-20261112 AS api
+COPY --from=build --chown=node:node /app/apps/api/dist/modules/orders/orders.controller.js /app/apps/api/dist/modules/orders/orders.service.js /app/apps/api/dist/modules/orders/
+COPY --from=build --chown=node:node /app/apps/api/src/modules/orders/orders.controller.ts /app/apps/api/src/modules/orders/orders.service.ts /app/apps/api/src/modules/orders/
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

@@ -190,12 +190,11 @@ export function PosPaymentPanel({
           <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
             <div className="space-y-1">
               <Label htmlFor="fiscalDocumentType" className="text-xs">
-                Documento {fiscalLabel}
+                Tipo de documento {fiscalLabel}
               </Label>
               <select
                 id="fiscalDocumentType"
                 value={fiscalDocumentType}
-                disabled={requiresRnc}
                 onChange={(event) =>
                   onFiscalDocumentTypeChange(event.target.value as 'RNC' | 'CEDULA')
                 }
@@ -227,7 +226,7 @@ export function PosPaymentPanel({
               </Button>
             </div>
           ) : null}
-          {requiresRnc && isAllpa && rncLookup?.documentNumber === fiscalDocumentNumber.replace(/\D/g, '') && rncLookup.outcome === 'VERIFIED' ? (
+          {requiresRnc && isAllpa && rncLookup?.documentType === fiscalDocumentType && rncLookup.documentNumber === fiscalDocumentNumber.replace(/\D/g, '') && rncLookup.outcome === 'VERIFIED' ? (
             <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">
                 <ShieldCheck className="size-4" /> Razón social verificada por DGII
@@ -240,11 +239,12 @@ export function PosPaymentPanel({
             </div>
           ) : null}
           {requiresRnc && isAllpa && fiscalDocumentValid && !isRncLookupLoading &&
+            rncLookup?.documentType === fiscalDocumentType &&
             rncLookup?.documentNumber === fiscalDocumentNumber.replace(/\D/g, '') &&
             rncLookup.outcome !== 'VERIFIED' ? (
               <p className="mt-2 text-xs text-danger">
-                {rncLookup.outcome === 'NOT_FOUND' ? 'El RNC no figura en el padrón DGII.' :
-                  rncLookup.outcome === 'NON_ACTIVE' ? `El RNC figura como ${rncLookup.registryStatus ?? 'no activo'}.` :
+                {rncLookup.outcome === 'NOT_FOUND' ? 'El RNC o la cédula no figura en el padrón DGII.' :
+                  rncLookup.outcome === 'NON_ACTIVE' ? `El contribuyente figura como ${rncLookup.registryStatus ?? 'no activo'}.` :
                     'La consulta del padrón necesita actualizarse o no está disponible.'}
               </p>
             ) : null}

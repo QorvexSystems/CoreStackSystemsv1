@@ -1,0 +1,27 @@
+ARG ALLPA_WEB_IMAGE=corestack/allpa-web:cashier-discard-20261112
+ARG ALLPA_API_IMAGE=corestack/allpa-api:cashier-discard-20261112
+FROM ${ALLPA_WEB_IMAGE} AS build
+ENV NEXT_PUBLIC_API_URL=https://allpa-api.corestack-systems.com
+ENV NEXT_PUBLIC_APP_URL=https://allpa.corestack-systems.com
+USER root
+COPY --chown=node:node apps/api/src/modules/dgii-registry/dgii-registry.service.ts /app/apps/api/src/modules/dgii-registry/dgii-registry.service.ts
+COPY --chown=node:node apps/api/src/modules/pos/pos.service.ts apps/api/src/modules/pos/pos.controller.ts /app/apps/api/src/modules/pos/
+COPY --chown=node:node apps/web/lib/api.ts /app/apps/web/lib/api.ts
+COPY --chown=node:node apps/web/components/operations/pos-view.tsx /app/apps/web/components/operations/pos-view.tsx
+COPY --chown=node:node apps/web/components/operations/pos/pos-payment-panel.tsx /app/apps/web/components/operations/pos/pos-payment-panel.tsx
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build \
+    && cd ../web && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+
+FROM ${ALLPA_API_IMAGE} AS api
+COPY --from=build --chown=node:node /app/apps/api/dist/modules/pos/pos.service.js /app/apps/api/dist/modules/pos/pos.controller.js /app/apps/api/dist/modules/pos/
+COPY --from=build --chown=node:node /app/apps/api/dist/modules/dgii-registry/dgii-registry.service.js /app/apps/api/dist/modules/dgii-registry/dgii-registry.service.js
+COPY --from=build --chown=node:node /app/apps/api/src/modules/pos/pos.service.ts /app/apps/api/src/modules/pos/pos.controller.ts /app/apps/api/src/modules/pos/
+COPY --from=build --chown=node:node /app/apps/api/src/modules/dgii-registry/dgii-registry.service.ts /app/apps/api/src/modules/dgii-registry/dgii-registry.service.ts
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

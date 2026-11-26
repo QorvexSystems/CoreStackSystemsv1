@@ -1,0 +1,27 @@
+# Patch only the deployed ALLPA application, retaining its own business logic.
+ARG ALLPA_COMPILED_IMAGE=corestack/allpa-web:allpa-rnc-check-20261109
+ARG ALLPA_API_RUNTIME_IMAGE=corestack/allpa-api:allpa-rnc-check-20261109
+FROM ${ALLPA_COMPILED_IMAGE} AS build
+ARG NEXT_PUBLIC_API_URL=https://allpa-api.corestack-systems.com
+ARG NEXT_PUBLIC_APP_URL=https://allpa.corestack-systems.com
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+USER root
+COPY --chown=node:node apps/api/src/modules/orders/orders.service.ts /app/apps/api/src/modules/orders/orders.service.ts
+COPY --chown=node:node apps/web/components/operations/pos-view.tsx /app/apps/web/components/operations/pos-view.tsx
+USER node
+WORKDIR /app
+RUN cd apps/api && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/nest build \
+    && cd ../web && ./node_modules/.bin/next build && ./node_modules/.bin/tsc --noEmit
+
+FROM ${ALLPA_API_RUNTIME_IMAGE} AS api
+# The API needs the OpenSSL runtime already present in its deployed image.
+# The web image is sufficient to compile, but not to run Prisma's engine.
+COPY --from=build --chown=node:node /app/apps/api/dist/modules/orders/orders.service.js /app/apps/api/dist/modules/orders/orders.service.js
+COPY --from=build --chown=node:node /app/apps/api/src/modules/orders/orders.service.ts /app/apps/api/src/modules/orders/orders.service.ts
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM build AS web
+EXPOSE 3000
+CMD ["./apps/web/node_modules/.bin/next", "start", "apps/web", "--port", "3000", "--hostname", "0.0.0.0"]

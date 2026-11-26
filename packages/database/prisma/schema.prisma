@@ -472,6 +472,7 @@ model Tenant {
   cashMovements              CashMovement[]
   employeeActivityLogs       EmployeeActivityLog[]
   salesOrders                SalesOrder[]
+  orderTakingDrafts          OrderTakingDraft[]
   returnRequests             ReturnRequest[]
   storeCredits               StoreCredit[]
   storeCreditRedemptions     StoreCreditRedemption[]
@@ -526,6 +527,7 @@ model User {
   warehouseMovementsCreated           WarehouseMovement[]         @relation("WarehouseMovementCreatedBy")
   payments                            Payment[]
   salesOrdersCreated                  SalesOrder[]                @relation("SalesOrderCreatedBy")
+  orderTakingDraftsCreated            OrderTakingDraft[]
   salesOrdersCompleted                SalesOrder[]                @relation("SalesOrderCompletedBy")
   salesOrdersClaimed                  SalesOrder[]                @relation("SalesOrderClaimedBy")
   cashSessionsOpened                  CashSession[]               @relation("CashSessionOpenedBy")
@@ -895,6 +897,22 @@ model InvoiceItem {
 
   @@index([invoiceId])
   @@index([productId])
+}
+
+model OrderTakingDraft {
+  id          String   @id @default(cuid())
+  tenantId    String
+  createdById String
+  label       String
+  snapshot    Json
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, createdById])
 }
 
 model SalesOrder {
